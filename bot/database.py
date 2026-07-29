@@ -2,8 +2,8 @@ import sqlite3
 import shutil
 from datetime import datetime
 from pathlib import Path
-from logger import logger
-from config import config
+from bot.logger import logger
+from bot.config import config
 
 DB_PATH = config.DB_PATH
 
