@@ -1,10 +1,9 @@
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, StopPropagation
 from config import config
 from logger import logger
-from database import init_db, backup_db
+from database import init_db, backup_db, get_user_language
 from handlers.commands import start, help_command, city_command, language_command, calendar_command, stats_command, broadcast_command
 from handlers.callbacks import button_handler
-from database import get_user_language
 from handlers.middleware import rate_limit_middleware, check_membership, ensure_user_registered
 from scheduler import setup_scheduler
 import asyncio
@@ -26,6 +25,28 @@ def health():
 
 def run_flask():
     flask_app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 8080)))
+
+async def pre_process(update, context):
+    """Middleware: registration, membership check, rate limiting"""
+    if not update.effective_user:
+        return
+
+    # Ensure user is registered
+    await ensure_user_registered(update, context)
+
+    # Check membership (skip for /start)
+    if update.message and update.message.text != "/start":
+        if not await check_membership(update, context):
+            lang = get_user_language(update.effective_user.id)
+            from utils.texts import TEXTS
+            await update.message.reply_text(
+                TEXTS[lang]["not_member"].format(channel_link=config.REQUIRED_CHANNEL_LINK)
+            )
+            raise StopPropagation
+
+    # Rate limiting
+    if not await rate_limit_middleware(update, context):
+        raise StopPropagation
 
 async def main():
     logger.info("=" * 50)
@@ -49,27 +70,8 @@ async def main():
     app.add_handler(CommandHandler("broadcast", broadcast_command))
     app.add_handler(CallbackQueryHandler(button_handler))
 
-    # Middleware for pre-processing all updates
-async def pre_process(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.effective_user:
-        return
-    # ثبت کاربر
-    await ensure_user_registered(update, context)
-    # بررسی عضویت (به جز برای /start)
-    if update.message and update.message.text != "/start":
-        if not await check_membership(update, context):
-            lang = get_user_language(update.effective_user.id)
-            await update.message.reply_text(
-                TEXTS[lang]["not_member"].format(channel_link=config.REQUIRED_CHANNEL_LINK)
-            )
-            raise StopPropagation   # جلوی ادامه پردازش را می‌گیرد
-    # محدودیت نرخ درخواست
-    if not await rate_limit_middleware(update, context):
-        raise StopPropagation   # جلوی ادامه پردازش را می‌گیرد
-        # Rate limiting
-        return await rate_limit_middleware(update, context)
-
-       app.add_handler(MessageHandler(filters.ALL, pre_process), group=-1)
+    # Middleware: process all updates first (group=-1 means highest priority)
+    app.add_handler(MessageHandler(filters.ALL, pre_process), group=-1)
 
     # Setup scheduler
     setup_scheduler(app)
