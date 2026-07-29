@@ -13,7 +13,7 @@ async def send_daily_messages(context):
             msg = build_message(user_id, first_name, city)
             await context.bot.send_message(chat_id=user_id, text=msg)
             count += 1
-            await asyncio.sleep(0.2)
+            await asyncio.sleep(0.2)   # همین خط اشکال ندارد
         except Exception as e:
             logger.error(f"Failed to send to {user_id}: {e}")
     logger.info(f"Daily broadcast sent to {count}/{len(users)} users")
