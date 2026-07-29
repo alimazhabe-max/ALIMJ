@@ -50,19 +50,22 @@ async def main():
     app.add_handler(CallbackQueryHandler(button_handler))
 
     # Middleware for pre-processing all updates
-    async def pre_process(update, context):
-        if not update.effective_user:
-            return
-        # Ensure user is registered
-        await ensure_user_registered(update, context)
-        # Check membership (skip for /start command)
-        if update.message and update.message.text != "/start":
-            if not await check_membership(update, context):
-                lang = get_user_language(update.effective_user.id)
-                await update.message.reply_text(
-                    TEXTS[lang]["not_member"].format(channel_link=config.REQUIRED_CHANNEL_LINK)
-                )
-                return False
+async def pre_process(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.effective_user:
+        return
+    # ثبت کاربر
+    await ensure_user_registered(update, context)
+    # بررسی عضویت (به جز برای /start)
+    if update.message and update.message.text != "/start":
+        if not await check_membership(update, context):
+            lang = get_user_language(update.effective_user.id)
+            await update.message.reply_text(
+                TEXTS[lang]["not_member"].format(channel_link=config.REQUIRED_CHANNEL_LINK)
+            )
+            raise StopPropagation   # جلوی ادامه پردازش را می‌گیرد
+    # محدودیت نرخ درخواست
+    if not await rate_limit_middleware(update, context):
+        raise StopPropagation   # جلوی ادامه پردازش را می‌گیرد
         # Rate limiting
         return await rate_limit_middleware(update, context)
 
