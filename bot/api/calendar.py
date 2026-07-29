@@ -1,0 +1,38 @@
+import jdatetime
+from hijri_converter import Gregorian
+from datetime import timedelta
+from utils.events import shamsi_events, hijri_events
+
+def get_today_tehran():
+    import pytz
+    from datetime import datetime
+    tehran_tz = pytz.timezone('Asia/Tehran')
+    now = datetime.now(tehran_tz)
+    return jdatetime.datetime.fromgregorian(datetime=now).date()
+
+def get_hijri_date(g_date):
+    try:
+        g_date_adjusted = g_date - timedelta(days=1)
+        hijri = Gregorian(g_date_adjusted.year, g_date_adjusted.month, g_date_adjusted.day).to_hijri()
+        hijri_months = {
+            1: "محرم", 2: "صفر", 3: "ربیع‌الاول", 4: "ربیع‌الثانی",
+            5: "جمادی‌الاول", 6: "جمادی‌الثانی", 7: "رجب", 8: "شعبان",
+            9: "رمضان", 10: "شوال", 11: "ذی‌قعده", 12: "ذی‌الحجه"
+        }
+        return {
+            "day": hijri.day,
+            "month": hijri.month,
+            "month_name": hijri_months[hijri.month],
+            "year": hijri.year,
+            "full": f"{hijri.day} {hijri_months[hijri.month]} {hijri.year}"
+        }
+    except:
+        return {"day": 0, "month": 0, "month_name": "نامشخص", "year": 0, "full": "نامشخص"}
+
+def get_shamsi_events(year, month, day):
+    key = f"{month}-{day}"
+    return shamsi_events.get(key, ["هیچ مناسبت خاصی ثبت نشده است."])
+
+def get_hijri_events(hijri_month, hijri_day):
+    key = f"{hijri_month}-{hijri_day}"
+    return hijri_events.get(key, ["هیچ مناسبت قمری خاصی ثبت نشده است."])
