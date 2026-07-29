@@ -6,3 +6,5 @@ apscheduler
 pytz
 Flask
 python-dotenv
+httpx>=0.27.0
+httpcore>=1.0.0
