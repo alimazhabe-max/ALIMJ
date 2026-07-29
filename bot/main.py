@@ -4,6 +4,7 @@ from logger import logger
 from database import init_db, backup_db
 from handlers.commands import start, help_command, city_command, language_command, calendar_command, stats_command, broadcast_command
 from handlers.callbacks import button_handler
+from database import get_user_language
 from handlers.middleware import rate_limit_middleware, check_membership, ensure_user_registered
 from scheduler import setup_scheduler
 import asyncio
