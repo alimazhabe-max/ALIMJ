@@ -1,9 +1,9 @@
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler
 from bot.config import config
 from bot.logger import logger
 from bot.database import init_db, backup_db
 from bot.handlers.commands import start, help_command, city_command, language_command, calendar_command, stats_command, broadcast_command
 from bot.handlers.callbacks import button_handler
-from bot.handlers.middleware import rate_limit_middleware, check_membership, ensure_user_registered
 from bot.scheduler import setup_scheduler
 import asyncio
 import threading
