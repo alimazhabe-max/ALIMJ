@@ -1,17 +1,15 @@
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, StopHandler
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler
 from config import config
 from logger import logger
-from database import init_db, backup_db, get_user_language
+from database import init_db, backup_db
 from handlers.commands import start, help_command, city_command, language_command, calendar_command, stats_command, broadcast_command
 from handlers.callbacks import button_handler
-from handlers.middleware import rate_limit_middleware, check_membership, ensure_user_registered
 from scheduler import setup_scheduler
 import asyncio
 import threading
 from flask import Flask
 import os
 from datetime import datetime
-from utils.texts import TEXTS   # ایمپورت لازم برای پیام‌های چندزبانه
 
 # Flask app for health checks (required for Render)
 flask_app = Flask(__name__)
@@ -27,27 +25,6 @@ def health():
 def run_flask():
     flask_app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 8080)))
 
-async def pre_process(update, context):
-    """Middleware: registration, membership check, rate limiting"""
-    if not update.effective_user:
-        return
-
-    # Ensure user is registered
-    await ensure_user_registered(update, context)
-
-    # Check membership (skip for /start)
-    if update.message and update.message.text != "/start":
-        if not await check_membership(update, context):
-            lang = get_user_language(update.effective_user.id)
-            await update.message.reply_text(
-                TEXTS[lang]["not_member"].format(channel_link=config.REQUIRED_CHANNEL_LINK)
-            )
-            raise StopHandler   # تغییر مهم: StopHandler به جای StopPropagation
-
-    # Rate limiting
-    if not await rate_limit_middleware(update, context):
-        raise StopHandler
-
 async def main():
     logger.info("=" * 50)
     logger.info("🚀 Starting Prayer Times Bot v2.0 - Professional Edition")
@@ -60,7 +37,7 @@ async def main():
     # Build application
     app = Application.builder().token(config.BOT_TOKEN).build()
 
-    # Register command handlers
+    # Register command handlers (بدون هیچ میان‌افزار سراسری)
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("city", city_command))
@@ -69,9 +46,6 @@ async def main():
     app.add_handler(CommandHandler("stats", stats_command))
     app.add_handler(CommandHandler("broadcast", broadcast_command))
     app.add_handler(CallbackQueryHandler(button_handler))
-
-    # Middleware: process all updates first (group=-1 means highest priority)
-    app.add_handler(MessageHandler(filters.ALL, pre_process), group=-1)
 
     # Setup scheduler
     setup_scheduler(app)
