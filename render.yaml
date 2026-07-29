@@ -2,7 +2,7 @@ services:
   - type: worker
     name: prayer-bot
     runtime: python
-    repo: https://github.com/username/repo-name  # آدرس مخزن خود را وارد کنید
+    repo: https://github.com/alimazhabe-max/ALIMJ  # آدرس مخزن خود را وارد کنید
     plan: free
     envVars:
       - key: BOT_TOKEN
