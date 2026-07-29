@@ -1,0 +1,29 @@
+services:
+  - type: worker
+    name: prayer-bot
+    runtime: python
+    repo: https://github.com/username/repo-name  # آدرس مخزن خود را وارد کنید
+    plan: free
+    envVars:
+      - key: BOT_TOKEN
+        sync: false
+      - key: ADMIN_IDS
+        sync: false
+      - key: CHANNEL_ID
+        sync: false
+      - key: CHANNEL_LINK
+        sync: false
+      - key: TIMEZONE
+        value: Asia/Tehran
+      - key: PRAYER_METHOD
+        value: 7
+      - key: CACHE_TTL
+        value: 300
+      - key: RATE_LIMIT
+        value: 10
+      - key: LOG_LEVEL
+        value: INFO
+      - key: DB_PATH
+        value: bot_data.db
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m bot.main
