@@ -5,7 +5,7 @@ load_dotenv()
 
 class Config:
     # توکن ربات
-    BOT_TOKEN = os.getenv("8940011594:AAHKPDibPDbZUW20CoY3tRYKJC2Mltycjdk")
+    BOT_TOKEN = os.getenv("BOT_TOKEN")
     if not BOT_TOKEN:
         raise ValueError("BOT_TOKEN is required!")
 
