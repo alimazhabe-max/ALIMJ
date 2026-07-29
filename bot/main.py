@@ -37,7 +37,7 @@ async def main():
     # Build application
     app = Application.builder().token(config.BOT_TOKEN).build()
 
-    # Register command handlers (بدون هیچ میان‌افزار سراسری)
+    # Register command handlers
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("city", city_command))
