@@ -1,4 +1,4 @@
-python-telegram-bot==20
+python-telegram-bot==20.3
 requests
 jdatetime
 hijri-converter
@@ -6,5 +6,5 @@ apscheduler
 pytz
 Flask
 python-dotenv
-httpx
-httpcore
+httpx==0.24.1
+httpcore==0.17.3
