@@ -69,7 +69,7 @@ async def pre_process(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Rate limiting
         return await rate_limit_middleware(update, context)
 
-    app.update_persist(pre_process)
+       app.add_handler(MessageHandler(filters.ALL, pre_process), group=-1)
 
     # Setup scheduler
     setup_scheduler(app)
