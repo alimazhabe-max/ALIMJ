@@ -1,4 +1,4 @@
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, StopPropagation
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, StopHandler
 from config import config
 from logger import logger
 from database import init_db, backup_db, get_user_language
@@ -11,6 +11,7 @@ import threading
 from flask import Flask
 import os
 from datetime import datetime
+from utils.texts import TEXTS   # ایمپورت لازم برای پیام‌های چندزبانه
 
 # Flask app for health checks (required for Render)
 flask_app = Flask(__name__)
@@ -38,15 +39,14 @@ async def pre_process(update, context):
     if update.message and update.message.text != "/start":
         if not await check_membership(update, context):
             lang = get_user_language(update.effective_user.id)
-            from utils.texts import TEXTS
             await update.message.reply_text(
                 TEXTS[lang]["not_member"].format(channel_link=config.REQUIRED_CHANNEL_LINK)
             )
-            raise StopPropagation
+            raise StopHandler   # تغییر مهم: StopHandler به جای StopPropagation
 
     # Rate limiting
     if not await rate_limit_middleware(update, context):
-        raise StopPropagation
+        raise StopHandler
 
 async def main():
     logger.info("=" * 50)
