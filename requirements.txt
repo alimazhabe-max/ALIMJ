@@ -1,0 +1,8 @@
+python-telegram-bot==20.3
+requests
+jdatetime
+hijri-converter
+apscheduler
+pytz
+Flask
+python-dotenv
