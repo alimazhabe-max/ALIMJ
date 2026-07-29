@@ -1,14 +1,15 @@
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 from database import get_user, save_user, get_all_users, get_user_city, get_user_language, update_user_field
 from utils.texts import get_text, TEXTS
 from utils.helpers import build_message, get_city_buttons, get_language_buttons, get_calendar_buttons, get_calendar_text
-from handlers.middleware import check_membership
+from handlers.middleware import check_and_rate_limit
 from config import config
 from logger import logger
 import asyncio
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """دستور /start - بدون هیچ چکی"""
     user = update.effective_user
     user_id = user.id
     first_name = user.first_name or "کاربر"
@@ -18,10 +19,16 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(message, reply_markup=get_city_buttons(user_id))
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """دستور /help"""
+    if not await check_and_rate_limit(update, context):
+        return
     user_id = update.effective_user.id
     await update.message.reply_text(get_text(user_id, "help"))
 
 async def city_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """دستور /city [نام شهر]"""
+    if not await check_and_rate_limit(update, context):
+        return
     user_id = update.effective_user.id
     args = context.args
     if not args:
@@ -29,14 +36,22 @@ async def city_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     new_city = " ".join(args)
     update_user_field(user_id, "city", new_city)
-    lang = get_user_language(user_id)
     await update.message.reply_text(get_text(user_id, "city_changed", city=new_city))
 
 async def language_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """دستور /language"""
+    if not await check_and_rate_limit(update, context):
+        return
     user_id = update.effective_user.id
-    await update.message.reply_text("🌍 زبان خود را انتخاب کنید / Choose your language / اختر لغتك:", reply_markup=get_language_buttons())
+    await update.message.reply_text(
+        "🌍 زبان خود را انتخاب کنید / Choose your language / اختر لغتك:",
+        reply_markup=get_language_buttons()
+    )
 
 async def calendar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """دستور /calendar"""
+    if not await check_and_rate_limit(update, context):
+        return
     user_id = update.effective_user.id
     from api.calendar import get_today_tehran
     today = get_today_tehran()
@@ -44,6 +59,9 @@ async def calendar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text, reply_markup=get_calendar_buttons(today.year, today.month, today.day, user_id))
 
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """دستور /stats - فقط برای ادمین"""
+    if not await check_and_rate_limit(update, context):
+        return
     user_id = update.effective_user.id
     if user_id not in config.ADMIN_IDS:
         await update.message.reply_text(get_text(user_id, "admin_only"))
@@ -59,6 +77,9 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(get_text(user_id, "stats", total=total, active=active))
 
 async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """دستور /broadcast [پیام] - فقط برای ادمین"""
+    if not await check_and_rate_limit(update, context):
+        return
     user_id = update.effective_user.id
     if user_id not in config.ADMIN_IDS:
         await update.message.reply_text(get_text(user_id, "admin_only"))
