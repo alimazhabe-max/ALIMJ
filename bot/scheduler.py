@@ -1,4 +1,5 @@
-from apscheduler.triggers.cron import CronTrigger
+from datetime import time
+import pytz
 from bot.logger import logger
 from bot.database import get_all_users, update_stats
 from bot.utils.helpers import build_message
@@ -14,7 +15,7 @@ async def send_daily_messages(context):
             msg = build_message(user_id, first_name, city)
             await context.bot.send_message(chat_id=user_id, text=msg)
             count += 1
-            await asyncio.sleep(0.2)   # همین خط اشکال ندارد
+            await asyncio.sleep(0.2)
         except Exception as e:
             logger.error(f"Failed to send to {user_id}: {e}")
     logger.info(f"Daily broadcast sent to {count}/{len(users)} users")
@@ -25,12 +26,20 @@ def setup_scheduler(app):
         logger.error("JobQueue not available! Scheduler disabled.")
         return
 
+    tehran = pytz.timezone(config.TIMEZONE)
+
     # ارسال روزانه ساعت ۰۰:۰۰ به وقت تهران
-    trigger = CronTrigger(hour=0, minute=0, second=0, timezone=config.TIMEZONE)
-    job_queue.run_custom(send_daily_messages, trigger=trigger, name="daily_broadcast")
+    job_queue.run_daily(
+        send_daily_messages,
+        time=time(hour=0, minute=0, second=0, tzinfo=tehran),
+        name="daily_broadcast"
+    )
     logger.info("Daily broadcast scheduled at 00:00 Tehran time")
 
     # به‌روزرسانی آمار روزانه ساعت ۲۳:۵۹
-    stats_trigger = CronTrigger(hour=23, minute=59, timezone=config.TIMEZONE)
-    job_queue.run_custom(lambda ctx: update_stats(), trigger=stats_trigger, name="daily_stats")
+    job_queue.run_daily(
+        lambda ctx: update_stats(),
+        time=time(hour=23, minute=59, second=0, tzinfo=tehran),
+        name="daily_stats"
+    )
     logger.info("Stats update scheduled at 23:59 Tehran time")
