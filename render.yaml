@@ -1,5 +1,5 @@
 services:
-  - type: worker
+    type: web
     name: prayer-bot
     runtime: python
     repo: https://github.com/alimazhabe-max/ALIMJ  # آدرس مخزن خود را وارد کنید
