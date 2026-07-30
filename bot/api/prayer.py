@@ -1,8 +1,8 @@
 import requests
 from datetime import datetime, timedelta
 import pytz
-from config import config
-from logger import logger
+from bot.config import config
+from bot.logger import logger
 
 tehran_tz = pytz.timezone(config.TIMEZONE)
 _cache_data = {}
