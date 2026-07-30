@@ -8,11 +8,11 @@ from bot.database import (
     get_user_language,
     update_user_field
 )
-from utils.texts import get_text, TEXTS
+from bot.utils.texts import get_text, TEXTS
 from bot.utils.texts import get_text, TEXTS
 from bot.utils.helpers import something
-from config import config
-from logger import logger
+from bot.config import config
+from bot.logger import logger
 import asyncio
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
