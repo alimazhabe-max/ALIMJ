@@ -1,6 +1,13 @@
 from telegram import Update, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
-from database import get_user, save_user, get_all_users, get_user_city, get_user_language, update_user_field
+from bot.database import (
+    get_user,
+    save_user,
+    get_all_users,
+    get_user_city,
+    get_user_language,
+    update_user_field
+)
 from utils.texts import get_text, TEXTS
 from utils.helpers import build_message, get_city_buttons, get_language_buttons, get_calendar_buttons, get_calendar_text
 from handlers.middleware import check_and_rate_limit
