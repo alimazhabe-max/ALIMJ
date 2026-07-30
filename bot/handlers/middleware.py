@@ -9,7 +9,7 @@ from bot.utils.texts import TEXTS
 
 user_requests = defaultdict(list)
 
-async def rate_limit_middleware(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def rate_limit_middleware(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
     """محدودیت نرخ درخواست‌ها (۱۰ درخواست در دقیقه)"""
     if not update.effective_user:
         return True
@@ -17,13 +17,17 @@ async def rate_limit_middleware(update: Update, context: ContextTypes.DEFAULT_TY
     now = time.time()
     user_requests[user_id] = [t for t in user_requests[user_id] if now - t < 60]
     if len(user_requests[user_id]) >= config.RATE_LIMIT:
-        await update.message.reply_text("⏳ لطفاً کمی صبر کنید. درخواست‌های زیادی ارسال کردید.")
+        text = "⏳ لطفاً کمی صبر کنید. درخواست‌های زیادی ارسال کردید."
+        if update.message:
+            await update.message.reply_text(text)
+        elif update.callback_query:
+            await update.callback_query.answer(text, show_alert=True)
         logger.warning(f"Rate limit exceeded for user {user_id}")
         return False
     user_requests[user_id].append(now)
     return True
 
-async def check_membership(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def check_membership(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
     """بررسی عضویت کاربر در کانال اجباری"""
     if not update.effective_user:
         return False
@@ -48,25 +52,34 @@ async def ensure_user_registered(update: Update, context: ContextTypes.DEFAULT_T
 async def check_and_rate_limit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
     """
     تابع کمکی برای استفاده در هر هندلر (به جز /start)
-    ثبت کاربر، بررسی عضویت و محدودیت نرخ را انجام می‌دهد.
-    در صورت موفقیت True برمی‌گرداند، در غیر این صورت False.
     """
     if not update.effective_user:
         return False
 
-    # ثبت کاربر در دیتابیس
     await ensure_user_registered(update, context)
 
-    # بررسی عضویت در کانال (برای دستورات غیر از /start)
-    if update.message and update.message.text != "/start":
+    # بررسی عضویت (برای همه به جز /start)
+    is_start = (
+        update.message
+        and update.message.text
+        and update.message.text.startswith("/start")
+    )
+    if not is_start:
         if not await check_membership(update, context):
             lang = get_user_language(update.effective_user.id)
-            await update.message.reply_text(
-                TEXTS[lang]["not_member"].format(channel_link=config.REQUIRED_CHANNEL_LINK)
+            text = TEXTS.get(lang, TEXTS["fa"])["not_member"].format(
+                channel_link=config.REQUIRED_CHANNEL_LINK
             )
+            if update.message:
+                await update.message.reply_text(text)
+            elif update.callback_query:
+                await update.callback_query.answer("لطفاً ابتدا در کانال عضو شوید", show_alert=True)
+                try:
+                    await update.callback_query.message.reply_text(text)
+                except Exception:
+                    pass
             return False
 
-    # بررسی محدودیت نرخ
     if not await rate_limit_middleware(update, context):
         return False
 
