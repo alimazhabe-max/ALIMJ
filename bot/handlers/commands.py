@@ -65,7 +65,7 @@ async def calendar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_and_rate_limit(update, context):
         return
     user_id = update.effective_user.id
-    from api.calendar import get_today_tehran
+    from bot.api.calendar import get_today_tehran
     today = get_today_tehran()
     text = get_calendar_text(today.year, today.month, today.day, user_id)
     await update.message.reply_text(text, reply_markup=get_calendar_buttons(today.year, today.month, today.day, user_id))
