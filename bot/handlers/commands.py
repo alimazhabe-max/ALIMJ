@@ -78,7 +78,7 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user_id not in config.ADMIN_IDS:
         await update.message.reply_text(get_text(user_id, "admin_only"))
         return
-    from database import get_db_connection
+    from bot.database import get_db_connection
     conn = get_db_connection()
     c = conn.cursor()
     c.execute("SELECT COUNT(*) FROM users")
