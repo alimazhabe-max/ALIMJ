@@ -2,10 +2,10 @@ from collections import defaultdict
 import time
 from telegram import Update
 from telegram.ext import ContextTypes
-from config import config
-from logger import logger
-from database import get_user, save_user, get_user_language
-from utils.texts import TEXTS
+from bot.config import config
+from bot.logger import logger
+from bot.database import get_user, save_user, get_user_language
+from bot.utils.texts import TEXTS
 
 user_requests = defaultdict(list)
 
