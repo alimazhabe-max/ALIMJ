@@ -1,4 +1,5 @@
 from telegram import Update, InlineKeyboardMarkup
+from bot.handlers.middleware import check_and_rate_limit
 from telegram.ext import ContextTypes
 from bot.database import (
     get_user,
