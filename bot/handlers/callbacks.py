@@ -4,11 +4,17 @@ from bot.database import update_user_field, get_user, get_user_city, get_user_la
 from bot.utils.texts import get_text
 from bot.utils.helpers import build_message, get_city_buttons, get_language_buttons, get_calendar_buttons, get_calendar_text
 from bot.api.calendar import get_today_tehran
+from bot.handlers.middleware import check_and_rate_limit
 import jdatetime
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+
+    # چک عضویت و rate-limit
+    if not await check_and_rate_limit(update, context):
+        return
+
     data = query.data
     user_id = update.effective_user.id
 
@@ -28,7 +34,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(message, reply_markup=get_city_buttons(user_id))
 
     elif data == "language_menu":
-        await query.edit_message_text("🌍 انتخاب زبان / Choose Language / اختر اللغة:", reply_markup=get_language_buttons())
+        await query.edit_message_text(
+            "🌍 انتخاب زبان / Choose Language / اختر اللغة:",
+            reply_markup=get_language_buttons()
+        )
 
     elif data == "calendar_menu":
         today = get_today_tehran()
