@@ -48,7 +48,6 @@ def backup_db():
         backup_path = backup_dir / f"bot_{timestamp}.db"
         shutil.copy(DB_PATH, backup_path)
         logger.info(f"Database backed up to {backup_path}")
-        # حذف فایل‌های قدیمی (نگهداری ۷ روز آخر)
         for file in sorted(backup_dir.glob("bot_*.db"))[:-7]:
             file.unlink()
     except Exception as e:
@@ -65,14 +64,30 @@ def get_user(user_id):
 def save_user(user_id, first_name, city="قم", country="Iran", language="fa"):
     conn = get_db_connection()
     c = conn.cursor()
-    c.execute('''INSERT OR REPLACE INTO users 
-        (user_id, first_name, city, country, language, subscribed, register_date, last_active)
-        VALUES (?, ?, ?, ?, ?, 1, datetime('now'), datetime('now'))''',
-        (user_id, first_name, city, country, language))
+    # اگر کاربر وجود دارد فقط فیلدهای اصلی را آپدیت می‌کنیم
+    existing = get_user(user_id)
+    if existing:
+        c.execute('''UPDATE users SET 
+            first_name = ?, 
+            last_active = datetime('now')
+            WHERE user_id = ?''', (first_name, user_id))
+    else:
+        c.execute('''INSERT INTO users 
+            (user_id, first_name, city, country, language, subscribed, register_date, last_active)
+            VALUES (?, ?, ?, ?, ?, 1, datetime('now'), datetime('now'))''',
+            (user_id, first_name, city, country, language))
     conn.commit()
     conn.close()
 
 def update_user_field(user_id, field, value):
+    allowed_fields = {
+        "city", "country", "language", "subscribed",
+        "notification_enabled", "notify_fajr", "notify_dhuhr",
+        "notify_asr", "notify_maghrib", "notify_isha"
+    }
+    if field not in allowed_fields:
+        logger.warning(f"Attempt to update invalid field: {field}")
+        return
     conn = get_db_connection()
     c = conn.cursor()
     c.execute(f"UPDATE users SET {field} = ?, last_active = datetime('now') WHERE user_id = ?", (value, user_id))
@@ -112,4 +127,5 @@ def get_user_city(user_id):
 
 def get_user_language(user_id):
     user = get_user(user_id)
-    return user[3] if user else "fa"
+    # ایندکس درست: 0=user_id, 1=first_name, 2=city, 3=country, 4=language
+    return user[4] if user else "fa"
