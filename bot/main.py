@@ -2,10 +2,12 @@ from telegram.ext import Application, CommandHandler, CallbackQueryHandler
 from bot.config import config
 from bot.logger import logger
 from bot.database import init_db, backup_db
-from bot.handlers.commands import start, help_command, city_command, language_command, calendar_command, stats_command, broadcast_command
+from bot.handlers.commands import (
+    start, help_command, city_command, language_command,
+    calendar_command, stats_command, broadcast_command
+)
 from bot.handlers.callbacks import button_handler
 from bot.scheduler import setup_scheduler
-import asyncio
 import threading
 from flask import Flask
 import os
@@ -23,9 +25,11 @@ def health():
     return {"status": "ok", "time": str(datetime.now())}
 
 def run_flask():
-    flask_app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 8080)))
+    # روی Render فقط برای health check لازم است
+    port = int(os.environ.get("PORT", 8080))
+    flask_app.run(host='0.0.0.0', port=port, use_reloader=False, threaded=True)
 
-async def main():
+def main():
     logger.info("=" * 50)
     logger.info("🚀 Starting Prayer Times Bot v2.0 - Professional Edition")
     logger.info("=" * 50)
@@ -51,10 +55,18 @@ async def main():
     setup_scheduler(app)
 
     logger.info("✅ Bot is fully ready!")
-    await app.run_polling(allowed_updates=["message", "callback_query"])
+
+    # این متد blocking است و خودش loop را مدیریت می‌کند
+    # نباید await شود
+    app.run_polling(
+        allowed_updates=["message", "callback_query"],
+        drop_pending_updates=True
+    )
 
 if __name__ == "__main__":
-    # Run Flask in background for health checks
-    threading.Thread(target=run_flask, daemon=True).start()
-    # Run the bot
-    asyncio.run(main())
+    # Flask را در thread جداگانه اجرا می‌کنیم
+    flask_thread = threading.Thread(target=run_flask, daemon=True)
+    flask_thread.start()
+
+    # ربات را در thread اصلی اجرا می‌کنیم (blocking)
+    main()
