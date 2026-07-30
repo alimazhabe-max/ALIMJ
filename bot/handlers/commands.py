@@ -9,8 +9,13 @@ from bot.database import (
     update_user_field
 )
 from bot.utils.texts import get_text, TEXTS
-from bot.utils.texts import get_text, TEXTS
-from bot.utils.helpers import something
+from bot.utils.helpers import (
+    build_message,
+    get_city_buttons,
+    get_language_buttons,
+    get_calendar_buttons,
+    get_calendar_text,
+)
 from bot.config import config
 from bot.logger import logger
 import asyncio
