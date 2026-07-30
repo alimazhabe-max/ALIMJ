@@ -2,13 +2,13 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 import jdatetime
 import pytz
 from datetime import datetime
-from config import config
-from api.calendar import get_today_tehran, get_hijri_date, get_shamsi_events, get_hijri_events
-from api.prayer import get_prayer_times, get_next_prayer_time
-from api.weather import get_weather
-from utils.texts import get_text
-from utils.motivation import get_motivation
-from database import get_user_city, get_user_language
+from bot.config import config
+from bot.api.calendar import get_today_tehran, get_hijri_date, get_shamsi_events, get_hijri_events
+from bot.api.prayer import get_prayer_times, get_next_prayer_time
+from bot.api.weather import get_weather
+from bot.utils.texts import get_text
+from bot.utils.motivation import get_motivation
+from bot.database import get_user_city, get_user_language
 
 PERSIAN_MONTHS = {
     1: "فروردین", 2: "اردیبهشت", 3: "خرداد", 4: "تیر",
