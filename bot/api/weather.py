@@ -1,7 +1,7 @@
 import requests
 from datetime import datetime
-from logger import logger
-from config import config
+from bot.logger import logger
+from bot.config import config
 
 _cache_data = {}
 _cache_time = {}
