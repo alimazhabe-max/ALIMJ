@@ -1,7 +1,7 @@
 import jdatetime
 from hijri_converter import Gregorian
 from datetime import timedelta
-from utils.events import shamsi_events, hijri_events
+from bot.utils.events import shamsi_events, hijri_events
 
 def get_today_tehran():
     import pytz
