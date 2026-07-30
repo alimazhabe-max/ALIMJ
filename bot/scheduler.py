@@ -20,7 +20,6 @@ async def send_daily_messages(context):
     logger.info(f"Daily broadcast sent to {count}/{len(users)} users")
 
 def setup_scheduler(app):
-    from config import config
     job_queue = app.job_queue
     if not job_queue:
         logger.error("JobQueue not available! Scheduler disabled.")
