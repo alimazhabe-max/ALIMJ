@@ -1,4 +1,4 @@
-# دیکشنری کامل متون چندزبانه (حاوی تمام کلیدهای مورد نیاز)
+# دیکشنری کامل متون چندزبانه
 TEXTS = {
     "fa": {
         "welcome": "🌟 سلام {name} عزیز! 🌟",
@@ -87,7 +87,7 @@ TEXTS = {
 }
 
 def get_text(user_id, key, **kwargs):
-    from database import get_user_language
+    from bot.database import get_user_language
     lang = get_user_language(user_id)
     text = TEXTS.get(lang, TEXTS["fa"]).get(key, key)
     return text.format(**kwargs) if kwargs else text
