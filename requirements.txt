@@ -6,6 +6,6 @@ apscheduler
 pytz
 Flask
 python-dotenv
-httpx
+httpx[http2]>=0.27.0
 httpcore
 beautifulsoup4
