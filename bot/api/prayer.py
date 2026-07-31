@@ -9,11 +9,10 @@ _cache_data = {}
 _cache_time = {}
 
 def get_prayer_times(city, country="Iran", method=config.PRAYER_METHOD):
-    """دریافت اوقات شرعی با کش ۵ دقیقه‌ای"""
+    """دریافت اوقات شرعی با کش ۵ دقیقه‌ای - کلیدهای فارسی"""
     key = f"{city}_{country}"
     now = datetime.now().timestamp()
 
-    # بررسی کش
     if key in _cache_data and now - _cache_time.get(key, 0) < config.CACHE_TTL:
         return _cache_data[key]
 
@@ -25,12 +24,12 @@ def get_prayer_times(city, country="Iran", method=config.PRAYER_METHOD):
         timings = data["data"]["timings"]
 
         result = {
-            "Fajr": timings["Fajr"],
-            "Sunrise": timings["Sunrise"],
-            "Dhuhr": timings["Dhuhr"],
-            "Asr": timings["Asr"],
-            "Maghrib": timings["Maghrib"],
-            "Isha": timings["Isha"],
+            "اذان صبح": timings["Fajr"],
+            "طلوع آفتاب": timings["Sunrise"],
+            "اذان ظهر": timings["Dhuhr"],
+            "اذان عصر": timings["Asr"],
+            "اذان مغرب": timings["Maghrib"],
+            "اذان عشاء": timings["Isha"],
         }
 
         _cache_data[key] = result
@@ -41,11 +40,11 @@ def get_prayer_times(city, country="Iran", method=config.PRAYER_METHOD):
         return None
 
 def get_next_prayer_time(prayer_times, now_dt):
-    """محاسبه زمان باقی‌مانده تا اذان بعدی"""
+    """محاسبه زمان باقی‌مانده تا اذان بعدی با کلیدهای فارسی"""
     if not prayer_times:
         return None, None
 
-    prayer_keys = ["Fajr", "Dhuhr", "Asr", "Maghrib", "Isha"]
+    prayer_keys = ["اذان صبح", "اذان ظهر", "اذان عصر", "اذان مغرب", "اذان عشاء"]
     today = now_dt.date()
     prayer_datetimes = []
 
