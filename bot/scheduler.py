@@ -12,7 +12,7 @@ async def send_daily_messages(context):
     count = 0
     for user_id, first_name, city, lang in users:
         try:
-            msg = build_message(user_id, first_name, city)
+            msg = await build_message(user_id, first_name, city)
             await context.bot.send_message(chat_id=user_id, text=msg)
             count += 1
             await asyncio.sleep(0.2)
