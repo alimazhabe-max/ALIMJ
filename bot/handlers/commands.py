@@ -28,7 +28,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     first_name = user.first_name or "کاربر"
     save_user(user_id, first_name)
     city = get_user_city(user_id)
-    message = build_message(user_id, first_name, city)
+    message = await build_message(user_id, first_name, city)
     await update.message.reply_text(message, reply_markup=get_city_buttons(user_id))
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
