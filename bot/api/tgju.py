@@ -14,9 +14,6 @@ HEADERS = {
 }
 
 async def _get_price_from_profile(slug: str) -> int | None:
-    """
-    استخراج قیمت از صفحه‌ی پروفایل tgju (نسخه async)
-    """
     try:
         url = f"https://www.tgju.org/profile/{slug}"
         async with httpx.AsyncClient(timeout=8.0, headers=HEADERS, follow_redirects=True) as client:
@@ -25,7 +22,7 @@ async def _get_price_from_profile(slug: str) -> int | None:
 
         soup = BeautifulSoup(response.text, "html.parser")
 
-        # روش ۱: پایدارترین روش (data-col)
+        # روش ۱
         price_tag = soup.find(attrs={"data-col": "info.last_trade.PDrCotVal"})
         if price_tag:
             text = price_tag.get_text(strip=True).replace(",", "")
@@ -39,7 +36,7 @@ async def _get_price_from_profile(slug: str) -> int | None:
             if text and text.replace(".", "").isdigit():
                 return int(float(text))
 
-        # روش ۳ (fallback)
+        # روش ۳
         numbers = re.findall(r"([\d,]+)", soup.get_text())
         if numbers:
             valid_numbers = [int(n.replace(",", "")) for n in numbers if n.replace(",", "").isdigit()]
@@ -57,7 +54,6 @@ async def _get_price_from_profile(slug: str) -> int | None:
 
 
 async def get_dollar_price() -> int | None:
-    """قیمت دلار آزاد به ریال"""
     key = "dollar"
     now = datetime.now().timestamp()
 
@@ -72,7 +68,6 @@ async def get_dollar_price() -> int | None:
 
 
 async def get_gold18_price() -> int | None:
-    """قیمت طلای ۱۸ عیار (هر گرم) به ریال"""
     key = "gold18"
     now = datetime.now().timestamp()
 
@@ -87,7 +82,6 @@ async def get_gold18_price() -> int | None:
 
 
 async def get_market_prices() -> dict:
-    """دریافت همزمان قیمت دلار و طلا (سریع‌تر)"""
     dollar, gold = await asyncio.gather(
         get_dollar_price(),
         get_gold18_price(),
@@ -99,7 +93,6 @@ async def get_market_prices() -> dict:
     }
 
 
-# توابع تومان (اختیاری - اگر جایی لازم داشتی)
 async def get_dollar_price_toman() -> int | None:
     price = await get_dollar_price()
     return price // 10 if price is not None else None
