@@ -105,7 +105,7 @@ def build_message(user_id, user_name, city):
         f"📌 **مناسبت‌های شمسی امروز:**\n{shamsi_text}\n\n" +
         f"🔮 **مناسبت‌های شمسی فردا:**\n{shamsi_tomorrow_text}\n\n" +
         get_text(user_id, "prayer", city=city) + "\n" + prayer_text +
-        next_prayer_text + "\n"
+        next_prayer_text + "\n" +
         get_text(user_id, "weather", city=city) + "\n" + weather_text + "\n\n" +
         get_text(user_id, "motivation") + "\n" + motivation + "\n\n" +
         get_text(user_id, "change_city")
