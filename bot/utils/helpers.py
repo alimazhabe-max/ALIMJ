@@ -94,7 +94,7 @@ async def build_message(user_id, user_name, city):
     else:
         weather_text = "⚠️ " + get_text(user_id, "no_events")
 
-    # قیمت دلار و طلا (async و همزمان)
+    # قیمت دلار و طلا
     market = await get_market_prices()
     dollar = market.get("dollar")
     gold18 = market.get("gold18")
