@@ -112,6 +112,23 @@ def build_message(user_id, user_name, city):
     )
     return message
 
+from bot.api.tgju import get_dollar_price, get_gold18_price
+
+# ... داخل build_message ...
+
+# قیمت دلار و طلا
+dollar = get_dollar_price()
+gold18 = get_gold18_price()
+
+market_text = ""
+if dollar:
+    market_text += f"💵 دلار: {to_persian_num(f'{dollar:,}')} ریال\n"
+if gold18:
+    market_text += f"🥇 طلای ۱۸ عیار: {to_persian_num(f'{gold18:,}')} ریال\n"
+
+if not market_text:
+    market_text = "⚠️ قیمت بازار در دسترس نیست.\n"
+    
 def get_city_buttons(user_id):
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("تهران", callback_data="city_تهران"),
