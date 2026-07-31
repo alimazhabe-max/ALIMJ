@@ -11,7 +11,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    # چک عضویت و rate-limit
     if not await check_and_rate_limit(update, context):
         return
 
@@ -22,7 +21,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         city = data.replace("city_", "")
         update_user_field(user_id, "city", city)
         first_name = get_user(user_id)[1] if get_user(user_id) else "کاربر"
-        message = build_message(user_id, first_name, city)
+        message = await build_message(user_id, first_name, city)
         await query.edit_message_text(message, reply_markup=get_city_buttons(user_id))
 
     elif data.startswith("lang_"):
@@ -30,7 +29,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         update_user_field(user_id, "language", lang_code)
         first_name = get_user(user_id)[1] if get_user(user_id) else "کاربر"
         city = get_user_city(user_id)
-        message = build_message(user_id, first_name, city)
+        message = await build_message(user_id, first_name, city)
         await query.edit_message_text(message, reply_markup=get_city_buttons(user_id))
 
     elif data == "language_menu":
@@ -86,11 +85,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "back_to_main":
         first_name = get_user(user_id)[1] if get_user(user_id) else "کاربر"
         city = get_user_city(user_id)
-        message = build_message(user_id, first_name, city)
+        message = await build_message(user_id, first_name, city)
         await query.edit_message_text(message, reply_markup=get_city_buttons(user_id))
 
     elif data == "refresh_main":
         first_name = get_user(user_id)[1] if get_user(user_id) else "کاربر"
         city = get_user_city(user_id)
-        message = build_message(user_id, first_name, city)
+        message = await build_message(user_id, first_name, city)
         await query.edit_message_text(message, reply_markup=get_city_buttons(user_id))
