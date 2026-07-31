@@ -6,7 +6,7 @@ from bot.config import config
 from bot.api.calendar import get_today_tehran, get_hijri_date, get_shamsi_events, get_hijri_events
 from bot.api.prayer import get_prayer_times, get_next_prayer_time
 from bot.api.weather import get_weather
-from bot.api.tgju import get_dollar_price, get_gold18_price
+from bot.api.tgju import get_market_prices
 from bot.utils.texts import get_text
 from bot.utils.motivation import get_motivation
 from bot.database import get_user_city, get_user_language
@@ -26,7 +26,7 @@ def to_persian_num(num):
                '5': '۵', '6': '۶', '7': '۷', '8': '۸', '9': '۹'}
     return ''.join(mapping.get(ch, ch) for ch in str(num))
 
-def build_message(user_id, user_name, city):
+async def build_message(user_id, user_name, city):
     lang = get_user_language(user_id)
     now = datetime.now(pytz.timezone(config.TIMEZONE))
     today = get_today_tehran()
@@ -43,7 +43,7 @@ def build_message(user_id, user_name, city):
     greg = today.togregorian()
     miladi_date = greg.strftime("%B %d, %A") + f" {greg.year}/{greg.month:02d}/{greg.day:02d}"
 
-    # تاریخ قمری (با اعداد فارسی)
+    # تاریخ قمری
     hijri = get_hijri_date(greg)
     hijri_date = f"{to_persian_num(hijri['day'])} {hijri['month_name']} {to_persian_num(hijri['year'])} / {to_persian_num(hijri['month'])} / {to_persian_num(hijri['day'])}"
 
@@ -94,9 +94,11 @@ def build_message(user_id, user_name, city):
     else:
         weather_text = "⚠️ " + get_text(user_id, "no_events")
 
-    # قیمت دلار و طلا
-    dollar = get_dollar_price()
-    gold18 = get_gold18_price()
+    # قیمت دلار و طلا (async و همزمان)
+    market = await get_market_prices()
+    dollar = market.get("dollar")
+    gold18 = market.get("gold18")
+
     market_text = ""
     if dollar:
         market_text += f"💵 دلار: {to_persian_num(f'{dollar:,}')} ریال\n"
