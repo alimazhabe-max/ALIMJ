@@ -21,7 +21,6 @@ PERSIAN_WEEKDAYS = {
 }
 
 def to_persian_num(num):
-    """تبدیل اعداد انگلیسی به فارسی"""
     mapping = {'0': '۰', '1': '۱', '2': '۲', '3': '۳', '4': '۴',
                '5': '۵', '6': '۶', '7': '۷', '8': '۸', '9': '۹'}
     return ''.join(mapping.get(ch, ch) for ch in str(num))
@@ -34,18 +33,16 @@ def build_message(user_id, user_name, city):
     # تاریخ شمسی
     weekday = PERSIAN_WEEKDAYS[today.weekday()]
     month_name = PERSIAN_MONTHS[today.month]
-
     year_p = to_persian_num(today.year)
     month_p = to_persian_num(f"{today.month:02d}")
     day_p = to_persian_num(f"{today.day:02d}")
-
     persian_date = f"{weekday} {to_persian_num(today.day)} {month_name} {year_p}/{month_p}/{day_p}"
 
     # تاریخ میلادی
     greg = today.togregorian()
     miladi_date = greg.strftime("%B %d, %A") + f" {greg.year}/{greg.month:02d}/{greg.day:02d}"
 
-    # تاریخ قمری
+    # تاریخ قمری (با اعداد فارسی)
     hijri = get_hijri_date(greg)
     hijri_date = f"{to_persian_num(hijri['day'])} {hijri['month_name']} {to_persian_num(hijri['year'])} / {to_persian_num(hijri['month'])} / {to_persian_num(hijri['day'])}"
 
@@ -64,7 +61,7 @@ def build_message(user_id, user_name, city):
     shamsi_tomorrow = get_shamsi_events(tomorrow.year, tomorrow.month, tomorrow.day)
     shamsi_tomorrow_text = "\n".join([f"• {e}" for e in shamsi_tomorrow])
 
-    # اوقات شرعی
+    # اوقات شرعی (کلیدهای فارسی)
     prayer_times = get_prayer_times(city)
     prayer_text = ""
     if prayer_times:
@@ -81,16 +78,9 @@ def build_message(user_id, user_name, city):
             name, delta = result
             hours = delta.seconds // 3600
             minutes = (delta.seconds % 3600) // 60
-            name_fa = {
-                "Fajr": "اذان صبح",
-                "Dhuhr": "اذان ظهر",
-                "Asr": "اذان عصر",
-                "Maghrib": "اذان مغرب",
-                "Isha": "اذان عشاء"
-            }.get(name, name)
             next_prayer_text = get_text(
                 user_id, "next_prayer",
-                name=name_fa,
+                name=name,
                 hours=to_persian_num(hours),
                 minutes=to_persian_num(minutes)
             ) + "\n"
@@ -99,7 +89,7 @@ def build_message(user_id, user_name, city):
     weather = get_weather(city)
     weather_text = ""
     if weather:
-        weather_text = f"🌡️ دما: {weather['temp']}°C\n🌤️ {weather['condition']}\n💧 رطوبت: {weather['humidity']}%"
+        weather_text = f"🌡️ دما: {weather['temp']}°C\n🌤️ وضعیت: {weather['condition']}\n💧 رطوبت: {weather['humidity']}%"
     else:
         weather_text = "⚠️ " + get_text(user_id, "no_events")
 
@@ -154,7 +144,6 @@ def get_calendar_buttons(year, month, day, user_id):
     ])
 
 def get_calendar_text(year, month, day, user_id):
-    lang = get_user_language(user_id)
     try:
         target = jdatetime.date(year, month, day)
         date_str = f"{PERSIAN_WEEKDAYS[target.weekday()]} {to_persian_num(target.day)} {PERSIAN_MONTHS[target.month]} {to_persian_num(target.year)}/{to_persian_num(f'{target.month:02d}')}/{to_persian_num(f'{target.day:02d}')}"
@@ -173,12 +162,12 @@ def get_calendar_text(year, month, day, user_id):
         weather = get_weather(city)
         weather_text = ""
         if weather:
-            weather_text = f"🌡️ دما: {weather['temp']}°C\n🌤️ {weather['condition']}\n💧 رطوبت: {weather['humidity']}%"
+            weather_text = f"🌡️ دما: {weather['temp']}°C\n🌤️ وضعیت: {weather['condition']}\n💧 رطوبت: {weather['humidity']}%"
         else:
             weather_text = "⚠️ " + get_text(user_id, "no_events")
         return (
             f"📅 **{date_str}**\n"
-            f"🌙 **قمری:** {hijri['full']}\n\n"
+            f"🌙 **قمری:** {to_persian_num(hijri['day'])} {hijri['month_name']} {to_persian_num(hijri['year'])}\n\n"
             f"📌 **مناسبت‌های شمسی:**\n{shamsi_text}\n\n"
             f"📌 **مناسبت‌های قمری:**\n{hijri_text}\n\n"
             f"⏰ **اوقات شرعی ({city}):**\n{prayer_text}\n\n"
