@@ -1,4 +1,4 @@
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters
 from bot.config import config
 from bot.logger import logger
 from bot.database import init_db, backup_db
@@ -7,13 +7,13 @@ from bot.handlers.commands import (
     calendar_command, stats_command, broadcast_command
 )
 from bot.handlers.callbacks import button_handler
+from bot.handlers.messages import text_handler
 from bot.scheduler import setup_scheduler
 import threading
 from flask import Flask
 import os
 from datetime import datetime
 
-# Flask app for health checks (required for Render)
 flask_app = Flask(__name__)
 
 @flask_app.route('/')
@@ -25,7 +25,6 @@ def health():
     return {"status": "ok", "time": str(datetime.now())}
 
 def run_flask():
-    # روی Render فقط برای health check لازم است
     port = int(os.environ.get("PORT", 8080))
     flask_app.run(host='0.0.0.0', port=port, use_reloader=False, threaded=True)
 
@@ -34,14 +33,11 @@ def main():
     logger.info("🚀 Starting Prayer Times Bot v2.0 - Professional Edition")
     logger.info("=" * 50)
 
-    # Initialize database
     init_db()
     backup_db()
 
-    # Build application
     app = Application.builder().token(config.BOT_TOKEN).build()
 
-    # Register command handlers
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("city", city_command))
@@ -49,24 +45,20 @@ def main():
     app.add_handler(CommandHandler("calendar", calendar_command))
     app.add_handler(CommandHandler("stats", stats_command))
     app.add_handler(CommandHandler("broadcast", broadcast_command))
-    app.add_handler(CallbackQueryHandler(button_handler))
 
-    # Setup scheduler
+    app.add_handler(CallbackQueryHandler(button_handler))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
+
     setup_scheduler(app)
 
     logger.info("✅ Bot is fully ready!")
 
-    # این متد blocking است و خودش loop را مدیریت می‌کند
-    # نباید await شود
     app.run_polling(
         allowed_updates=["message", "callback_query"],
         drop_pending_updates=True
     )
 
 if __name__ == "__main__":
-    # Flask را در thread جداگانه اجرا می‌کنیم
     flask_thread = threading.Thread(target=run_flask, daemon=True)
     flask_thread.start()
-
-    # ربات را در thread اصلی اجرا می‌کنیم (blocking)
     main()
