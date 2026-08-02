@@ -19,7 +19,10 @@ from bot.handlers.middleware import check_and_rate_limit
 
 
 async def _send_or_edit_main(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str):
-    """اگر آخرین پیام اصلی موجود باشد ویرایش می‌کند، وگرنه پیام جدید می‌فرستد."""
+    """
+    اگر آخرین پیام اصلی ربات موجود باشد آن را ویرایش می‌کند،
+    وگرنه پیام جدید می‌فرستد و message_id را ذخیره می‌کند.
+    """
     chat_id = update.effective_chat.id
     last_id = context.user_data.get("last_main_msg_id")
 
