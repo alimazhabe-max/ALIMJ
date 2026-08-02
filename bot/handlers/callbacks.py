@@ -1,6 +1,6 @@
 from telegram import Update
 from telegram.ext import ContextTypes
-from bot.database import get_user, get_user_city
+from bot.database import get_user, get_user_city, set_last_main_msg_id
 from bot.utils.helpers import (
     build_message,
     get_main_keyboard,
@@ -74,7 +74,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         first_name = get_user(user_id)[1] if get_user(user_id) else "کاربر"
         city = get_user_city(user_id)
         message = await build_message(user_id, first_name, city)
-        await query.message.reply_text(message, reply_markup=get_main_keyboard())
+        msg = await query.message.reply_text(message, reply_markup=get_main_keyboard())
+        context.user_data["last_main_msg_id"] = msg.message_id
+        set_last_main_msg_id(user_id, msg.message_id)
         try:
             await query.message.delete()
         except Exception:
