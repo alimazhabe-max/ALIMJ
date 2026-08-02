@@ -2,7 +2,7 @@ from datetime import time
 import pytz
 from bot.logger import logger
 from bot.database import get_all_users, update_stats
-from bot.utils.helpers import build_message
+from bot.utils.helpers import build_message, get_refresh_button
 from bot.config import config
 import asyncio
 
@@ -13,7 +13,11 @@ async def send_daily_messages(context):
     for user_id, first_name, city, lang in users:
         try:
             msg = await build_message(user_id, first_name, city)
-            await context.bot.send_message(chat_id=user_id, text=msg)
+            await context.bot.send_message(
+                chat_id=user_id,
+                text=msg,
+                reply_markup=get_refresh_button()
+            )
             count += 1
             await asyncio.sleep(0.2)
         except Exception as e:
