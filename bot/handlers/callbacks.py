@@ -1,14 +1,9 @@
 from telegram import Update
 from telegram.ext import ContextTypes
-from bot.database import update_user_field, get_user, get_user_city, get_user_language
-from bot.utils.texts import get_text
+from bot.database import get_user, get_user_city
 from bot.utils.helpers import (
     build_message,
-    get_city_buttons,
-    get_city_selection_buttons,
-    get_iran_cities_buttons,
-    get_iraq_cities_buttons,
-    get_language_buttons,
+    get_main_keyboard,
     get_calendar_buttons,
     get_calendar_text,
 )
@@ -27,61 +22,13 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = query.data
     user_id = update.effective_user.id
 
-    if data == "city_menu":
-        await query.edit_message_text(
-            "🏙 کشور را انتخاب کنید:",
-            reply_markup=get_city_selection_buttons()
-        )
-
-    elif data == "cities_iran":
-        await query.edit_message_text(
-            "🇮🇷 شهرهای ایران — یکی را انتخاب کنید:",
-            reply_markup=get_iran_cities_buttons()
-        )
-
-    elif data == "cities_iraq":
-        await query.edit_message_text(
-            "🇮🇶 شهرهای عراق — یکی را انتخاب کنید:",
-            reply_markup=get_iraq_cities_buttons()
-        )
-
-    elif data.startswith("city_"):
-        parts = data.split("_", 2)
-        if len(parts) == 3:
-            country = parts[1]
-            city = parts[2]
-        else:
-            city = data.replace("city_", "")
-            country = "Iran"
-        update_user_field(user_id, "city", city)
-        update_user_field(user_id, "country", country)
-        first_name = get_user(user_id)[1] if get_user(user_id) else "کاربر"
-        message = await build_message(user_id, first_name, city)
-        await query.edit_message_text(message, reply_markup=get_city_buttons(user_id))
-
-    elif data.startswith("lang_"):
-        lang_code = data.replace("lang_", "")
-        update_user_field(user_id, "language", lang_code)
-        first_name = get_user(user_id)[1] if get_user(user_id) else "کاربر"
-        city = get_user_city(user_id)
-        message = await build_message(user_id, first_name, city)
-        await query.edit_message_text(message, reply_markup=get_city_buttons(user_id))
-
-    elif data == "language_menu":
-        await query.edit_message_text(
-            "🌍 انتخاب زبان / Choose Language / اختر اللغة:",
-            reply_markup=get_language_buttons()
-        )
-
-    elif data == "calendar_menu":
+    if data == "calendar_today":
         today = get_today_tehran()
         text = get_calendar_text(today.year, today.month, today.day, user_id)
-        await query.edit_message_text(text, reply_markup=get_calendar_buttons(today.year, today.month, today.day, user_id))
-
-    elif data == "calendar_today":
-        today = get_today_tehran()
-        text = get_calendar_text(today.year, today.month, today.day, user_id)
-        await query.edit_message_text(text, reply_markup=get_calendar_buttons(today.year, today.month, today.day, user_id))
+        await query.edit_message_text(
+            text,
+            reply_markup=get_calendar_buttons(today.year, today.month, today.day, user_id)
+        )
 
     elif data.startswith("day_"):
         parts = data.split("_")
@@ -103,7 +50,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     year += 1
                 day = 1
         text = get_calendar_text(year, month, day, user_id)
-        await query.edit_message_text(text, reply_markup=get_calendar_buttons(year, month, day, user_id))
+        await query.edit_message_text(
+            text,
+            reply_markup=get_calendar_buttons(year, month, day, user_id)
+        )
 
     elif data.startswith("cal_"):
         parts = data.split("_")
@@ -115,16 +65,17 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             month = 1
             year += 1
         text = get_calendar_text(year, month, day, user_id)
-        await query.edit_message_text(text, reply_markup=get_calendar_buttons(year, month, day, user_id))
+        await query.edit_message_text(
+            text,
+            reply_markup=get_calendar_buttons(year, month, day, user_id)
+        )
 
     elif data == "back_to_main":
         first_name = get_user(user_id)[1] if get_user(user_id) else "کاربر"
         city = get_user_city(user_id)
         message = await build_message(user_id, first_name, city)
-        await query.edit_message_text(message, reply_markup=get_city_buttons(user_id))
-
-    elif data == "refresh_main":
-        first_name = get_user(user_id)[1] if get_user(user_id) else "کاربر"
-        city = get_user_city(user_id)
-        message = await build_message(user_id, first_name, city)
-        await query.edit_message_text(message, reply_markup=get_city_buttons(user_id))
+        await query.message.reply_text(message, reply_markup=get_main_keyboard())
+        try:
+            await query.message.delete()
+        except Exception:
+            pass
