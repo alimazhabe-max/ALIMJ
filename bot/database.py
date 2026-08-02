@@ -36,6 +36,10 @@ def init_db():
         total_users INTEGER,
         active_users INTEGER
     )''')
+    try:
+        c.execute("ALTER TABLE users ADD COLUMN last_main_msg_id INTEGER")
+    except Exception:
+        pass
     conn.commit()
     conn.close()
     logger.info("Database initialized successfully")
@@ -131,3 +135,26 @@ def get_user_country(user_id):
 def get_user_language(user_id):
     user = get_user(user_id)
     return user[4] if user else "fa"
+
+def get_last_main_msg_id(user_id):
+    conn = get_db_connection()
+    c = conn.cursor()
+    try:
+        c.execute("SELECT last_main_msg_id FROM users WHERE user_id = ?", (user_id,))
+        row = c.fetchone()
+        return row[0] if row else None
+    except Exception:
+        return None
+    finally:
+        conn.close()
+
+def set_last_main_msg_id(user_id, message_id):
+    conn = get_db_connection()
+    c = conn.cursor()
+    try:
+        c.execute("UPDATE users SET last_main_msg_id = ? WHERE user_id = ?", (message_id, user_id))
+        conn.commit()
+    except Exception as e:
+        logger.error(f"set_last_main_msg_id failed: {e}")
+    finally:
+        conn.close()
