@@ -1,6 +1,7 @@
 from telegram import Update
 from telegram.ext import ContextTypes
-from bot.database import update_user_field, get_user, get_user_city
+from telegram.error import BadRequest
+from bot.database import update_user_field, get_user_city
 from bot.utils.helpers import (
     build_message,
     get_main_keyboard,
@@ -15,6 +16,28 @@ from bot.utils.helpers import (
 )
 from bot.api.calendar import get_today_tehran
 from bot.handlers.middleware import check_and_rate_limit
+
+
+async def _send_or_edit_main(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str):
+    """اگر آخرین پیام اصلی موجود باشد ویرایش می‌کند، وگرنه پیام جدید می‌فرستد."""
+    chat_id = update.effective_chat.id
+    last_id = context.user_data.get("last_main_msg_id")
+
+    if last_id:
+        try:
+            await context.bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=last_id,
+                text=text,
+            )
+            return
+        except BadRequest:
+            pass
+        except Exception:
+            pass
+
+    msg = await update.message.reply_text(text, reply_markup=get_main_keyboard())
+    context.user_data["last_main_msg_id"] = msg.message_id
 
 
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -54,7 +77,11 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if text == "🔄 بروزرسانی":
         city = get_user_city(user_id)
         message = await build_message(user_id, first_name, city)
-        await update.message.reply_text(message, reply_markup=get_main_keyboard())
+        await _send_or_edit_main(update, context, message)
+        try:
+            await update.message.delete()
+        except Exception:
+            pass
         return
 
     if text == "🇮🇷 ایران":
@@ -74,28 +101,32 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if text == "🔙 بازگشت":
         city = get_user_city(user_id)
         message = await build_message(user_id, first_name, city)
-        await update.message.reply_text(message, reply_markup=get_main_keyboard())
+        msg = await update.message.reply_text(message, reply_markup=get_main_keyboard())
+        context.user_data["last_main_msg_id"] = msg.message_id
         return
 
     if text == "فارسی 🇮🇷":
         update_user_field(user_id, "language", "fa")
         city = get_user_city(user_id)
         message = await build_message(user_id, first_name, city)
-        await update.message.reply_text(message, reply_markup=get_main_keyboard())
+        msg = await update.message.reply_text(message, reply_markup=get_main_keyboard())
+        context.user_data["last_main_msg_id"] = msg.message_id
         return
 
     if text == "English 🇬🇧":
         update_user_field(user_id, "language", "en")
         city = get_user_city(user_id)
         message = await build_message(user_id, first_name, city)
-        await update.message.reply_text(message, reply_markup=get_main_keyboard())
+        msg = await update.message.reply_text(message, reply_markup=get_main_keyboard())
+        context.user_data["last_main_msg_id"] = msg.message_id
         return
 
     if text == "العربية 🇸🇦":
         update_user_field(user_id, "language", "ar")
         city = get_user_city(user_id)
         message = await build_message(user_id, first_name, city)
-        await update.message.reply_text(message, reply_markup=get_main_keyboard())
+        msg = await update.message.reply_text(message, reply_markup=get_main_keyboard())
+        context.user_data["last_main_msg_id"] = msg.message_id
         return
 
     if text in ALL_CITIES:
@@ -103,8 +134,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         update_user_field(user_id, "city", text)
         update_user_field(user_id, "country", country)
         message = await build_message(user_id, first_name, text)
-        await update.message.reply_text(
-            f"✅ شهر شما به **{text}** تغییر کرد.\n\n" + message,
-            reply_markup=get_main_keyboard()
-        )
+        full = f"✅ شهر شما به **{text}** تغییر کرد.\n\n" + message
+        msg = await update.message.reply_text(full, reply_markup=get_main_keyboard())
+        context.user_data["last_main_msg_id"] = msg.message_id
         return
