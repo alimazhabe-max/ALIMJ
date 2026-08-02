@@ -64,7 +64,6 @@ def get_user(user_id):
 def save_user(user_id, first_name, city="قم", country="Iran", language="fa"):
     conn = get_db_connection()
     c = conn.cursor()
-    # اگر کاربر وجود دارد فقط فیلدهای اصلی را آپدیت می‌کنیم
     existing = get_user(user_id)
     if existing:
         c.execute('''UPDATE users SET 
@@ -125,7 +124,10 @@ def get_user_city(user_id):
     user = get_user(user_id)
     return user[2] if user else "قم"
 
+def get_user_country(user_id):
+    user = get_user(user_id)
+    return user[3] if user else "Iran"
+
 def get_user_language(user_id):
     user = get_user(user_id)
-    # ایندکس درست: 0=user_id, 1=first_name, 2=city, 3=country, 4=language
     return user[4] if user else "fa"
