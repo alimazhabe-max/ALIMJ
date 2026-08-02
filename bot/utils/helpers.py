@@ -9,7 +9,7 @@ from bot.api.weather import get_weather
 from bot.api.tgju import get_market_prices
 from bot.utils.texts import get_text
 from bot.utils.motivation import get_motivation
-from bot.database import get_user_city, get_user_language
+from bot.database import get_user_city, get_user_country, get_user_language
 
 PERSIAN_MONTHS = {
     1: "فروردین", 2: "اردیبهشت", 3: "خرداد", 4: "تیر",
@@ -31,7 +31,6 @@ async def build_message(user_id, user_name, city):
     now = datetime.now(pytz.timezone(config.TIMEZONE))
     today = get_today_tehran()
 
-    # تاریخ شمسی
     weekday = PERSIAN_WEEKDAYS[today.weekday()]
     month_name = PERSIAN_MONTHS[today.month]
     year_p = to_persian_num(today.year)
@@ -39,15 +38,12 @@ async def build_message(user_id, user_name, city):
     day_p = to_persian_num(f"{today.day:02d}")
     persian_date = f"{weekday} {to_persian_num(today.day)} {month_name} {year_p}/{month_p}/{day_p}"
 
-    # تاریخ میلادی
     greg = today.togregorian()
     miladi_date = greg.strftime("%B %d, %A") + f" {greg.year}/{greg.month:02d}/{greg.day:02d}"
 
-    # تاریخ قمری
     hijri = get_hijri_date(greg)
     hijri_date = f"{to_persian_num(hijri['day'])} {hijri['month_name']} {to_persian_num(hijri['year'])} / {to_persian_num(hijri['month'])} / {to_persian_num(hijri['day'])}"
 
-    # مناسبت‌ها
     hijri_events_list = get_hijri_events(hijri['month'], hijri['day'])
     hijri_events_text = "\n".join([f"• {e}" for e in hijri_events_list])
 
@@ -62,8 +58,8 @@ async def build_message(user_id, user_name, city):
     shamsi_tomorrow = get_shamsi_events(tomorrow.year, tomorrow.month, tomorrow.day)
     shamsi_tomorrow_text = "\n".join([f"• {e}" for e in shamsi_tomorrow])
 
-    # اوقات شرعی
-    prayer_times = get_prayer_times(city)
+    country = get_user_country(user_id)
+    prayer_times = get_prayer_times(city, country=country)
     prayer_text = ""
     if prayer_times:
         for key, time in prayer_times.items():
@@ -71,7 +67,6 @@ async def build_message(user_id, user_name, city):
     else:
         prayer_text = "⚠️ " + get_text(user_id, "no_events")
 
-    # زمان تا اذان بعدی
     next_prayer_text = ""
     if prayer_times:
         result = get_next_prayer_time(prayer_times, now)
@@ -86,7 +81,6 @@ async def build_message(user_id, user_name, city):
                 minutes=to_persian_num(minutes)
             ) + "\n"
 
-    # آب و هوا
     weather = get_weather(city)
     weather_text = ""
     if weather:
@@ -94,7 +88,6 @@ async def build_message(user_id, user_name, city):
     else:
         weather_text = "⚠️ " + get_text(user_id, "no_events")
 
-    # قیمت دلار و طلا
     market = await get_market_prices()
     dollar = market.get("dollar")
     gold18 = market.get("gold18")
@@ -127,18 +120,72 @@ async def build_message(user_id, user_name, city):
     )
     return message
 
+# شهرهای ایران
+IRAN_CITIES = [
+    "تهران", "مشهد", "اصفهان",
+    "شیراز", "تبریز", "قم",
+    "کرج", "اهواز", "کرمانشاه",
+    "ارومیه", "رشت", "کرمان",
+    "یزد", "همدان", "اردبیل",
+    "زاهدان", "بندرعباس", "ساری",
+    "قزوین", "خرم‌آباد", "سنندج",
+    "بوشهر", "اراک", "زنجان",
+    "گرگان", "سمنان", "بجنورد",
+    "ایلام", "یاسوج", "بیرجند",
+    "ساوه",
+]
+
+# شهرهای عراق (زیارتی)
+IRAQ_CITIES = [
+    "نجف", "کربلا", "کاظمین",
+    "سامرا", "بغداد",
+]
+
+CITY_COUNTRY = {city: "Iran" for city in IRAN_CITIES}
+CITY_COUNTRY.update({city: "Iraq" for city in IRAQ_CITIES})
+
 def get_city_buttons(user_id):
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("تهران", callback_data="city_تهران"),
-         InlineKeyboardButton("مشهد", callback_data="city_مشهد"),
-         InlineKeyboardButton("قم", callback_data="city_قم")],
-        [InlineKeyboardButton("اصفهان", callback_data="city_اصفهان"),
-         InlineKeyboardButton("شیراز", callback_data="city_شیراز"),
-         InlineKeyboardButton("تبریز", callback_data="city_تبریز")],
+        [InlineKeyboardButton("🏙 انتخاب شهر", callback_data="city_menu")],
         [InlineKeyboardButton("🌍 زبان", callback_data="language_menu"),
          InlineKeyboardButton("📅 تقویم", callback_data="calendar_menu"),
          InlineKeyboardButton("🔄 بروزرسانی", callback_data="refresh_main")]
     ])
+
+def _build_city_rows(cities, country_code):
+    buttons = []
+    row = []
+    for city in cities:
+        row.append(InlineKeyboardButton(city, callback_data=f"city_{country_code}_{city}"))
+        if len(row) == 3:
+            buttons.append(row)
+            row = []
+    if row:
+        buttons.append(row)
+    return buttons
+
+def get_city_selection_buttons():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🇮🇷 ایران", callback_data="cities_iran")],
+        [InlineKeyboardButton("🇮🇶 عراق", callback_data="cities_iraq")],
+        [InlineKeyboardButton("🔙 بازگشت", callback_data="back_to_main")]
+    ])
+
+def get_iran_cities_buttons():
+    buttons = _build_city_rows(IRAN_CITIES, "Iran")
+    buttons.append([
+        InlineKeyboardButton("🇮🇶 شهرهای عراق", callback_data="cities_iraq"),
+        InlineKeyboardButton("🔙 بازگشت", callback_data="city_menu")
+    ])
+    return InlineKeyboardMarkup(buttons)
+
+def get_iraq_cities_buttons():
+    buttons = _build_city_rows(IRAQ_CITIES, "Iraq")
+    buttons.append([
+        InlineKeyboardButton("🇮🇷 شهرهای ایران", callback_data="cities_iran"),
+        InlineKeyboardButton("🔙 بازگشت", callback_data="city_menu")
+    ])
+    return InlineKeyboardMarkup(buttons)
 
 def get_language_buttons():
     return InlineKeyboardMarkup([
@@ -168,7 +215,8 @@ def get_calendar_text(year, month, day, user_id):
         hijri_events_list = get_hijri_events(hijri['month'], hijri['day'])
         hijri_text = "\n".join([f"• {e}" for e in hijri_events_list])
         city = get_user_city(user_id)
-        prayer = get_prayer_times(city)
+        country = get_user_country(user_id)
+        prayer = get_prayer_times(city, country=country)
         prayer_text = ""
         if prayer:
             prayer_text = "\n".join([f"🕌 {k}: {v}" for k, v in prayer.items()])
