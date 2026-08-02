@@ -1,4 +1,4 @@
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup
 import jdatetime
 import pytz
 from datetime import datetime
@@ -120,7 +120,6 @@ async def build_message(user_id, user_name, city):
     )
     return message
 
-# شهرهای ایران
 IRAN_CITIES = [
     "تهران", "مشهد", "اصفهان",
     "شیراز", "تبریز", "قم",
@@ -135,7 +134,6 @@ IRAN_CITIES = [
     "ساوه",
 ]
 
-# شهرهای عراق (زیارتی)
 IRAQ_CITIES = [
     "نجف", "کربلا", "کاظمین",
     "سامرا", "بغداد",
@@ -144,56 +142,61 @@ IRAQ_CITIES = [
 CITY_COUNTRY = {city: "Iran" for city in IRAN_CITIES}
 CITY_COUNTRY.update({city: "Iraq" for city in IRAQ_CITIES})
 
-def get_city_buttons(user_id):
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🏙 انتخاب شهر", callback_data="city_menu")],
-        [InlineKeyboardButton("🌍 زبان", callback_data="language_menu"),
-         InlineKeyboardButton("📅 تقویم", callback_data="calendar_menu"),
-         InlineKeyboardButton("🔄 بروزرسانی", callback_data="refresh_main")]
-    ])
+ALL_CITIES = set(IRAN_CITIES) | set(IRAQ_CITIES)
 
-def _build_city_rows(cities, country_code):
+def get_main_keyboard():
+    return ReplyKeyboardMarkup(
+        [
+            [KeyboardButton("🏙 انتخاب شهر"), KeyboardButton("📅 تقویم")],
+            [KeyboardButton("🌍 زبان"), KeyboardButton("🔄 بروزرسانی")],
+        ],
+        resize_keyboard=True,
+        is_persistent=True,
+    )
+
+def get_country_keyboard():
+    return ReplyKeyboardMarkup(
+        [
+            [KeyboardButton("🇮🇷 ایران"), KeyboardButton("🇮🇶 عراق")],
+            [KeyboardButton("🔙 بازگشت")],
+        ],
+        resize_keyboard=True,
+    )
+
+def get_iran_cities_keyboard():
     buttons = []
     row = []
-    for city in cities:
-        row.append(InlineKeyboardButton(city, callback_data=f"city_{country_code}_{city}"))
+    for city in IRAN_CITIES:
+        row.append(KeyboardButton(city))
         if len(row) == 3:
             buttons.append(row)
             row = []
     if row:
         buttons.append(row)
-    return buttons
+    buttons.append([KeyboardButton("🔙 بازگشت")])
+    return ReplyKeyboardMarkup(buttons, resize_keyboard=True)
 
-def get_city_selection_buttons():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🇮🇷 ایران", callback_data="cities_iran")],
-        [InlineKeyboardButton("🇮🇶 عراق", callback_data="cities_iraq")],
-        [InlineKeyboardButton("🔙 بازگشت", callback_data="back_to_main")]
-    ])
+def get_iraq_cities_keyboard():
+    buttons = []
+    row = []
+    for city in IRAQ_CITIES:
+        row.append(KeyboardButton(city))
+        if len(row) == 3:
+            buttons.append(row)
+            row = []
+    if row:
+        buttons.append(row)
+    buttons.append([KeyboardButton("🔙 بازگشت")])
+    return ReplyKeyboardMarkup(buttons, resize_keyboard=True)
 
-def get_iran_cities_buttons():
-    buttons = _build_city_rows(IRAN_CITIES, "Iran")
-    buttons.append([
-        InlineKeyboardButton("🇮🇶 شهرهای عراق", callback_data="cities_iraq"),
-        InlineKeyboardButton("🔙 بازگشت", callback_data="city_menu")
-    ])
-    return InlineKeyboardMarkup(buttons)
-
-def get_iraq_cities_buttons():
-    buttons = _build_city_rows(IRAQ_CITIES, "Iraq")
-    buttons.append([
-        InlineKeyboardButton("🇮🇷 شهرهای ایران", callback_data="cities_iran"),
-        InlineKeyboardButton("🔙 بازگشت", callback_data="city_menu")
-    ])
-    return InlineKeyboardMarkup(buttons)
-
-def get_language_buttons():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("فارسی 🇮🇷", callback_data="lang_fa"),
-         InlineKeyboardButton("English 🇬🇧", callback_data="lang_en")],
-        [InlineKeyboardButton("العربية 🇸🇦", callback_data="lang_ar"),
-         InlineKeyboardButton("🔙 بازگشت", callback_data="back_to_main")]
-    ])
+def get_language_reply_keyboard():
+    return ReplyKeyboardMarkup(
+        [
+            [KeyboardButton("فارسی 🇮🇷"), KeyboardButton("English 🇬🇧"), KeyboardButton("العربية 🇸🇦")],
+            [KeyboardButton("🔙 بازگشت")],
+        ],
+        resize_keyboard=True,
+    )
 
 def get_calendar_buttons(year, month, day, user_id):
     return InlineKeyboardMarkup([
@@ -202,7 +205,7 @@ def get_calendar_buttons(year, month, day, user_id):
          InlineKeyboardButton("روز بعد ▶️", callback_data=f"day_{year}_{month}_{day+1}")],
         [InlineKeyboardButton("◀️ ماه قبل", callback_data=f"cal_{year}_{month-1}_{day}"),
          InlineKeyboardButton("ماه بعد ▶️", callback_data=f"cal_{year}_{month+1}_{day}")],
-        [InlineKeyboardButton("🔙 بازگشت", callback_data="back_to_main")]
+        [InlineKeyboardButton("🔙 بازگشت به منو", callback_data="back_to_main")]
     ])
 
 def get_calendar_text(year, month, day, user_id):
