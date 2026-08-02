@@ -7,7 +7,8 @@ from bot.database import (
     get_all_users,
     get_user_city,
     get_user_language,
-    update_user_field
+    update_user_field,
+    set_last_main_msg_id,
 )
 from bot.utils.texts import get_text
 from bot.utils.helpers import (
@@ -31,6 +32,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = await build_message(user_id, first_name, city)
     msg = await update.message.reply_text(message, reply_markup=get_main_keyboard())
     context.user_data["last_main_msg_id"] = msg.message_id
+    set_last_main_msg_id(user_id, msg.message_id)
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
