@@ -166,7 +166,6 @@ def get_main_keyboard():
             [KeyboardButton("🌍 زبان")],
         ],
         resize_keyboard=True,
-        is_persistent=True,
         one_time_keyboard=False,
         input_field_placeholder="پیام بنویسید یا از دکمه‌ها استفاده کنید...",
     )
