@@ -2,10 +2,20 @@ from telegram import Update
 from telegram.ext import ContextTypes
 from bot.database import update_user_field, get_user, get_user_city, get_user_language
 from bot.utils.texts import get_text
-from bot.utils.helpers import build_message, get_city_buttons, get_language_buttons, get_calendar_buttons, get_calendar_text
+from bot.utils.helpers import (
+    build_message,
+    get_city_buttons,
+    get_city_selection_buttons,
+    get_iran_cities_buttons,
+    get_iraq_cities_buttons,
+    get_language_buttons,
+    get_calendar_buttons,
+    get_calendar_text,
+)
 from bot.api.calendar import get_today_tehran
 from bot.handlers.middleware import check_and_rate_limit
 import jdatetime
+
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -17,9 +27,34 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = query.data
     user_id = update.effective_user.id
 
-    if data.startswith("city_"):
-        city = data.replace("city_", "")
+    if data == "city_menu":
+        await query.edit_message_text(
+            "🏙 کشور را انتخاب کنید:",
+            reply_markup=get_city_selection_buttons()
+        )
+
+    elif data == "cities_iran":
+        await query.edit_message_text(
+            "🇮🇷 شهرهای ایران — یکی را انتخاب کنید:",
+            reply_markup=get_iran_cities_buttons()
+        )
+
+    elif data == "cities_iraq":
+        await query.edit_message_text(
+            "🇮🇶 شهرهای عراق — یکی را انتخاب کنید:",
+            reply_markup=get_iraq_cities_buttons()
+        )
+
+    elif data.startswith("city_"):
+        parts = data.split("_", 2)
+        if len(parts) == 3:
+            country = parts[1]
+            city = parts[2]
+        else:
+            city = data.replace("city_", "")
+            country = "Iran"
         update_user_field(user_id, "city", city)
+        update_user_field(user_id, "country", country)
         first_name = get_user(user_id)[1] if get_user(user_id) else "کاربر"
         message = await build_message(user_id, first_name, city)
         await query.edit_message_text(message, reply_markup=get_city_buttons(user_id))
