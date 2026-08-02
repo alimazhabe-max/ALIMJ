@@ -1,7 +1,7 @@
 from telegram import Update
 from telegram.ext import ContextTypes
 from telegram.error import BadRequest
-from bot.database import update_user_field, get_user_city
+from bot.database import update_user_field, get_user_city, get_last_main_msg_id, set_last_main_msg_id
 from bot.utils.helpers import (
     build_message,
     get_main_keyboard,
@@ -16,15 +16,12 @@ from bot.utils.helpers import (
 )
 from bot.api.calendar import get_today_tehran
 from bot.handlers.middleware import check_and_rate_limit
+from bot.logger import logger
 
 
-async def _send_or_edit_main(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str):
-    """
-    اگر آخرین پیام اصلی ربات موجود باشد آن را ویرایش می‌کند،
-    وگرنه پیام جدید می‌فرستد و message_id را ذخیره می‌کند.
-    """
+async def _send_or_edit_main(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str, user_id: int):
     chat_id = update.effective_chat.id
-    last_id = context.user_data.get("last_main_msg_id")
+    last_id = context.user_data.get("last_main_msg_id") or get_last_main_msg_id(user_id)
 
     if last_id:
         try:
@@ -33,14 +30,18 @@ async def _send_or_edit_main(update: Update, context: ContextTypes.DEFAULT_TYPE,
                 message_id=last_id,
                 text=text,
             )
-            return
-        except BadRequest:
-            pass
-        except Exception:
-            pass
+            context.user_data["last_main_msg_id"] = last_id
+            set_last_main_msg_id(user_id, last_id)
+            return True
+        except BadRequest as e:
+            logger.warning(f"edit_message failed for user {user_id}: {e}")
+        except Exception as e:
+            logger.warning(f"edit_message error for user {user_id}: {e}")
 
     msg = await update.message.reply_text(text, reply_markup=get_main_keyboard())
     context.user_data["last_main_msg_id"] = msg.message_id
+    set_last_main_msg_id(user_id, msg.message_id)
+    return False
 
 
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -80,7 +81,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if text == "🔄 بروزرسانی":
         city = get_user_city(user_id)
         message = await build_message(user_id, first_name, city)
-        await _send_or_edit_main(update, context, message)
+        await _send_or_edit_main(update, context, message, user_id)
         try:
             await update.message.delete()
         except Exception:
@@ -106,6 +107,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         message = await build_message(user_id, first_name, city)
         msg = await update.message.reply_text(message, reply_markup=get_main_keyboard())
         context.user_data["last_main_msg_id"] = msg.message_id
+        set_last_main_msg_id(user_id, msg.message_id)
         return
 
     if text == "فارسی 🇮🇷":
@@ -114,6 +116,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         message = await build_message(user_id, first_name, city)
         msg = await update.message.reply_text(message, reply_markup=get_main_keyboard())
         context.user_data["last_main_msg_id"] = msg.message_id
+        set_last_main_msg_id(user_id, msg.message_id)
         return
 
     if text == "English 🇬🇧":
@@ -122,6 +125,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         message = await build_message(user_id, first_name, city)
         msg = await update.message.reply_text(message, reply_markup=get_main_keyboard())
         context.user_data["last_main_msg_id"] = msg.message_id
+        set_last_main_msg_id(user_id, msg.message_id)
         return
 
     if text == "العربية 🇸🇦":
@@ -130,6 +134,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         message = await build_message(user_id, first_name, city)
         msg = await update.message.reply_text(message, reply_markup=get_main_keyboard())
         context.user_data["last_main_msg_id"] = msg.message_id
+        set_last_main_msg_id(user_id, msg.message_id)
         return
 
     if text in ALL_CITIES:
@@ -140,4 +145,5 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         full = f"✅ شهر شما به **{text}** تغییر کرد.\n\n" + message
         msg = await update.message.reply_text(full, reply_markup=get_main_keyboard())
         context.user_data["last_main_msg_id"] = msg.message_id
+        set_last_main_msg_id(user_id, msg.message_id)
         return
