@@ -117,7 +117,7 @@ async def full_market_prices() -> str:
 def rial_toman(amount: float, to_toman=True) -> str:
     if to_toman:
         return f"💵 {pn(f'{amount:,.0f}')} ریال = **{pn(f'{amount/10:,.0f}')} تومان**"
-    return f"💵 {pn(f'{amount:,.0f}')} تومان = **{pn(f'{amount*10:,.0f}')} ریال**
+    return f"💵 {pn(f'{amount:,.0f}')} تومان = **{pn(f'{amount*10:,.0f}')} ریال**"
 
 
 async def convert_currency(amount: float, from_cur: str, to_cur: str) -> str:
