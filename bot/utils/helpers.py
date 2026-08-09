@@ -170,12 +170,98 @@ def get_main_keyboard():
 
 
 def get_more_keyboard():
-    """منوی بیشتر: مبدل تاریخ + محاسبه سن"""
     return ReplyKeyboardMarkup(
         [
-            [KeyboardButton("🔄 مبدل تاریخ")],
-            [KeyboardButton("🎂 محاسبه سن دقیق")],
-            [KeyboardButton("🔙 بازگشت")],
+            [KeyboardButton("📅 تاریخ و سن"), KeyboardButton("🕌 مذهبی")],
+            [KeyboardButton("💰 بازار"), KeyboardButton("🌤 هوا و مکان")],
+            [KeyboardButton("🛠 ابزارها"), KeyboardButton("🎮 سرگرمی")],
+            [KeyboardButton("👤 پروفایل"), KeyboardButton("🔙 بازگشت")],
+        ],
+        resize_keyboard=True,
+    )
+
+
+def get_date_tools_keyboard():
+    return ReplyKeyboardMarkup(
+        [
+            [KeyboardButton("🔄 مبدل تاریخ"), KeyboardButton("🎂 محاسبه سن")],
+            [KeyboardButton("🎉 روزشمار تولد"), KeyboardButton("♈ برج و حیوان")],
+            [KeyboardButton("🌙 سن قمری"), KeyboardButton("📆 اختلاف تاریخ")],
+            [KeyboardButton("👥 اختلاف سن"), KeyboardButton("📅 تقویم ماه")],
+            [KeyboardButton("🔍 مناسبت‌یاب"), KeyboardButton("🌸 شمارش نوروز")],
+            [KeyboardButton("🌍 ساعت جهانی"), KeyboardButton("⏳ شمارش‌معکوس")],
+            [KeyboardButton("🔙 بازگشت به بیشتر")],
+        ],
+        resize_keyboard=True,
+    )
+
+
+def get_religious_keyboard():
+    return ReplyKeyboardMarkup(
+        [
+            [KeyboardButton("🕋 قبله‌نما"), KeyboardButton("📿 اذکار روز")],
+            [KeyboardButton("📖 آیه و حدیث"), KeyboardButton("🕌 مناسبت مذهبی")],
+            [KeyboardButton("🔔 تنظیم اذان")],
+            [KeyboardButton("🔙 بازگشت به بیشتر")],
+        ],
+        resize_keyboard=True,
+    )
+
+
+def get_market_keyboard():
+    return ReplyKeyboardMarkup(
+        [
+            [KeyboardButton("💵 قیمت کامل بازار")],
+            [KeyboardButton("🔄 تبدیل ارز"), KeyboardButton("📈 سود و ضرر")],
+            [KeyboardButton("🔙 بازگشت به بیشتر")],
+        ],
+        resize_keyboard=True,
+    )
+
+
+def get_weather_geo_keyboard():
+    return ReplyKeyboardMarkup(
+        [
+            [KeyboardButton("🌤 پیش‌بینی هوا"), KeyboardButton("🌫 کیفیت هوا")],
+            [KeyboardButton("🗺 فاصله شهرها"), KeyboardButton("📍 لوکیشن من")],
+            [KeyboardButton("🔙 بازگشت به بیشتر")],
+        ],
+        resize_keyboard=True,
+    )
+
+
+def get_tools_keyboard():
+    return ReplyKeyboardMarkup(
+        [
+            [KeyboardButton("📐 تبدیل واحد"), KeyboardButton("🔢 ماشین‌حساب")],
+            [KeyboardButton("🔐 پسورد تصادفی"), KeyboardButton("📝 شمارش متن")],
+            [KeyboardButton("⚖️ BMI"), KeyboardButton("⏰ یادآوری")],
+            [KeyboardButton("📒 یادداشت")],
+            [KeyboardButton("🔙 بازگشت به بیشتر")],
+        ],
+        resize_keyboard=True,
+    )
+
+
+def get_fun_keyboard():
+    return ReplyKeyboardMarkup(
+        [
+            [KeyboardButton("📖 فال حافظ"), KeyboardButton("🙏 استخاره")],
+            [KeyboardButton("🎯 حقیقت یا جرات"), KeyboardButton("😂 جوک روز")],
+            [KeyboardButton("🧠 دانستنی روز"), KeyboardButton("💪 چالش امروز")],
+            [KeyboardButton("💖 جمله انگیزشی")],
+            [KeyboardButton("🔙 بازگشت به بیشتر")],
+        ],
+        resize_keyboard=True,
+    )
+
+
+def get_profile_keyboard():
+    return ReplyKeyboardMarkup(
+        [
+            [KeyboardButton("👤 پروفایل من"), KeyboardButton("📊 آمار من")],
+            [KeyboardButton("🎂 ذخیره تاریخ تولد")],
+            [KeyboardButton("🔙 بازگشت به بیشتر")],
         ],
         resize_keyboard=True,
     )
