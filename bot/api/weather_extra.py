@@ -1,6 +1,6 @@
-"""پیش‌بینی هوا، AQI، فاصله شهرها"""
+"""پیش‌بینی هوا ۷ روزه، AQI واقعی، فاصله شهرها — Open-Meteo (بدون کلید، سریع، پایدار)"""
 import math
-import requests
+import httpx
 from datetime import datetime
 from bot.config import config
 from bot.logger import logger
@@ -8,90 +8,211 @@ from bot.logger import logger
 _cache = {}
 _cache_t = {}
 
+# مختصات کامل شهرهای ایران و عراق + چند شهر مهم
 CITY_COORDS = {
     "تهران": (35.6892, 51.3890), "مشهد": (36.2970, 59.6062), "اصفهان": (32.6546, 51.6680),
     "شیراز": (29.5918, 52.5837), "تبریز": (38.0962, 46.2738), "قم": (34.6416, 50.8746),
     "کرج": (35.8400, 50.9391), "اهواز": (31.3183, 48.6706), "کرمانشاه": (34.3142, 47.0650),
     "ارومیه": (37.5527, 45.0761), "رشت": (37.2808, 49.5832), "کرمان": (30.2832, 57.0788),
-    "یزد": (31.8974, 54.3569), "همدان": (34.7983, 48.5146), "نجف": (31.9956, 44.3147),
-    "کربلا": (32.6163, 44.0249), "بغداد": (33.3152, 44.3661),
+    "یزد": (31.8974, 54.3569), "همدان": (34.7983, 48.5146), "اردبیل": (38.2498, 48.2933),
+    "زاهدان": (29.4963, 60.8629), "بندرعباس": (27.1832, 56.2666), "ساری": (36.5633, 53.0601),
+    "قزوین": (36.2688, 50.0041), "خرم‌آباد": (33.4878, 48.3558), "سنندج": (35.3219, 46.9862),
+    "بوشهر": (28.9234, 50.8203), "اراک": (34.0917, 49.6892), "زنجان": (36.6736, 48.4787),
+    "گرگان": (36.8427, 54.4439), "سمنان": (35.5769, 53.3953), "بجنورد": (37.4750, 57.3333),
+    "ایلام": (33.6374, 46.4226), "یاسوج": (30.6682, 51.5880), "بیرجند": (32.8663, 59.2211),
+    "ساوه": (35.0213, 50.3566), "نجف": (31.9956, 44.3147), "کربلا": (32.6163, 44.0249),
+    "کاظمین": (33.3800, 44.3400), "سامرا": (34.1959, 43.8730), "بغداد": (33.3152, 44.3661),
+    "کیش": (26.5570, 53.9800), "قشم": (26.9581, 56.2719), "چابهار": (25.2919, 60.6430),
 }
+
+WEATHER_CODES = {
+    0: "آفتابی ☀️", 1: "عمدتاً صاف 🌤", 2: "نیمه‌ابری ⛅", 3: "ابری ☁️",
+    45: "مه 🌫", 48: "مه یخی 🌫", 51: "باران ریز 🌦", 53: "باران متوسط 🌧",
+    55: "باران شدید 🌧", 61: "باران 🌧", 63: "باران متوسط 🌧", 65: "باران شدید ⛈",
+    71: "برف ❄️", 73: "برف متوسط ❄️", 75: "برف سنگین ❄️", 80: "رگبار 🌦",
+    81: "رگبار متوسط 🌧", 82: "رگبار شدید ⛈", 95: "رعدوبرق ⛈", 96: "تگرگ 🌨",
+}
+
+AQI_LABELS = [
+    (0, 50, "عالی 🟢", "هوا پاک است. مناسب همه فعالیت‌ها."),
+    (51, 100, "قابل قبول 🟡", "حساس‌ها کمی مراقب باشند."),
+    (101, 150, "ناسالم برای گروه‌های حساس 🟠", "کودکان، سالمندان و بیماران ریوی فعالیت سنگین نکنند."),
+    (151, 200, "ناسالم 🔴", "فعالیت در فضای باز را کاهش دهید."),
+    (201, 300, "بسیار ناسالم 🟣", "از خروج غیرضروری خودداری کنید."),
+    (301, 999, "خطرناک ⚫", "فقط در شرایط اضطراری بیرون بروید."),
+]
 
 
 def pn(n):
     return str(n).translate(str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹"))
 
 
-def weather_forecast(city: str) -> str:
-    key = f"fc_{city}"
+def _get_coords(city: str):
+    c = CITY_COORDS.get(city)
+    if c:
+        return c
+    return CITY_COORDS["تهران"]
+
+
+async def weather_forecast(city: str) -> str:
+    """پیش‌بینی ۷ روزه حرفه‌ای و فانتزی با Open-Meteo"""
+    key = f"fc7_{city}"
     now = datetime.now().timestamp()
     if key in _cache and now - _cache_t.get(key, 0) < config.CACHE_TTL:
         return _cache[key]
+
+    lat, lon = _get_coords(city)
     try:
-        url = f"https://wttr.in/{city}?format=j1&lang=en"
-        r = requests.get(url, timeout=12)
-        r.raise_for_status()
-        data = r.json()
-        lines = [f"🌤 **پیش‌بینی هوای {city}**\n"]
-        for i, day in enumerate(data.get("weather", [])[:3]):
-            date = day.get("date", "")
-            avg = day.get("avgtempC", "?")
-            mx = day.get("maxtempC", "?")
-            mn = day.get("mintempC", "?")
-            desc = day.get("hourly", [{}])[4].get("weatherDesc", [{}])[0].get("value", "")
-            label = ["امروز", "فردا", "پس‌فردا"][i] if i < 3 else date
-            lines.append(f"• {label}: {mn}°–{mx}° (میانگین {avg}°) — {desc}")
+        url = "https://api.open-meteo.com/v1/forecast"
+        params = {
+            "latitude": lat,
+            "longitude": lon,
+            "daily": "weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum,windspeed_10m_max,uv_index_max",
+            "current": "temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m",
+            "timezone": "Asia/Tehran",
+            "forecast_days": 7,
+        }
+        async with httpx.AsyncClient(timeout=12.0) as client:
+            r = await client.get(url, params=params)
+            r.raise_for_status()
+            data = r.json()
+
+        current = data.get("current", {})
+        daily = data.get("daily", {})
+        times = daily.get("time", [])
+        tmax = daily.get("temperature_2m_max", [])
+        tmin = daily.get("temperature_2m_min", [])
+        codes = daily.get("weather_code", [])
+        precip = daily.get("precipitation_sum", [])
+        wind = daily.get("windspeed_10m_max", [])
+        uv = daily.get("uv_index_max", [])
+
+        cur_temp = current.get("temperature_2m", "?")
+        cur_hum = current.get("relative_humidity_2m", "?")
+        cur_code = current.get("weather_code", 0)
+        cur_wind = current.get("wind_speed_10m", "?")
+        cur_desc = WEATHER_CODES.get(cur_code, "نامشخص")
+
+        lines = [
+            f"🌤 **پیش‌بینی هوای {city}** (۷ روزه)\n",
+            f"📍 **الان:** {pn(cur_temp)}°C  {cur_desc}",
+            f"💧 رطوبت: {pn(cur_hum)}%  |  💨 باد: {pn(cur_wind)} km/h\n",
+            "━━━━━━━━━━━━━━━━━━━━",
+        ]
+
+        day_names = ["امروز", "فردا", "پس‌فردا", "روز ۴", "روز ۵", "روز ۶", "روز ۷"]
+        for i in range(min(7, len(times))):
+            d = times[i][5:] if times[i] else ""
+            mx = tmax[i] if i < len(tmax) else "?"
+            mn = tmin[i] if i < len(tmin) else "?"
+            code = codes[i] if i < len(codes) else 0
+            desc = WEATHER_CODES.get(code, "")
+            pr = precip[i] if i < len(precip) else 0
+            wd = wind[i] if i < len(wind) else "?"
+            u = uv[i] if i < len(uv) else "?"
+            label = day_names[i] if i < len(day_names) else d
+            rain = f"  🌧 {pn(pr)}mm" if pr and float(pr) > 0 else ""
+            lines.append(
+                f"• **{label}** ({d})\n"
+                f"  {pn(mn)}° ~ {pn(mx)}°  {desc}{rain}\n"
+                f"  💨 {pn(wd)} km/h  |  ☀️ UV {pn(u)}"
+            )
+
         result = "\n".join(lines)
         _cache[key] = result
         _cache_t[key] = now
         return result
     except Exception as e:
         logger.error(f"forecast {city}: {e}")
-        return f"❌ پیش‌بینی هوای {city} در دسترس نیست."
+        return f"❌ پیش‌بینی هوای {city} موقتاً در دسترس نیست.\nلطفاً چند لحظه بعد دوباره امتحان کنید."
 
 
-def air_quality(city: str) -> str:
+async def air_quality(city: str) -> str:
+    """شاخص کیفیت هوا واقعی با Open-Meteo Air Quality API"""
     key = f"aqi_{city}"
     now = datetime.now().timestamp()
     if key in _cache and now - _cache_t.get(key, 0) < config.CACHE_TTL:
         return _cache[key]
+
+    lat, lon = _get_coords(city)
     try:
-        # wttr.in گاهی air quality دارد
-        url = f"https://wttr.in/{city}?format=j1"
-        r = requests.get(url, timeout=10)
-        data = r.json()
-        current = data.get("current_condition", [{}])[0]
-        # تقریبی از دید و رطوبت
-        humidity = current.get("humidity", "?")
-        vis = current.get("visibility", "?")
-        result = (
-            f"🌫 **کیفیت هوا — {city}**\n\n"
-            f"💧 رطوبت: {humidity}%\n"
-            f"👁 دید: {vis} km\n\n"
-            f"(AQI دقیق نیاز به سرویس تخصصی دارد؛ این مقادیر تقریبی‌اند)"
-        )
+        url = "https://air-quality-api.open-meteo.com/v1/air-quality"
+        params = {
+            "latitude": lat,
+            "longitude": lon,
+            "current": "european_aqi,pm10,pm2_5,carbon_monoxide,nitrogen_dioxide,ozone,sulphur_dioxide,dust",
+            "timezone": "Asia/Tehran",
+        }
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            r = await client.get(url, params=params)
+            r.raise_for_status()
+            data = r.json()
+
+        cur = data.get("current", {})
+        aqi = cur.get("european_aqi")
+        pm25 = cur.get("pm2_5")
+        pm10 = cur.get("pm10")
+        no2 = cur.get("nitrogen_dioxide")
+        o3 = cur.get("ozone")
+        so2 = cur.get("sulphur_dioxide")
+        co = cur.get("carbon_monoxide")
+        dust = cur.get("dust")
+
+        label, advice = "نامشخص", ""
+        if aqi is not None:
+            for low, high, lab, adv in AQI_LABELS:
+                if low <= aqi <= high:
+                    label, advice = lab, adv
+                    break
+
+        lines = [
+            f"🌫 **کیفیت هوا — {city}** (زمان واقعی)\n",
+            f"📊 **شاخص AQI (اروپایی):** {pn(aqi) if aqi is not None else '—'}  →  **{label}**\n",
+            f"💡 {advice}\n" if advice else "",
+            "━━━━━━━━━━━━━━━━━━━━",
+            f"• PM2.5: {pn(pm25) if pm25 is not None else '—'} µg/m³",
+            f"• PM10: {pn(pm10) if pm10 is not None else '—'} µg/m³",
+            f"• NO₂: {pn(no2) if no2 is not None else '—'} µg/m³",
+            f"• O₃: {pn(o3) if o3 is not None else '—'} µg/m³",
+            f"• SO₂: {pn(so2) if so2 is not None else '—'} µg/m³",
+            f"• CO: {pn(co) if co is not None else '—'} µg/m³",
+        ]
+        if dust is not None:
+            lines.append(f"• گردوغبار: {pn(dust)} µg/m³")
+
+        result = "\n".join(lines)
         _cache[key] = result
         _cache_t[key] = now
         return result
     except Exception as e:
         logger.error(f"aqi {city}: {e}")
-        return f"❌ کیفیت هوای {city} در دسترس نیست."
+        return f"❌ کیفیت هوای {city} موقتاً در دسترس نیست."
 
 
 def city_distance(city1: str, city2: str) -> str:
-    c1 = CITY_COORDS.get(city1)
-    c2 = CITY_COORDS.get(city2)
+    """فاصله دقیق بین دو شهر با فرمول Haversine"""
+    c1 = CITY_COORDS.get(city1.strip())
+    c2 = CITY_COORDS.get(city2.strip())
     if not c1 or not c2:
-        return f"❌ یکی از شهرها در لیست نیست.\nشهرهای موجود: {', '.join(list(CITY_COORDS.keys())[:12])}..."
-    # Haversine
-    R = 6371
+        available = "، ".join(list(CITY_COORDS.keys())[:15]) + " و ..."
+        return (
+            f"❌ یکی از شهرها پیدا نشد.\n\n"
+            f"شهرهای پشتیبانی‌شده:\n{available}\n\n"
+            f"مثال: `تهران مشهد`"
+        )
+    R = 6371.0
     lat1, lon1 = math.radians(c1[0]), math.radians(c1[1])
     lat2, lon2 = math.radians(c2[0]), math.radians(c2[1])
-    dlat, dlon = lat2 - lat1, lon2 - lon1
+    dlat = lat2 - lat1
+    dlon = lon2 - lon1
     a = math.sin(dlat / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2) ** 2
     dist = 2 * R * math.asin(math.sqrt(a))
+    hours = dist / 80
+    h = int(hours)
+    m = int((hours - h) * 60)
     return (
         f"🗺 **فاصله بین شهرها**\n\n"
-        f"{city1} ↔ {city2}\n"
-        f"📏 حدود **{pn(f'{dist:.0f}')} کیلومتر**"
+        f"📍 {city1}  ↔  {city2}\n\n"
+        f"📏 فاصله هوایی: **{pn(f'{dist:.0f}')} کیلومتر**\n"
+        f"🚗 تقریبی با خودرو: حدود **{pn(h)} ساعت و {pn(m)} دقیقه**"
     )
