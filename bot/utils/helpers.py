@@ -175,7 +175,8 @@ def get_more_keyboard():
             [KeyboardButton("📅 تاریخ و سن"), KeyboardButton("🕌 مذهبی")],
             [KeyboardButton("💰 بازار"), KeyboardButton("🌤 هوا و مکان")],
             [KeyboardButton("🛠 ابزارها"), KeyboardButton("🎮 سرگرمی")],
-            [KeyboardButton("👤 پروفایل"), KeyboardButton("🔙 بازگشت")],
+            [KeyboardButton("🎨 فونت"), KeyboardButton("👤 پروفایل")],
+            [KeyboardButton("🔙 بازگشت")],
         ],
         resize_keyboard=True,
     )
@@ -201,7 +202,7 @@ def get_religious_keyboard():
         [
             [KeyboardButton("🕋 قبله‌نما"), KeyboardButton("📿 اذکار روز")],
             [KeyboardButton("📖 آیه و حدیث"), KeyboardButton("🕌 مناسبت مذهبی")],
-            [KeyboardButton("🔔 تنظیم اذان")],
+            [KeyboardButton("🙏 استخاره"), KeyboardButton("🔔 تنظیم اذان")],
             [KeyboardButton("🔙 بازگشت به بیشتر")],
         ],
         resize_keyboard=True,
@@ -211,8 +212,8 @@ def get_religious_keyboard():
 def get_market_keyboard():
     return ReplyKeyboardMarkup(
         [
-            [KeyboardButton("💵 قیمت کامل بازار")],
-            [KeyboardButton("🔄 تبدیل ارز"), KeyboardButton("📈 سود و ضرر")],
+            [KeyboardButton("💵 قیمت کامل بازار"), KeyboardButton("💎 ۲۰ ارز برتر کریپتو")],
+            [KeyboardButton("🔄 تبدیل ارز / کریپتو"), KeyboardButton("📈 سود و ضرر")],
             [KeyboardButton("🔙 بازگشت به بیشتر")],
         ],
         resize_keyboard=True,
@@ -246,10 +247,9 @@ def get_tools_keyboard():
 def get_fun_keyboard():
     return ReplyKeyboardMarkup(
         [
-            [KeyboardButton("📖 فال حافظ"), KeyboardButton("🙏 استخاره")],
-            [KeyboardButton("🎯 حقیقت یا جرات"), KeyboardButton("😂 جوک روز")],
-            [KeyboardButton("🧠 دانستنی روز"), KeyboardButton("💪 چالش امروز")],
-            [KeyboardButton("💖 جمله انگیزشی")],
+            [KeyboardButton("📖 فال حافظ"), KeyboardButton("🎯 حقیقت یا جرات")],
+            [KeyboardButton("😂 جوک روز"), KeyboardButton("🧠 دانستنی روز")],
+            [KeyboardButton("💪 چالش امروز"), KeyboardButton("💖 جمله انگیزشی")],
             [KeyboardButton("🔙 بازگشت به بیشتر")],
         ],
         resize_keyboard=True,
@@ -361,3 +361,21 @@ def get_calendar_text(year, month, day, user_id):
         )
     except Exception:
         return "❌ خطا در نمایش تقویم."
+
+
+def get_font_keyboard():
+    """کیبورد انتخاب فونت"""
+    from bot.features.fonts.styles import FONT_NAMES
+    buttons = []
+    keys = list(FONT_NAMES.keys())
+    row = []
+    for i, k in enumerate(keys[:30]):  # ۳۰ فونت اول برای کیبورد
+        row.append(KeyboardButton(k))
+        if len(row) == 3:
+            buttons.append(row)
+            row = []
+    if row:
+        buttons.append(row)
+    buttons.append([KeyboardButton("📋 لیست همه فونت‌ها"), KeyboardButton("🎲 تصادفی")])
+    buttons.append([KeyboardButton("🔙 بازگشت به بیشتر")])
+    return ReplyKeyboardMarkup(buttons, resize_keyboard=True)

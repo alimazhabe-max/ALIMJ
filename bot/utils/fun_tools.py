@@ -1,11 +1,14 @@
 """
-سرگرمی — فال حافظ، حقیقت/جرات، جوک، دانستنی، چالش روزانه
+سرگرمی — فال حافظ، استخاره واقعی از آوینی، حقیقت/جرات، جوک، دانستنی، چالش
 """
 import random
 import hashlib
+import re
+import httpx
 from datetime import datetime
 import pytz
 from bot.config import config
+from bot.logger import logger
 
 tehran_tz = pytz.timezone(config.TIMEZONE)
 
@@ -20,14 +23,19 @@ HAFEZ = [
     "هر آن که جانب اهل وفا نگه دارد / خداش در همه حال از بلا نگه دارد",
     "با مدعی مگویید اسرار عشق و مستی / تا بی‌خبر بمیرد در درد خودپرستی",
     "هزار نکته باریکتر ز مو اینجاست / نه هر که سر بتراشد قلندری داند",
+    "دوش دیدم که ملائک در میخانه زدند / گل آدم بسرشتند و به پیمانه زدند",
+    "ما را به رندی افسانه کردند / پیران جاهل این افسانه کردند",
 ]
 
-ISTIKHARA = [
-    ("خوب ✅", "این کار به صلاح شماست. با توکل پیش بروید."),
-    ("متوسط 🟡", "مصلحت در احتیاط است. عجله نکنید."),
-    ("بد ❌", "بهتر است از این کار صرف‌نظر کنید."),
-    ("خوب با تأخیر 🟢", "نتیجه خوب است اما زمان بیشتری نیاز دارد."),
-    ("نیاز به مشورت 🔵", "با افراد آگاه مشورت کنید سپس تصمیم بگیرید."),
+# fallback محلی اگر سایت در دسترس نبود
+ISTIKHARA_FALLBACK = [
+    ("خوب ✅", "این کار به صلاح شماست. با توکل پیش بروید. ان‌شاءالله نتیجه مطلوب حاصل می‌شود."),
+    ("متوسط 🟡", "مصلحت در احتیاط است. عجله نکنید و بیشتر فکر کنید."),
+    ("بد ❌", "بهتر است از این کار صرف‌نظر کنید. خیر شما در ترک آن است."),
+    ("خوب با تأخیر 🟢", "نتیجه خوب است اما زمان بیشتری نیاز دارد. صبور باشید."),
+    ("نیاز به مشورت 🔵", "با افراد آگاه و معتمد مشورت کنید سپس تصمیم بگیرید."),
+    ("بسیار خوب ✅✅", "بسیار خوب است. با توکل به خدا اقدام کنید. ان‌شاءالله به همه اهداف‌تان می‌رسید."),
+    ("ترک کنید ❌", "ترک این کار به مصلحت نزدیک‌تر است."),
 ]
 
 TRUTH = [
@@ -92,7 +100,6 @@ def pn(n):
 
 
 def hafez_fal(user_id: int = 0) -> str:
-    # نیمه‌تصادفی بر اساس روز + user برای حس «شخصی»
     day = datetime.now(tehran_tz).strftime("%Y%m%d")
     seed = int(hashlib.md5(f"{user_id}{day}hafez".encode()).hexdigest(), 16)
     random.seed(seed)
@@ -101,13 +108,86 @@ def hafez_fal(user_id: int = 0) -> str:
     return f"📖 **فال حافظ**\n\n«{verse}»\n\n🔮 نیت کنید و تأمل نمایید."
 
 
-def istikhara(user_id: int = 0) -> str:
+async def istikhara(user_id: int = 0) -> str:
+    """استخاره از سایت آوینی (old.aviny.com) با fallback محلی"""
+    # انتخاب صفحه تصادفی ۱ تا حدود ۶۰۰ (سایت حدود همین تعداد دارد)
     day = datetime.now(tehran_tz).strftime("%Y%m%d%H")
     seed = int(hashlib.md5(f"{user_id}{day}ist".encode()).hexdigest(), 16)
+    page = (seed % 580) + 1  # ۱ تا ۵۸۰
+
+    try:
+        url = f"https://old.aviny.com/quran/estekhareh/index2.aspx?page={page}"
+        async with httpx.AsyncClient(timeout=10.0, follow_redirects=True, headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        }) as client:
+            r = await client.get(url)
+            r.raise_for_status()
+            text = r.text
+
+        # استخراج نتیجه کلی
+        # الگوهای رایج در صفحه
+        result_general = ""
+        result_marriage = ""
+        result_trade = ""
+        good_bad = ""
+        chapter = ""
+        ayeh = ""
+
+        # جستجوی متن‌های کلیدی
+        m = re.search(r'نتیجه\s*کلی[:\s]*(.+?)(?:</|نتیجه|$)', text, re.DOTALL | re.IGNORECASE)
+        if m:
+            result_general = re.sub(r'<[^>]+>', '', m.group(1)).strip()[:300]
+
+        m = re.search(r'ازدواج[:\s]*(.+?)(?:</|تجارت|$)', text, re.DOTALL | re.IGNORECASE)
+        if m:
+            result_marriage = re.sub(r'<[^>]+>', '', m.group(1)).strip()[:200]
+
+        m = re.search(r'تجارت[:\s]*(.+?)(?:</|سوره|$)', text, re.DOTALL | re.IGNORECASE)
+        if m:
+            result_trade = re.sub(r'<[^>]+>', '', m.group(1)).strip()[:200]
+
+        # پیدا کردن خوب/بد
+        if any(w in text for w in ["حتما انجام بده", "بسیار خوب", "خوب است"]):
+            good_bad = "خوب ✅"
+        elif any(w in text for w in ["هرگز انجام نده", "بد است", "ترک کن"]):
+            good_bad = "بد ❌"
+        elif "متوسط" in text or "احتیاط" in text:
+            good_bad = "متوسط 🟡"
+        else:
+            good_bad = "نتیجه استخاره"
+
+        # سوره و آیه
+        m = re.search(r'سوره\s*([^\s<]+).*?آیه\s*(\d+)', text)
+        if m:
+            chapter = m.group(1)
+            ayeh = m.group(2)
+
+        if result_general or good_bad != "نتیجه استخاره":
+            lines = [f"🙏 **استخاره از قرآن کریم** (منبع: آوینی)\n"]
+            lines.append(f"نتیجه: **{good_bad}**\n")
+            if result_general:
+                lines.append(f"📜 **کلی:** {result_general}\n")
+            if result_marriage:
+                lines.append(f"💍 **ازدواج:** {result_marriage}\n")
+            if result_trade:
+                lines.append(f"💼 **تجارت:** {result_trade}\n")
+            if chapter and ayeh:
+                lines.append(f"📖 سوره {chapter} — آیه {ayeh}")
+            lines.append("\n🔮 با نیت پاک استخاره کنید و به خدا توکل نمایید.")
+            return "\n".join(lines)
+    except Exception as e:
+        logger.error(f"istikhara scrape: {e}")
+
+    # fallback
     random.seed(seed)
-    status, desc = random.choice(ISTIKHARA)
+    status, desc = random.choice(ISTIKHARA_FALLBACK)
     random.seed()
-    return f"🙏 **استخاره**\n\nنتیجه: **{status}**\n\n{desc}"
+    return (
+        f"🙏 **استخاره**\n\n"
+        f"نتیجه: **{status}**\n\n"
+        f"{desc}\n\n"
+        f"🔮 (منبع موقت — نیت کنید و به خدا توکل نمایید)"
+    )
 
 
 def truth_or_dare() -> str:
