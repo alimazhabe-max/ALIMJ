@@ -10,20 +10,35 @@ from bot.utils.texts import TEXTS
 user_requests = defaultdict(list)
 
 async def rate_limit_middleware(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
-    """محدودیت نرخ درخواست‌ها (۱۰ درخواست در دقیقه)"""
+    """محدودیت نرخ درخواست‌ها — پیش‌فرض ۶۰ در دقیقه (قابل تنظیم با RATE_LIMIT)"""
     if not update.effective_user:
         return True
+
     user_id = update.effective_user.id
+
+    # ادمین‌ها محدودیت ندارند
+    if user_id in getattr(config, "ADMIN_IDS", []):
+        return True
+
     now = time.time()
+    # فقط درخواست‌های ۶۰ ثانیه اخیر را نگه دار
     user_requests[user_id] = [t for t in user_requests[user_id] if now - t < 60]
-    if len(user_requests[user_id]) >= config.RATE_LIMIT:
-        text = "⏳ لطفاً کمی صبر کنید. درخواست‌های زیادی ارسال کردید."
-        if update.message:
-            await update.message.reply_text(text)
-        elif update.callback_query:
-            await update.callback_query.answer(text, show_alert=True)
-        logger.warning(f"Rate limit exceeded for user {user_id}")
+
+    limit = getattr(config, "RATE_LIMIT", 60)
+    if len(user_requests[user_id]) >= limit:
+        remaining = 60 - int(now - user_requests[user_id][0]) if user_requests[user_id] else 5
+        remaining = max(1, min(remaining, 60))
+        text = f"⏳ کمی سریع زدید.\nلطفاً حدود {remaining} ثانیه صبر کنید و دوباره امتحان کنید."
+        try:
+            if update.message:
+                await update.message.reply_text(text)
+            elif update.callback_query:
+                await update.callback_query.answer(text, show_alert=True)
+        except Exception:
+            pass
+        logger.warning(f"Rate limit exceeded for user {user_id} ({len(user_requests[user_id])}/{limit})")
         return False
+
     user_requests[user_id].append(now)
     return True
 
@@ -32,12 +47,17 @@ async def check_membership(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     if not update.effective_user:
         return False
     user_id = update.effective_user.id
+    # ادمین از عضویت معاف
+    if user_id in getattr(config, "ADMIN_IDS", []):
+        return True
     try:
         member = await context.bot.get_chat_member(config.REQUIRED_CHANNEL_ID, user_id)
         if member.status in ["member", "administrator", "creator"]:
             return True
     except Exception as e:
         logger.error(f"Membership check failed for {user_id}: {e}")
+        # در صورت خطای API کانال، اجازه بده (تا ربات گیر نکند)
+        return True
     return False
 
 async def ensure_user_registered(update: Update, context: ContextTypes.DEFAULT_TYPE):
