@@ -24,11 +24,13 @@ from bot.utils.date_tools import (
     world_clock, custom_countdown,
 )
 from bot.utils.converters import calculate_age, parse_birth_datetime
-from bot.utils.religious import qibla_direction, daily_adhkar, daily_verse_hadith, religious_countdown
-from bot.utils.finance_tools import full_market_prices, convert_currency, profit_loss, parse_profit
+from bot.features.religious import qibla_direction, daily_adhkar, daily_verse_hadith, religious_countdown, istikhara, istikhara_intro
+from bot.utils.finance_tools import full_market_prices, convert_currency, profit_loss, parse_profit, get_top_crypto, convert_crypto
 from bot.utils.app_tools import convert_unit, parse_unit, calculator, generate_password, count_text, bmi_calc, parse_bmi
-from bot.utils.fun_tools import hafez_fal, istikhara, truth_or_dare, joke_of_day, fact_of_day, daily_challenge
+from bot.utils.fun_tools import hafez_fal, truth_or_dare, joke_of_day, fact_of_day, daily_challenge
 from bot.api.weather_extra import weather_forecast, air_quality, city_distance
+from bot.features.fonts import apply_font, list_fonts, get_font_preview
+from bot.utils.helpers import get_font_keyboard
 import re
 from datetime import datetime, timedelta
 import pytz
@@ -79,6 +81,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "profit": _h_profit, "currency": _h_currency, "distance": _h_distance,
             "note": _h_note, "reminder": _h_reminder, "birth_save": _h_birth_save,
             "count_text": _h_count_text,
+            "font_text": _h_font_text,
         }
         fn = handlers.get(waiting)
         if fn:
@@ -107,6 +110,25 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("🛠 ابزارها:", reply_markup=get_tools_keyboard()); return
     if text == "🎮 سرگرمی":
         await update.message.reply_text("🎮 سرگرمی:", reply_markup=get_fun_keyboard()); return
+    
+    if text in ("🎨 فونت", "فونت"):
+        await update.message.reply_text("🎨 فونت مورد نظر را انتخاب کنید یا لیست را ببینید:", reply_markup=get_font_keyboard()); return
+    if text == "📋 لیست همه فونت‌ها":
+        await update.message.reply_text(list_fonts(), reply_markup=get_font_keyboard()); return
+    if text == "🎲 تصادفی":
+        from bot.features.fonts.styles import FONT_NAMES
+        import random
+        key = random.choice(list(FONT_NAMES.keys()))
+        context.user_data["selected_font"] = key
+        context.user_data["waiting_for"] = "font_text"
+        await update.message.reply_text(f"🎲 فونت تصادفی: `{key}`\nحالا متن خود را بفرستید:", reply_markup=get_font_keyboard()); return
+    # انتخاب فونت از کیبورد
+    from bot.features.fonts.styles import FONT_NAMES as _FN
+    if text in _FN:
+        context.user_data["selected_font"] = text
+        context.user_data["waiting_for"] = "font_text"
+        await update.message.reply_text(f"🎨 فونت `{text}` انتخاب شد.\nحالا متن فارسی یا انگلیسی خود را بفرستید:", reply_markup=get_font_keyboard()); return
+
     if text == "👤 پروفایل":
         await update.message.reply_text("👤 پروفایل:", reply_markup=get_profile_keyboard()); return
     if _is_back_more(text):
@@ -160,13 +182,29 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(qibla_direction(city), reply_markup=get_religious_keyboard()); return
     if text in ("📿 اذکار روز", "اذکار روز"):
         track_usage(user_id, "adhkar")
-        await update.message.reply_text(daily_adhkar(), reply_markup=get_religious_keyboard()); return
+        await update.message.reply_text(daily_adhkar(user_id), reply_markup=get_religious_keyboard()); return
     if text in ("📖 آیه و حدیث", "آیه و حدیث"):
         track_usage(user_id, "verse")
-        await update.message.reply_text(daily_verse_hadith(), reply_markup=get_religious_keyboard()); return
+        await update.message.reply_text(await daily_verse_hadith(user_id), reply_markup=get_religious_keyboard()); return
     if text in ("🕌 مناسبت مذهبی", "مناسبت مذهبی"):
         track_usage(user_id, "rel_cd")
         await update.message.reply_text(religious_countdown(), reply_markup=get_religious_keyboard()); return
+    
+    if text in ("🙏 استخاره", "استخاره"):
+        track_usage(user_id, "istikhara")
+        context.user_data["waiting_for"] = "istikhara_confirm"
+        await update.message.reply_text(istikhara_intro(), reply_markup=ReplyKeyboardMarkup(
+            [[KeyboardButton("🙏 استخاره بگیر")], [KeyboardButton("🔙 بازگشت به مذهبی")]],
+            resize_keyboard=True
+        )); return
+    if text == "🙏 استخاره بگیر":
+        context.user_data.pop("waiting_for", None)
+        track_usage(user_id, "istikhara_do")
+        await update.message.reply_text(await istikhara(user_id), reply_markup=get_religious_keyboard()); return
+    if text == "🔙 بازگشت به مذهبی":
+        context.user_data.pop("waiting_for", None)
+        await update.message.reply_text("🕌 مذهبی:", reply_markup=get_religious_keyboard()); return
+
     if text in ("🔔 تنظیم اذان", "تنظیم اذان"):
         track_usage(user_id, "azan")
         await update.message.reply_text(f"🔔 تنظیم اذان برای {city}\nفیلدهای دیتابیس آماده‌اند. اسکجولر نوتیف را جداگانه فعال کنید.", reply_markup=get_religious_keyboard()); return
@@ -178,9 +216,22 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         r = await full_market_prices()
         await m.edit_text(r)
         await update.message.reply_text("💰", reply_markup=get_market_keyboard()); return
-    if text in ("🔄 تبدیل ارز", "تبدیل ارز"):
+    if text in ("💎 ۲۰ ارز برتر کریپتو", "۲۰ ارز برتر کریپتو", "کریپتو"):
+        track_usage(user_id, "crypto_top")
+        m = await update.message.reply_text("⏳ دریافت لیست کریپتو...")
+        r = await get_top_crypto(20)
+        await m.edit_text(r)
+        await update.message.reply_text("💎", reply_markup=get_market_keyboard()); return
+    if text in ("🔄 تبدیل ارز", "تبدیل ارز", "🔄 تبدیل ارز / کریپتو", "تبدیل ارز / کریپتو"):
         context.user_data["waiting_for"] = "currency"; track_usage(user_id, "currency")
-        await update.message.reply_text("🔄 `100 دلار ریال` یا `1000000 ریال تومان`", reply_markup=get_market_keyboard()); return
+        await update.message.reply_text(
+            "🔄 مقدار و ارز را بفرست:\n\n"
+            "• `100 دلار تومان`\n"
+            "• `20 ton` یا `1.5 btc` یا `50 usdt`\n"
+            "• `500000 ریال تومان`\n\n"
+            "بیش از ۵۰۰ ارز دیجیتال پشتیبانی می‌شود.",
+            reply_markup=get_market_keyboard()
+        ); return
     if text in ("📈 سود و ضرر", "سود و ضرر"):
         context.user_data["waiting_for"] = "profit"; track_usage(user_id, "profit")
         await update.message.reply_text("📈 `1000 1200` یا `1000 1200 5`", reply_markup=get_market_keyboard()); return
@@ -188,10 +239,10 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # هوا
     if text in ("🌤 پیش‌بینی هوا", "پیش‌بینی هوا"):
         track_usage(user_id, "forecast")
-        await update.message.reply_text(weather_forecast(city), reply_markup=get_weather_geo_keyboard()); return
+        await update.message.reply_text(await weather_forecast(city), reply_markup=get_weather_geo_keyboard()); return
     if text in ("🌫 کیفیت هوا", "کیفیت هوا"):
         track_usage(user_id, "aqi")
-        await update.message.reply_text(air_quality(city), reply_markup=get_weather_geo_keyboard()); return
+        await update.message.reply_text(await air_quality(city), reply_markup=get_weather_geo_keyboard()); return
     if text in ("🗺 فاصله شهرها", "فاصله شهرها"):
         context.user_data["waiting_for"] = "distance"; track_usage(user_id, "distance")
         await update.message.reply_text("🗺 `تهران مشهد`", reply_markup=get_weather_geo_keyboard()); return
@@ -227,8 +278,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # سرگرمی
     if text in ("📖 فال حافظ", "فال حافظ"):
         track_usage(user_id, "hafez"); await update.message.reply_text(hafez_fal(user_id), reply_markup=get_fun_keyboard()); return
-    if text in ("🙏 استخاره", "استخاره"):
-        track_usage(user_id, "istikhara"); await update.message.reply_text(istikhara(user_id), reply_markup=get_fun_keyboard()); return
+    
     if text in ("🎯 حقیقت یا جرات", "حقیقت یا جرات"):
         track_usage(user_id, "tod"); await update.message.reply_text(truth_or_dare(), reply_markup=get_fun_keyboard()); return
     if text in ("😂 جوک روز", "جوک روز"):
@@ -341,13 +391,19 @@ async def _h_profit(u, c, t, uid):
 async def _h_currency(u, c, t, uid):
     c.user_data.pop("waiting_for", None)
     parts = t.split()
-    if len(parts) >= 3:
-        try:
-            amount = float(parts[0].translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹", "0123456789")))
+    try:
+        amount = float(parts[0].translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")))
+        if len(parts) >= 3:
             await u.message.reply_text(await convert_currency(amount, parts[1], parts[2]), reply_markup=get_market_keyboard()); return
-        except Exception:
-            pass
-    await u.message.reply_text("❌ مثال: `100 دلار ریال`", reply_markup=get_market_keyboard())
+        if len(parts) == 2:
+            # کریپتو: 20 ton
+            await u.message.reply_text(await convert_crypto(amount, parts[1]), reply_markup=get_market_keyboard()); return
+    except Exception:
+        pass
+    await u.message.reply_text(
+        "❌ مثال:\n`100 دلار تومان`\n`20 ton`\n`1.5 btc`",
+        reply_markup=get_market_keyboard()
+    )
 
 async def _h_distance(u, c, t, uid):
     c.user_data.pop("waiting_for", None)
@@ -382,3 +438,9 @@ async def _h_birth_save(u, c, t, uid):
 async def _h_count_text(u, c, t, uid):
     c.user_data.pop("waiting_for", None)
     await u.message.reply_text(count_text(t), reply_markup=get_tools_keyboard())
+
+
+async def _h_font_text(u, c, t, uid):
+    c.user_data.pop("waiting_for", None)
+    font = c.user_data.get("selected_font", "bold")
+    await u.message.reply_text(apply_font(t, font), reply_markup=get_font_keyboard())
