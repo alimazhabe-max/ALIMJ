@@ -281,3 +281,243 @@ def parse_birth_datetime(text: str):
             break
 
     return None
+
+
+# ───────────────── برج فلکی ─────────────────
+
+ZODIAC = [
+    # (ماه شروع, روز شروع, ماه پایان, روز پایان, نام)
+    (1, 1, 1, 20, "♑ بزغاله (جدی)"),
+    (1, 21, 2, 19, "♒ دلو"),
+    (2, 20, 3, 20, "♓ حوت"),
+    (3, 21, 4, 20, "♈ حمل (فروردین)"),
+    (4, 21, 5, 21, "♉ ثور"),
+    (5, 22, 6, 21, "♊ جوزا"),
+    (6, 22, 7, 22, "♋ سرطان"),
+    (7, 23, 8, 22, "♌ اسد"),
+    (8, 23, 9, 22, "♍ سنبله"),
+    (9, 23, 10, 22, "♎ میزان"),
+    (10, 23, 11, 21, "♏ عقرب"),
+    (11, 22, 12, 21, "♐ قوس"),
+    (12, 22, 12, 31, "♑ بزغاله (جدی)"),
+]
+
+# حیوان سال چینی/ایرانی (۱۲ ساله) — بر اساس سال شمسی
+# سال ۱۳۴۸ = خروس ... مرجع رایج
+CHINESE_ANIMALS = [
+    "🐀 موش", "🐂 گاو", "🐅 ببر", "🐇 خرگوش",
+    "🐉 اژدها", "🐍 مار", "🐎 اسب", "🐐 بز",
+    "🐒 میمون", "🐓 خروس", "🐕 سگ", "🐖 خوک",
+]
+
+
+def get_zodiac(month: int, day: int) -> str:
+    """برج فلکی بر اساس ماه و روز میلادی"""
+    for m1, d1, m2, d2, name in ZODIAC:
+        if (month == m1 and day >= d1) or (month == m2 and day <= d2):
+            if m1 == m2 or (month == m1 and day >= d1) or (month == m2 and day <= d2):
+                return name
+    return "نامشخص"
+
+
+def get_zodiac_from_shamsi(year: int, month: int, day: int) -> str:
+    try:
+        j = jdatetime.date(year, month, day)
+        g = j.togregorian()
+        return get_zodiac(g.month, g.day)
+    except Exception:
+        return "نامشخص"
+
+
+def get_animal_year(shamsi_year: int) -> str:
+    """حیوان سال بر اساس سال شمسی (چرخه ۱۲ ساله)"""
+    # سال ۱۳۰۹ = اسب (شاخص رایج)
+    idx = (shamsi_year - 1309) % 12
+    return CHINESE_ANIMALS[idx]
+
+
+def zodiac_and_animal(year: int, month: int, day: int) -> str:
+    """برج فلکی + حیوان سال تولد"""
+    try:
+        zodiac = get_zodiac_from_shamsi(year, month, day)
+        animal = get_animal_year(year)
+        j = jdatetime.date(year, month, day)
+        g = j.togregorian()
+        return (
+            f"♈ **برج و حیوان سال تولد**\n\n"
+            f"📅 تولد: {to_persian_num(day)} {PERSIAN_MONTHS[month]} {to_persian_num(year)}\n"
+            f"📆 میلادی: {g.day} {GREGORIAN_MONTHS[g.month]} {g.year}\n\n"
+            f"✨ **برج فلکی:** {zodiac}\n"
+            f"🐾 **حیوان سال:** {animal}"
+        )
+    except Exception:
+        return "❌ تاریخ نامعتبر است.\nمثال: `1375/03/15`"
+
+
+# ───────────────── روزشمار تولد ─────────────────
+
+def birthday_countdown(year: int, month: int, day: int) -> str:
+    """چند روز تا تولد بعدی + سن بعدی"""
+    try:
+        now_j = jdatetime.datetime.now(tehran_tz)
+        today = now_j.date()
+
+        # تولد امسال
+        try:
+            this_year_bd = jdatetime.date(today.year, month, day)
+        except ValueError:
+            # ۲۹ اسفند در سال غیرکبیسه
+            this_year_bd = jdatetime.date(today.year, month, day - 1)
+
+        if this_year_bd >= today:
+            next_bd = this_year_bd
+            next_age = today.year - year
+        else:
+            try:
+                next_bd = jdatetime.date(today.year + 1, month, day)
+            except ValueError:
+                next_bd = jdatetime.date(today.year + 1, month, day - 1)
+            next_age = today.year - year + 1
+
+        delta = next_bd - today
+        days_left = delta.days
+
+        current_age = today.year - year
+        if (today.month, today.day) < (month, day):
+            current_age -= 1
+
+        if days_left == 0:
+            status = "🎉 **امروز تولد شماست! تولدت مبارک**"
+        else:
+            status = f"⏳ **{to_persian_num(days_left)} روز** تا تولد بعدی"
+
+        return (
+            f"🎂 **روزشمار تولد**\n\n"
+            f"📅 تاریخ تولد: {to_persian_num(day)} {PERSIAN_MONTHS[month]} {to_persian_num(year)}\n"
+            f"🗓 سن فعلی: {to_persian_num(current_age)} سال\n\n"
+            f"{status}\n"
+            f"🎈 در تاریخ {to_persian_num(next_bd.day)} {PERSIAN_MONTHS[next_bd.month]} "
+            f"{to_persian_num(next_bd.year)} → {to_persian_num(next_age)} ساله می‌شوید"
+        )
+    except Exception:
+        return "❌ تاریخ نامعتبر است.\nمثال: `1375/03/15`"
+
+
+# ───────────────── سن قمری و سن تکلیف ─────────────────
+
+def lunar_age(year: int, month: int, day: int) -> str:
+    """سن قمری + تاریخ رسیدن به ۹ و ۱۵ سال قمری (سن تکلیف)"""
+    try:
+        birth_j = jdatetime.date(year, month, day)
+        birth_g = birth_j.togregorian()
+        h_birth = _gregorian_to_hijri(birth_g)
+
+        now = datetime.now(tehran_tz)
+        now_g = now.date()
+        h_now = _gregorian_to_hijri(now_g)
+
+        # سن قمری تقریبی (سال قمری ≈ ۳۵۴ روز)
+        birth_h_approx = Hijri(h_birth["year"], h_birth["month"], min(h_birth["day"], 28))
+        now_h_approx = Hijri(h_now["year"], h_now["month"], min(h_now["day"], 28))
+
+        # محاسبه سال/ماه/روز قمری
+        hy = h_now["year"] - h_birth["year"]
+        hm = h_now["month"] - h_birth["month"]
+        hd = h_now["day"] - h_birth["day"]
+        if hd < 0:
+            hm -= 1
+            hd += 29  # تقریب ماه قمری
+        if hm < 0:
+            hy -= 1
+            hm += 12
+
+        # تاریخ رسیدن به ۹ و ۱۵ سال قمری
+        taklif_9 = None
+        taklif_15 = None
+        try:
+            h9 = Hijri(h_birth["year"] + 9, h_birth["month"], min(h_birth["day"], 28))
+            g9 = h9.to_gregorian()
+            j9 = jdatetime.date.fromgregorian(date=date(g9.year, g9.month, g9.day))
+            taklif_9 = f"{to_persian_num(j9.day)} {PERSIAN_MONTHS[j9.month]} {to_persian_num(j9.year)}"
+        except Exception:
+            taklif_9 = "—"
+
+        try:
+            h15 = Hijri(h_birth["year"] + 15, h_birth["month"], min(h_birth["day"], 28))
+            g15 = h15.to_gregorian()
+            j15 = jdatetime.date.fromgregorian(date=date(g15.year, g15.month, g15.day))
+            taklif_15 = f"{to_persian_num(j15.day)} {PERSIAN_MONTHS[j15.month]} {to_persian_num(j15.year)}"
+        except Exception:
+            taklif_15 = "—"
+
+        return (
+            f"🌙 **سن قمری و سن تکلیف**\n\n"
+            f"📅 تولد شمسی: {to_persian_num(day)} {PERSIAN_MONTHS[month]} {to_persian_num(year)}\n"
+            f"🌙 تولد قمری: {to_persian_num(h_birth['day'])} {h_birth['month_name']} {to_persian_num(h_birth['year'])}\n\n"
+            f"🗓 **سن قمری:** {to_persian_num(hy)} سال و {to_persian_num(hm)} ماه و {to_persian_num(hd)} روز\n\n"
+            f"👧 **سن تکلیف دختران (۹ قمری):** {taklif_9}\n"
+            f"👦 **سن تکلیف پسران (۱۵ قمری):** {taklif_15}"
+        )
+    except Exception:
+        return "❌ تاریخ نامعتبر است.\nمثال: `1375/03/15`"
+
+
+# ───────────────── اختلاف دو تاریخ ─────────────────
+
+def date_diff(y1, m1, d1, y2, m2, d2, kind="shamsi") -> str:
+    """فاصله بین دو تاریخ شمسی"""
+    try:
+        if kind == "shamsi":
+            a = jdatetime.date(y1, m1, d1)
+            b = jdatetime.date(y2, m2, d2)
+        else:
+            a = jdatetime.date.fromgregorian(date=date(y1, m1, d1))
+            b = jdatetime.date.fromgregorian(date=date(y2, m2, d2))
+
+        if a > b:
+            a, b = b, a
+            y1, m1, d1, y2, m2, d2 = y2, m2, d2, y1, m1, d1
+
+        delta = b - a
+        total_days = delta.days
+
+        years = b.year - a.year
+        months = b.month - a.month
+        days = b.day - a.day
+        if days < 0:
+            months -= 1
+            prev_m = b.month - 1 if b.month > 1 else 12
+            prev_y = b.year if b.month > 1 else b.year - 1
+            days += jdatetime.date(prev_y, prev_m, 1).daysinmonth
+        if months < 0:
+            years -= 1
+            months += 12
+
+        weeks = total_days // 7
+
+        return (
+            f"📅 **اختلاف دو تاریخ**\n\n"
+            f"از: {to_persian_num(d1)} {PERSIAN_MONTHS.get(m1, m1)} {to_persian_num(y1)}\n"
+            f"تا: {to_persian_num(d2)} {PERSIAN_MONTHS.get(m2, m2)} {to_persian_num(y2)}\n\n"
+            f"🗓 **{to_persian_num(years)}** سال و **{to_persian_num(months)}** ماه و **{to_persian_num(days)}** روز\n"
+            f"📆 مجموع: **{to_persian_num(f'{total_days:,}')}** روز\n"
+            f"🗓 حدود **{to_persian_num(weeks)}** هفته"
+        )
+    except Exception:
+        return (
+            "❌ تاریخ نامعتبر است.\n"
+            "فرمت: `1375/03/15 1403/05/18`\n"
+            "(دو تاریخ شمسی با فاصله)"
+        )
+
+
+def parse_two_dates(text: str):
+    """پارس دو تاریخ شمسی از یک متن"""
+    normalized = _normalize(text)
+    matches = re.findall(r"(\d{3,4})\s*/\s*(\d{1,2})\s*/\s*(\d{1,2})", normalized)
+    if len(matches) >= 2:
+        a = tuple(int(x) for x in matches[0])
+        b = tuple(int(x) for x in matches[1])
+        if 1200 <= a[0] <= 1500 and 1200 <= b[0] <= 1500:
+            return a, b
+    return None
