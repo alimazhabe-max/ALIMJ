@@ -42,6 +42,7 @@ def init_db():
         pass
     conn.commit()
     conn.close()
+    init_extra_tables()
     logger.info("Database initialized successfully")
 
 def backup_db():
@@ -156,5 +157,133 @@ def set_last_main_msg_id(user_id, message_id):
         conn.commit()
     except Exception as e:
         logger.error(f"set_last_main_msg_id failed: {e}")
+    finally:
+        conn.close()
+
+
+# ── یادداشت و یادآوری و آمار شخصی ──
+
+def init_extra_tables():
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute('''CREATE TABLE IF NOT EXISTS notes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER,
+        content TEXT,
+        created_at TEXT DEFAULT (datetime('now'))
+    )''')
+    c.execute('''CREATE TABLE IF NOT EXISTS reminders (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER,
+        text TEXT,
+        remind_at TEXT,
+        done INTEGER DEFAULT 0,
+        created_at TEXT DEFAULT (datetime('now'))
+    )''')
+    c.execute('''CREATE TABLE IF NOT EXISTS usage_stats (
+        user_id INTEGER,
+        feature TEXT,
+        count INTEGER DEFAULT 1,
+        last_used TEXT,
+        PRIMARY KEY (user_id, feature)
+    )''')
+    try:
+        c.execute("ALTER TABLE users ADD COLUMN birth_date TEXT")
+    except Exception:
+        pass
+    conn.commit()
+    conn.close()
+
+
+def add_note(user_id, content):
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute("INSERT INTO notes (user_id, content) VALUES (?, ?)", (user_id, content[:500]))
+    conn.commit()
+    conn.close()
+
+
+def get_notes(user_id, limit=10):
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute("SELECT id, content, created_at FROM notes WHERE user_id = ? ORDER BY id DESC LIMIT ?", (user_id, limit))
+    rows = c.fetchall()
+    conn.close()
+    return rows
+
+
+def delete_note(user_id, note_id):
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute("DELETE FROM notes WHERE id = ? AND user_id = ?", (note_id, user_id))
+    conn.commit()
+    conn.close()
+
+
+def add_reminder(user_id, text, remind_at):
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute("INSERT INTO reminders (user_id, text, remind_at) VALUES (?, ?, ?)", (user_id, text[:200], remind_at))
+    conn.commit()
+    conn.close()
+
+
+def get_pending_reminders(before_time=None):
+    conn = get_db_connection()
+    c = conn.cursor()
+    if before_time:
+        c.execute("SELECT id, user_id, text, remind_at FROM reminders WHERE done = 0 AND remind_at <= ?", (before_time,))
+    else:
+        c.execute("SELECT id, user_id, text, remind_at FROM reminders WHERE done = 0")
+    rows = c.fetchall()
+    conn.close()
+    return rows
+
+
+def mark_reminder_done(rid):
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute("UPDATE reminders SET done = 1 WHERE id = ?", (rid,))
+    conn.commit()
+    conn.close()
+
+
+def track_usage(user_id, feature):
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute('''INSERT INTO usage_stats (user_id, feature, count, last_used)
+                 VALUES (?, ?, 1, datetime('now'))
+                 ON CONFLICT(user_id, feature) DO UPDATE SET
+                 count = count + 1, last_used = datetime('now')''', (user_id, feature))
+    conn.commit()
+    conn.close()
+
+
+def get_user_usage(user_id):
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute("SELECT feature, count FROM usage_stats WHERE user_id = ? ORDER BY count DESC", (user_id,))
+    rows = c.fetchall()
+    conn.close()
+    return rows
+
+
+def set_birth_date(user_id, birth_date):
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute("UPDATE users SET birth_date = ? WHERE user_id = ?", (birth_date, user_id))
+    conn.commit()
+    conn.close()
+
+
+def get_birth_date(user_id):
+    conn = get_db_connection()
+    c = conn.cursor()
+    try:
+        c.execute("SELECT birth_date FROM users WHERE user_id = ?", (user_id,))
+        row = c.fetchone()
+        return row[0] if row else None
+    except Exception:
+        return None
     finally:
         conn.close()
