@@ -30,94 +30,95 @@ def to_persian_num(num):
     return ''.join(mapping.get(ch, ch) for ch in str(num))
 
 async def build_message(user_id, user_name, city):
-    """پیام اصلی کوتاه، تمیز و خوانا"""
     now = datetime.now(pytz.timezone(config.TIMEZONE))
     today = get_today_tehran()
-    country = get_user_country(user_id)
 
-    # ── تاریخ‌ها (فشرده) ──
     weekday = PERSIAN_WEEKDAYS[today.weekday()]
     month_name = PERSIAN_MONTHS[today.month]
-    shamsi = f"{weekday} {to_persian_num(today.day)} {month_name} {to_persian_num(today.year)}"
+    year_p = to_persian_num(today.year)
+    month_p = to_persian_num(f"{today.month:02d}")
+    day_p = to_persian_num(f"{today.day:02d}")
+    persian_date = f"{weekday} {to_persian_num(today.day)} {month_name} {year_p}/{month_p}/{day_p}"
 
     greg = today.togregorian()
-    miladi = greg.strftime("%d %b %Y")
+    miladi_date = greg.strftime("%B %d, %A") + f" {greg.year}/{greg.month:02d}/{greg.day:02d}"
 
     hijri = get_hijri_date(greg)
-    hijri_str = f"{to_persian_num(hijri['day'])} {hijri['month_name']} {to_persian_num(hijri['year'])}"
+    hijri_date = f"{to_persian_num(hijri['day'])} {hijri['month_name']} {to_persian_num(hijri['year'])} / {to_persian_num(hijri['month'])} / {to_persian_num(hijri['day'])}"
 
-    # ── مناسبت‌ها (فقط امروز، بدون فردا) ──
-    events = []
-    for e in get_shamsi_events(today.year, today.month, today.day):
-        if e and "هیچ مناسبت" not in e:
-            events.append(e)
-    for e in get_hijri_events(hijri["month"], hijri["day"]):
-        if e and "هیچ مناسبت" not in e:
-            events.append(e)
-    # حذف تکراری و محدود کردن به ۳ مورد
-    seen = set()
-    unique_events = []
-    for e in events:
-        if e not in seen:
-            seen.add(e)
-            unique_events.append(e)
-        if len(unique_events) >= 3:
-            break
-    events_text = "\n".join(f"• {e}" for e in unique_events) if unique_events else "• مناسبت خاصی ثبت نشده"
+    hijri_events_list = get_hijri_events(hijri['month'], hijri['day'])
+    hijri_events_text = "\n".join([f"• {e}" for e in hijri_events_list])
 
-    # ── اوقات شرعی ──
+    tomorrow = today + jdatetime.timedelta(days=1)
+    hijri_tomorrow = get_hijri_date(tomorrow.togregorian())
+    hijri_tomorrow_events = get_hijri_events(hijri_tomorrow['month'], hijri_tomorrow['day'])
+    hijri_tomorrow_text = "\n".join([f"• {e}" for e in hijri_tomorrow_events])
+
+    shamsi_events_list = get_shamsi_events(today.year, today.month, today.day)
+    shamsi_text = "\n".join([f"• {e}" for e in shamsi_events_list])
+
+    shamsi_tomorrow = get_shamsi_events(tomorrow.year, tomorrow.month, tomorrow.day)
+    shamsi_tomorrow_text = "\n".join([f"• {e}" for e in shamsi_tomorrow])
+
+    country = get_user_country(user_id)
     prayer_times = get_prayer_times(city, country=country)
+    prayer_text = ""
     if prayer_times:
-        # فقط اذان‌های اصلی (بدون طلوع)
-        order = ["اذان صبح", "اذان ظهر", "اذان عصر", "اذان مغرب", "اذان عشاء"]
-        prayer_lines = [f"• {k}: {prayer_times[k]}" for k in order if k in prayer_times]
-        prayer_text = "\n".join(prayer_lines)
+        for key, time in prayer_times.items():
+            prayer_text += f"🕌 {key}: {time}\n"
+    else:
+        prayer_text = "⚠️ " + get_text(user_id, "no_events")
 
-        next_prayer_text = ""
+    next_prayer_text = ""
+    if prayer_times:
         result = get_next_prayer_time(prayer_times, now)
         if result and result[0]:
             name, delta = result
             hours = delta.seconds // 3600
             minutes = (delta.seconds % 3600) // 60
-            next_prayer_text = (
-                f"\n⏳ تا {name}: "
-                f"**{to_persian_num(hours)}س {to_persian_num(minutes)}د**"
-            )
-    else:
-        prayer_text = "• در دسترس نیست"
-        next_prayer_text = ""
+            next_prayer_text = get_text(
+                user_id, "next_prayer",
+                name=name,
+                hours=to_persian_num(hours),
+                minutes=to_persian_num(minutes)
+            ) + "\n"
 
-    # ── آب‌وهوا (یک خط) ──
     weather = get_weather(city)
+    weather_text = ""
     if weather:
-        weather_text = f"{weather['temp']}°C  •  {weather['condition']}  •  رطوبت {weather['humidity']}٪"
+        weather_text = f"🌡️ دما: {weather['temp']}°C\n🌤️ وضعیت: {weather['condition']}\n💧 رطوبت: {weather['humidity']}%"
     else:
-        weather_text = "در دسترس نیست"
+        weather_text = "⚠️ " + get_text(user_id, "no_events")
 
-    # ── قیمت بازار (یک خط) ──
     market = await get_market_prices()
     dollar = market.get("dollar")
     gold18 = market.get("gold18")
-    parts = []
-    if dollar:
-        parts.append(f"💵 {to_persian_num(f'{dollar:,}')}")
-    if gold18:
-        parts.append(f"🥇 {to_persian_num(f'{gold18:,}')}")
-    market_text = "  |  ".join(parts) if parts else "در دسترس نیست"
 
-    # ── انگیزشی ──
+    market_text = ""
+    if dollar:
+        market_text += f"💵 دلار: {to_persian_num(f'{dollar:,}')} ریال\n"
+    if gold18:
+        market_text += f"🥇 طلای ۱۸ عیار: {to_persian_num(f'{gold18:,}')} ریال\n"
+    if not market_text:
+        market_text = "⚠️ قیمت بازار در دسترس نیست.\n"
+
     motivation = get_motivation()
 
-    # ── ساخت پیام نهایی ──
     message = (
-        f"{get_text(user_id, 'welcome', name=user_name)}\n\n"
-        f"📅 {shamsi}\n"
-        f"🌙 {hijri_str}  •  📆 {miladi}\n\n"
-        f"📌 **مناسبت امروز**\n{events_text}\n\n"
-        f"🕌 **اوقات شرعی ({city})**\n{prayer_text}{next_prayer_text}\n\n"
-        f"🌦️ {weather_text}\n"
-        f"📊 {market_text}\n\n"
-        f"💖 {motivation}"
+        get_text(user_id, "welcome", name=user_name) + "\n\n" +
+        f"📅 **امروز (شمسی):** {persian_date}\n" +
+        f"📅 **امروز (میلادی):** {miladi_date}\n" +
+        f"🌙 **امروز (قمری):** {hijri_date}\n\n" +
+        f"📌 **مناسبت‌های قمری امروز:**\n{hijri_events_text}\n\n" +
+        f"📌 **مناسبت‌های قمری فردا:**\n{hijri_tomorrow_text}\n\n" +
+        f"📌 **مناسبت‌های شمسی امروز:**\n{shamsi_text}\n\n" +
+        f"🔮 **مناسبت‌های شمسی فردا:**\n{shamsi_tomorrow_text}\n\n" +
+        get_text(user_id, "prayer", city=city) + "\n" + prayer_text +
+        next_prayer_text + "\n" +
+        get_text(user_id, "weather", city=city) + "\n" + weather_text + "\n\n" +
+        "📊 **قیمت بازار:**\n" + market_text + "\n" +
+        get_text(user_id, "motivation") + "\n" + motivation + "\n\n" +
+        get_text(user_id, "change_city")
     )
     return message
 
