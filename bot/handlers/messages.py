@@ -17,19 +17,20 @@ from bot.utils.helpers import (
 from bot.api.calendar import get_today_tehran
 from bot.handlers.middleware import check_and_rate_limit
 from bot.utils.motivation import get_motivation
-from bot.utils.date_tools import (
+from bot.features.date.date_tools import (
     parse_shamsi, parse_any_date, parse_two_dates, parse_countdown,
     birthday_countdown, zodiac_animal, lunar_age, date_diff, age_diff,
     convert_with_weekday, month_calendar, search_events, nowruz_countdown,
     world_clock, custom_countdown,
 )
-from bot.utils.converters import calculate_age, parse_birth_datetime
+from bot.features.date.converters import calculate_age, parse_birth_datetime
 from bot.features.religious import qibla_direction, daily_adhkar, daily_verse_hadith, religious_countdown, istikhara, istikhara_intro
-from bot.utils.finance_tools import full_market_prices, convert_currency, profit_loss, parse_profit, get_top_crypto, convert_crypto
-from bot.utils.app_tools import convert_unit, parse_unit, calculator, generate_password, count_text, bmi_calc, parse_bmi
-from bot.utils.fun_tools import hafez_fal, truth_or_dare, joke_of_day, fact_of_day, daily_challenge
-from bot.api.weather_extra import weather_forecast, air_quality, city_distance
+from bot.features.market.finance import full_market_prices, convert_currency, profit_loss, parse_profit, get_top_crypto, convert_crypto
+from bot.features.tools.app_tools import convert_unit, parse_unit, calculator, generate_password, count_text, bmi_calc, parse_bmi
+from bot.features.fun.fun_tools import hafez_fal, truth_or_dare, joke_of_day, fact_of_day, daily_challenge
+from bot.features.weather.weather_extra import weather_forecast, air_quality, city_distance
 from bot.features.fonts import apply_font, list_fonts, get_font_preview
+from bot.features.profile import profile_text
 from bot.utils.helpers import get_font_keyboard
 import re
 from datetime import datetime, timedelta
@@ -293,8 +294,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # پروفایل
     if text in ("👤 پروفایل من", "پروفایل من"):
         track_usage(user_id, "profile")
-        u = get_user(user_id); bd = get_birth_date(user_id) or "—"
-        await update.message.reply_text(f"👤 **پروفایل**\nنام: {first_name}\nشهر: {city}\nزبان: {u[4] if u else 'fa'}\nتولد: {bd}", reply_markup=get_profile_keyboard()); return
+        await update.message.reply_text(profile_text(user_id, first_name), reply_markup=get_profile_keyboard(), parse_mode="Markdown"); return
     if text in ("📊 آمار من", "آمار من"):
         track_usage(user_id, "stats")
         usage = get_user_usage(user_id)
