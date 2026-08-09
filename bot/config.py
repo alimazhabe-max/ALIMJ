@@ -29,7 +29,7 @@ class Config:
     CACHE_TTL = int(os.getenv("CACHE_TTL", "300"))  # 5 دقیقه
 
     # محدودیت درخواست (تعداد در دقیقه)
-    RATE_LIMIT = int(os.getenv("RATE_LIMIT", "10"))
+    RATE_LIMIT = int(os.getenv("RATE_LIMIT", "60"))
 
     # سطح لاگ
     LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
