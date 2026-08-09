@@ -36,7 +36,10 @@ def _apply(text: str, style_key: str) -> str:
         return text
     if callable(style):
         return style(text)
-    # map
+    # str.maketrans returns a mapping with int ordinals
+    if isinstance(style, dict) and style and all(isinstance(k, int) for k in style.keys()):
+        return text.translate(style)
+    # char -> char dict
     result = []
     for ch in text:
         result.append(style.get(ch, ch))
