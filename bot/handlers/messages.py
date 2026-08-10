@@ -26,12 +26,14 @@ from bot.features.date.date_tools import (
 from bot.features.date.converters import calculate_age, parse_birth_datetime
 from bot.features.religious import qibla_direction, daily_adhkar, daily_verse_hadith, religious_countdown, istikhara, istikhara_intro
 from bot.features.market.finance import full_market_prices, convert_currency, profit_loss, parse_profit, get_top_crypto, convert_crypto
-from bot.features.tools.app_tools import convert_unit, parse_unit, calculator, generate_password, count_text, bmi_calc, parse_bmi
-from bot.features.fun.fun_tools import hafez_fal, truth_or_dare, joke_of_day, fact_of_day, daily_challenge
-from bot.features.weather.weather_extra import weather_forecast, air_quality, city_distance
-from bot.features.fonts import apply_font, list_fonts, get_font_preview
+from bot.features.tools.app_tools import convert_unit, parse_unit, calculator, generate_password, count_text, world_distance
+from bot.features.fun.fun_tools import hafez_fal, joke_of_day, fact_of_day, daily_challenge
+from bot.features.weather.weather_extra import weather_forecast, air_quality
+from bot.features.fonts import apply_font, list_fonts, get_font_preview, apply_all_fonts
 from bot.features.profile import profile_text
-from bot.utils.helpers import get_font_keyboard
+from bot.utils.helpers import get_font_keyboard, get_font_en_keyboard, get_font_fa_keyboard
+from bot.features.fonts.styles import FONT_NAMES
+from bot.features.fonts.converter import EN_STYLES, FA_STYLES
 import re
 from datetime import datetime, timedelta
 import pytz
@@ -78,11 +80,11 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "birthday": _h_birthday, "zodiac": _h_zodiac, "lunar": _h_lunar,
             "date_diff": _h_date_diff, "age_diff": _h_age_diff,
             "event_search": _h_event_search, "countdown": _h_countdown,
-            "unit": _h_unit, "calc": _h_calc, "bmi": _h_bmi,
+            "unit": _h_unit, "calc": _h_calc,
             "profit": _h_profit, "currency": _h_currency, "distance": _h_distance,
             "note": _h_note, "reminder": _h_reminder, "birth_save": _h_birth_save,
             "count_text": _h_count_text,
-            "font_text": _h_font_text,
+            "font_text": _h_font_text, "font_all": _h_font_all,
         }
         fn = handlers.get(waiting)
         if fn:
@@ -113,22 +115,26 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("🎮 سرگرمی:", reply_markup=get_fun_keyboard()); return
     
     if text in ("🎨 فونت", "فونت"):
-        await update.message.reply_text("🎨 فونت مورد نظر را انتخاب کنید یا لیست را ببینید:", reply_markup=get_font_keyboard()); return
-    if text == "📋 لیست همه فونت‌ها":
+        await update.message.reply_text("🎨 بخش فونت:", reply_markup=get_font_keyboard()); return
+    if text in ("📋 لیست فونت‌ها", "📋 لیست همه فونت‌ها"):
         await update.message.reply_text(list_fonts(), reply_markup=get_font_keyboard()); return
-    if text == "🎲 تصادفی":
-        from bot.features.fonts.styles import FONT_NAMES
-        import random
-        key = random.choice(list(FONT_NAMES.keys()))
+    if text == "🇬🇧 فونت انگلیسی":
+        await update.message.reply_text("🇬🇧 یک فونت انگلیسی انتخاب کنید:", reply_markup=get_font_en_keyboard()); return
+    if text == "🇮🇷 فونت فارسی":
+        await update.message.reply_text("🇮🇷 یک فونت فارسی/تزئینی انتخاب کنید:", reply_markup=get_font_fa_keyboard()); return
+    if text == "🌈 همه فونت‌ها":
+        context.user_data["waiting_for"] = "font_all"
+        await update.message.reply_text("🌈 یک کلمه یا جمله بفرستید تا روی همه فونت‌ها اعمال شود:", reply_markup=get_font_keyboard()); return
+    if text == "🔙 بازگشت فونت":
+        await update.message.reply_text("🎨 بخش فونت:", reply_markup=get_font_keyboard()); return
+    # انتخاب فونت از نام نمایشی
+    name_to_key = {v: k for k, v in FONT_NAMES.items()}
+    name_to_key.update({v[:18]: k for k, v in FONT_NAMES.items()})
+    if text in name_to_key or text in FONT_NAMES:
+        key = name_to_key.get(text, text)
         context.user_data["selected_font"] = key
         context.user_data["waiting_for"] = "font_text"
-        await update.message.reply_text(f"🎲 فونت تصادفی: `{key}`\nحالا متن خود را بفرستید:", reply_markup=get_font_keyboard()); return
-    # انتخاب فونت از کیبورد
-    from bot.features.fonts.styles import FONT_NAMES as _FN
-    if text in _FN:
-        context.user_data["selected_font"] = text
-        context.user_data["waiting_for"] = "font_text"
-        await update.message.reply_text(f"🎨 فونت `{text}` انتخاب شد.\nحالا متن فارسی یا انگلیسی خود را بفرستید:", reply_markup=get_font_keyboard()); return
+        await update.message.reply_text(f"🎨 فونت انتخاب شد.\nمتن را بفرستید:", reply_markup=get_font_keyboard()); return
 
     if text == "👤 پروفایل":
         await update.message.reply_text("👤 پروفایل:", reply_markup=get_profile_keyboard()); return
@@ -244,9 +250,12 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if text in ("🌫 کیفیت هوا", "کیفیت هوا"):
         track_usage(user_id, "aqi")
         await update.message.reply_text(await air_quality(city), reply_markup=get_weather_geo_keyboard()); return
-    if text in ("🗺 فاصله شهرها", "فاصله شهرها"):
+    if text in ("🗺 فاصله شهرها", "فاصله شهرها", "🗺 فاصله جهانی", "فاصله جهانی"):
         context.user_data["waiting_for"] = "distance"; track_usage(user_id, "distance")
-        await update.message.reply_text("🗺 `تهران مشهد`", reply_markup=get_weather_geo_keyboard()); return
+        await update.message.reply_text(
+            "🗺 **فاصله جهانی**\nنام دو شهر/کشور را با فاصله بفرستید:\nمثال: `تهران استانبول` یا `Paris Tokyo`",
+            reply_markup=get_tools_keyboard(),
+        ); return
     if text in ("📍 لوکیشن من", "لوکیشن من"):
         track_usage(user_id, "location")
         await update.message.reply_text(f"📍 لوکیشن را از 📎 بفرستید.\nشهر فعلی: {city}", reply_markup=get_weather_geo_keyboard()); return
@@ -260,28 +269,36 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("🔢 `2+3*4`", reply_markup=get_tools_keyboard()); return
     if text in ("🔐 پسورد تصادفی", "پسورد تصادفی"):
         track_usage(user_id, "password")
-        await update.message.reply_text(generate_password(12), reply_markup=get_tools_keyboard()); return
+        pwd = generate_password(16)
+        await update.message.reply_text(
+            f"🔐 **پسورد تصادفی**\n\n`{pwd}`\n\n👆 لمس کنید تا کپی شود",
+            reply_markup=get_tools_keyboard(),
+            parse_mode="Markdown",
+        ); return
     if text in ("📝 شمارش متن", "شمارش متن"):
         context.user_data["waiting_for"] = "count_text"; track_usage(user_id, "count")
         await update.message.reply_text("📝 متن را بفرستید:", reply_markup=get_tools_keyboard()); return
-    if text in ("⚖️ BMI", "BMI"):
-        context.user_data["waiting_for"] = "bmi"; track_usage(user_id, "bmi")
-        await update.message.reply_text("⚖️ `70 175`", reply_markup=get_tools_keyboard()); return
     if text in ("⏰ یادآوری", "یادآوری"):
         context.user_data["waiting_for"] = "reminder"; track_usage(user_id, "reminder")
-        await update.message.reply_text("⏰ `30 متن یادآوری`", reply_markup=get_tools_keyboard()); return
+        await update.message.reply_text("⏰ حداقل ۵ دقیقه\nمثال: `30 جلسه مهم`", reply_markup=get_tools_keyboard()); return
     if text in ("📒 یادداشت", "یادداشت"):
-        context.user_data["waiting_for"] = "note"; track_usage(user_id, "note")
-        notes = get_notes(user_id, 5)
-        msg = "📒 یادداشت‌ها:\n" + ("\n".join(f"• {n[1][:40]}" for n in notes) if notes else "خالی") + "\n\nمتن جدید:"
-        await update.message.reply_text(msg, reply_markup=get_tools_keyboard()); return
+        track_usage(user_id, "note")
+        notes = get_notes(user_id) or []
+        msg = "📒 **یادداشت‌های شما** (دائمی)\n"
+        if notes:
+            for i, n in enumerate(notes[-10:], 1):
+                preview = n[1][:50] + ("…" if len(n[1]) > 50 else "")
+                msg += f"{i}. {preview}\n"
+        else:
+            msg += "هنوز یادداشتی ندارید.\n"
+        msg += "\nمتن جدید را بفرستید (تا ۴۰۰۰ کاراکتر):"
+        context.user_data["waiting_for"] = "note"
+        await update.message.reply_text(msg, reply_markup=get_tools_keyboard(), parse_mode="Markdown"); return
 
     # سرگرمی
     if text in ("📖 فال حافظ", "فال حافظ"):
         track_usage(user_id, "hafez"); await update.message.reply_text(hafez_fal(user_id), reply_markup=get_fun_keyboard()); return
     
-    if text in ("🎯 حقیقت یا جرات", "حقیقت یا جرات"):
-        track_usage(user_id, "tod"); await update.message.reply_text(truth_or_dare(), reply_markup=get_fun_keyboard()); return
     if text in ("😂 جوک روز", "جوک روز"):
         track_usage(user_id, "joke"); await update.message.reply_text(joke_of_day(), reply_markup=get_fun_keyboard()); return
     if text in ("🧠 دانستنی روز", "دانستنی روز"):
@@ -294,7 +311,22 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # پروفایل
     if text in ("👤 پروفایل من", "پروفایل من"):
         track_usage(user_id, "profile")
-        await update.message.reply_text(profile_text(user_id, first_name), reply_markup=get_profile_keyboard(), parse_mode="Markdown"); return
+        u = update.effective_user
+        txt = profile_text(
+            user_id, u.first_name or first_name,
+            username=u.username, last_name=u.last_name,
+            language_code=getattr(u, "language_code", None),
+        )
+        try:
+            photos = await context.bot.get_user_profile_photos(user_id, limit=1)
+            if photos.total_count > 0:
+                file_id = photos.photos[0][-1].file_id
+                await update.message.reply_photo(file_id, caption=txt, parse_mode="Markdown", reply_markup=get_profile_keyboard())
+            else:
+                await update.message.reply_text(txt, reply_markup=get_profile_keyboard(), parse_mode="Markdown")
+        except Exception:
+            await update.message.reply_text(txt, reply_markup=get_profile_keyboard(), parse_mode="Markdown")
+        return
     if text in ("📊 آمار من", "آمار من"):
         track_usage(user_id, "stats")
         usage = get_user_usage(user_id)
@@ -378,10 +410,6 @@ async def _h_calc(u, c, t, uid):
     c.user_data.pop("waiting_for", None)
     await u.message.reply_text(calculator(t), reply_markup=get_tools_keyboard())
 
-async def _h_bmi(u, c, t, uid):
-    c.user_data.pop("waiting_for", None)
-    p = parse_bmi(t)
-    await u.message.reply_text(bmi_calc(*p) if p else "❌", reply_markup=get_tools_keyboard())
 
 async def _h_profit(u, c, t, uid):
     c.user_data.pop("waiting_for", None)
@@ -390,41 +418,64 @@ async def _h_profit(u, c, t, uid):
 
 async def _h_currency(u, c, t, uid):
     c.user_data.pop("waiting_for", None)
-    parts = t.split()
-    try:
-        amount = float(parts[0].translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")))
-        if len(parts) >= 3:
-            await u.message.reply_text(await convert_currency(amount, parts[1], parts[2]), reply_markup=get_market_keyboard()); return
-        if len(parts) == 2:
-            # کریپتو: 20 ton
-            await u.message.reply_text(await convert_crypto(amount, parts[1]), reply_markup=get_market_keyboard()); return
-    except Exception:
-        pass
-    await u.message.reply_text(
-        "❌ مثال:\n`100 دلار تومان`\n`20 ton`\n`1.5 btc`",
-        reply_markup=get_market_keyboard()
-    )
+    from bot.features.market.finance import parse_currency_input, SYMBOL_TO_ID
+    parsed = parse_currency_input(t)
+    if not parsed:
+        await u.message.reply_text(
+            "❌ مثال:\n`20 ton`\n`100 دلار`\n`50000 تومان دلار`",
+            reply_markup=get_market_keyboard(),
+        )
+        return
+    amount, a, b = parsed
+    if a and a.lower() in SYMBOL_TO_ID:
+        await u.message.reply_text(await convert_crypto(amount, a), reply_markup=get_market_keyboard())
+        return
+    await u.message.reply_text(await convert_currency(amount, a or "usd", b or "toman"), reply_markup=get_market_keyboard())
+
 
 async def _h_distance(u, c, t, uid):
     c.user_data.pop("waiting_for", None)
     parts = t.split()
-    await u.message.reply_text(city_distance(parts[0], parts[1]) if len(parts) >= 2 else "❌", reply_markup=get_weather_geo_keyboard())
+    if len(parts) >= 2:
+        # پشتیبانی نام‌های چندکلمه‌ای: نصف کن
+        mid = len(parts) // 2
+        p1, p2 = " ".join(parts[:mid]), " ".join(parts[mid:])
+        await u.message.reply_text(await world_distance(p1, p2), reply_markup=get_tools_keyboard())
+    else:
+        await u.message.reply_text("❌ مثال: `تهران استانبول` یا `London Tokyo`", reply_markup=get_tools_keyboard())
 
 async def _h_note(u, c, t, uid):
     c.user_data.pop("waiting_for", None)
+    if len(t) > 4000:
+        await u.message.reply_text("❌ حداکثر حدود ۴۰۰۰ کاراکتر.", reply_markup=get_tools_keyboard())
+        return
     add_note(uid, t)
-    await u.message.reply_text("✅ ذخیره شد", reply_markup=get_tools_keyboard())
+    notes = get_notes(uid) or []
+    await u.message.reply_text(
+        f"✅ یادداشت ذخیره شد.\nتعداد کل: {len(notes)}\n\n{t[:200]}{'…' if len(t)>200 else ''}",
+        reply_markup=get_tools_keyboard(),
+    )
+
 
 async def _h_reminder(u, c, t, uid):
     c.user_data.pop("waiting_for", None)
-    m = re.match(r"^(\d+)\s+(.+)$", t.strip())
+    import re as _re
+    t2 = t.translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789"))
+    m = _re.match(r"(\d+)\s*(.*)", t2, _re.DOTALL)
     if m:
-        mins, msg = int(m.group(1)), m.group(2)
-        at = (datetime.now(pytz.timezone(config.TIMEZONE)) + timedelta(minutes=mins)).strftime("%Y-%m-%d %H:%M:%S")
-        add_reminder(uid, msg, at)
-        await u.message.reply_text(f"✅ بعد از {mins} دقیقه", reply_markup=get_tools_keyboard())
+        mins = int(m.group(1))
+        msg = (m.group(2) or "یادآوری").strip() or "یادآوری"
+        if mins < 5:
+            await u.message.reply_text("❌ حداقل ۵ دقیقه.", reply_markup=get_tools_keyboard())
+            return
+        add_reminder(uid, mins, msg)
+        await u.message.reply_text(
+            f"✅ یادآوری ثبت شد برای {mins} دقیقه بعد:\n{msg}",
+            reply_markup=get_tools_keyboard(),
+        )
     else:
-        await u.message.reply_text("❌ `30 متن`", reply_markup=get_tools_keyboard())
+        await u.message.reply_text("❌ فرمت: `30 متن یادآوری` (حداقل ۵ دقیقه)", reply_markup=get_tools_keyboard())
+
 
 async def _h_birth_save(u, c, t, uid):
     c.user_data.pop("waiting_for", None)
