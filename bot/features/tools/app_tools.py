@@ -121,19 +121,153 @@ def count_text(text: str) -> str:
 # ——— فاصله جهانی ———
 _geo_cache = {}
 
+# مکان‌های معروف مذهبی و شهری (اولویت بالاتر از جستجوی عمومی)
+# (lat, lon, "شهر، کشور")
+KNOWN_PLACES = {
+    # ایران
+    "تهران": (35.6892, 51.3890, "تهران، ایران"),
+    "tehran": (35.6892, 51.3890, "تهران، ایران"),
+    "قم": (34.6416, 50.8746, "قم، ایران"),
+    "qom": (34.6416, 50.8746, "قم، ایران"),
+    "مشهد": (36.2605, 59.6168, "مشهد، ایران"),
+    "mashhad": (36.2605, 59.6168, "مشهد، ایران"),
+    "اصفهان": (32.6546, 51.6680, "اصفهان، ایران"),
+    "isfahan": (32.6546, 51.6680, "اصفهان، ایران"),
+    "شیراز": (29.5918, 52.5837, "شیراز، ایران"),
+    "shiraz": (29.5918, 52.5837, "شیراز، ایران"),
+    "تبریز": (38.0962, 46.2738, "تبریز، ایران"),
+    "اهواز": (31.3183, 48.6706, "اهواز، ایران"),
+    "کرمان": (30.2832, 57.0788, "کرمان، ایران"),
+    "یزد": (31.8974, 54.3569, "یزد، ایران"),
+    "رشت": (37.2808, 49.5832, "رشت، ایران"),
+    "کرج": (35.8400, 50.9391, "کرج، ایران"),
+    "همدان": (34.7992, 48.5146, "همدان، ایران"),
+    "ارومیه": (37.5527, 45.0761, "ارومیه، ایران"),
+    "کرمانشاه": (34.3142, 47.0650, "کرمانشاه، ایران"),
+    "بندرعباس": (27.1832, 56.2666, "بندرعباس، ایران"),
+    "زاهدان": (29.4963, 60.8629, "زاهدان، ایران"),
+    "ساری": (36.5633, 53.0601, "ساری، ایران"),
+    "اردبیل": (38.2498, 48.2933, "اردبیل، ایران"),
+    "بوشهر": (28.9234, 50.8203, "بوشهر، ایران"),
+    "خرم‌آباد": (33.4878, 48.3558, "خرم‌آباد، ایران"),
+    "خرم اباد": (33.4878, 48.3558, "خرم‌آباد، ایران"),
+    "سنندج": (35.3219, 46.9862, "سنندج، ایران"),
+    "قزوین": (36.2797, 50.0049, "قزوین، ایران"),
+    "زنجان": (36.6769, 48.4963, "زنجان، ایران"),
+    "گرگان": (36.8456, 54.4393, "گرگان، ایران"),
+    "ایلام": (33.6374, 46.4227, "ایلام، ایران"),
+    "شهرکرد": (32.3256, 50.8644, "شهرکرد، ایران"),
+    "یاسوج": (30.6684, 51.5876, "یاسوج، ایران"),
+    "بیرجند": (32.8663, 59.2211, "بیرجند، ایران"),
+    "بجنورد": (37.4747, 57.3290, "بجنورد، ایران"),
+    "سمنان": (35.5769, 53.3953, "سمنان، ایران"),
+    # عراق — شهرهای مذهبی
+    "کربلا": (32.6160, 44.0240, "کربلا، عراق"),
+    "کربلاء": (32.6160, 44.0240, "کربلا، عراق"),
+    "karbala": (32.6160, 44.0240, "کربلا، عراق"),
+    "karbala iraq": (32.6160, 44.0240, "کربلا، عراق"),
+    "نجف": (31.9996, 44.3333, "نجف، عراق"),
+    "النجف": (31.9996, 44.3333, "نجف، عراق"),
+    "najaf": (31.9996, 44.3333, "نجف، عراق"),
+    "بغداد": (33.3152, 44.3661, "بغداد، عراق"),
+    "baghdad": (33.3152, 44.3661, "بغداد، عراق"),
+    "کاظمین": (33.3803, 44.3419, "کاظمین، عراق"),
+    "کاظمیه": (33.3803, 44.3419, "کاظمین، عراق"),
+    "سامرا": (34.1959, 43.8730, "سامرا، عراق"),
+    "samarra": (34.1959, 43.8730, "سامرا، عراق"),
+    "بصره": (30.5081, 47.7835, "بصره، عراق"),
+    "basra": (30.5081, 47.7835, "بصره، عراق"),
+    "موصل": (36.3350, 43.1189, "موصل، عراق"),
+    "اربيل": (36.1911, 44.0094, "اربیل، عراق"),
+    "اربیل": (36.1911, 44.0094, "اربیل، عراق"),
+    # عربستان
+    "مکه": (21.4225, 39.8262, "مکه، عربستان"),
+    "مکه مکرمه": (21.4225, 39.8262, "مکه، عربستان"),
+    "mecca": (21.4225, 39.8262, "مکه، عربستان"),
+    "مدینه": (24.4672, 39.6111, "مدینه، عربستان"),
+    "مدینه منوره": (24.4672, 39.6111, "مدینه، عربستان"),
+    "medina": (24.4672, 39.6111, "مدینه، عربستان"),
+    "ریاض": (24.7136, 46.6753, "ریاض، عربستان"),
+    "jeddah": (21.4858, 39.1925, "جدة، عربستان"),
+    "جده": (21.4858, 39.1925, "جدة، عربستان"),
+    # سوریه
+    "دمشق": (33.5138, 36.2765, "دمشق، سوریه"),
+    "damascus": (33.5138, 36.2765, "دمشق، سوریه"),
+    "حلب": (36.2021, 37.1343, "حلب، سوریه"),
+    # لبنان
+    "بیروت": (33.8938, 35.5018, "بیروت، لبنان"),
+    "beirut": (33.8938, 35.5018, "بیروت، لبنان"),
+    # ترکیه
+    "استانبول": (41.0082, 28.9784, "استانبول، ترکیه"),
+    "istanbul": (41.0082, 28.9784, "استانبول، ترکیه"),
+    "آنکارا": (39.9334, 32.8597, "آنکارا، ترکیه"),
+    "آنکارا": (39.9334, 32.8597, "آنکارا، ترکیه"),
+    # امارات
+    "دبی": (25.2048, 55.2708, "دبی، امارات"),
+    "dubai": (25.2048, 55.2708, "دبی، امارات"),
+    "ابوظبی": (24.4539, 54.3773, "ابوظبی، امارات"),
+    # افغانستان
+    "کابل": (34.5553, 69.2075, "کابل، افغانستان"),
+    "kabul": (34.5553, 69.2075, "کابل، افغانستان"),
+    "هرات": (34.3482, 62.1997, "هرات، افغانستان"),
+    "مشهد اردهال": (34.0000, 51.0833, "مشهد اردهال، ایران"),
+}
+
+
+def _short_name(display_name: str, place_hint: str = "") -> str:
+    """فقط شهر و کشور را نگه دار — بقیه را حذف کن"""
+    if not display_name:
+        return place_hint or "?"
+    parts = [p.strip() for p in str(display_name).split(",") if p.strip()]
+    if not parts:
+        return place_hint or "?"
+    # حذف بخش‌های اضافی مثل «بخش مرکزی»، «استان»، شماره و ...
+    skip_words = (
+        "بخش", "شهرستان", "استان", "دهستان", "روستا", "محله", "منطقه",
+        "county", "province", "district", "village", "region", "oblast",
+        "governorate", "municipality", "state of",
+    )
+    cleaned = []
+    for p in parts:
+        low = p.lower()
+        if any(sw in low for sw in skip_words):
+            continue
+        # رد کردن چیزهایی که فقط عدد یا خیلی کوتاه‌اند
+        if re.match(r"^[\d\s\-]+$", p):
+            continue
+        cleaned.append(p)
+    if not cleaned:
+        cleaned = parts[:2]
+    # حداکثر ۲ بخش: شهر + کشور
+    if len(cleaned) >= 2:
+        return f"{cleaned[0]}، {cleaned[-1]}"
+    return cleaned[0]
+
 
 async def geocode(place: str):
     """
     تبدیل نام مکان به مختصات.
-    اولویت: Google Maps Geocoding API (اگر کلید موجود باشد) → Nominatim → Photon
-    پشتیبانی از همه شهرها و کشورهای جهان.
+    اولویت: لیست مکان‌های معروف → Google Maps → Nominatim → Photon
+    نمایش فقط: شهر، کشور
     """
     place = (place or "").strip()
     if not place:
         return None
-    key = place.lower()
+    key = place.lower().strip()
     if key in _geo_cache:
         return _geo_cache[key]
+
+    # ۱) مکان‌های معروف از پیش تعریف‌شده
+    if key in KNOWN_PLACES:
+        lat, lon, short = KNOWN_PLACES[key]
+        _geo_cache[key] = (lat, lon, short)
+        return lat, lon, short
+    # جستجوی تقریبی در کلیدها
+    for k, v in KNOWN_PLACES.items():
+        if key == k or key in k or k in key:
+            lat, lon, short = v
+            _geo_cache[key] = (lat, lon, short)
+            return lat, lon, short
 
     headers = {"User-Agent": "ALIMJBot/2.1 (telegram-bot)"}
     try:
@@ -141,7 +275,7 @@ async def geocode(place: str):
         async with httpx.AsyncClient(timeout=15.0, headers=headers, follow_redirects=True) as client:
             data = []
 
-            # 1) Google Maps Geocoding API (بهترین پوشش جهانی)
+            # ۲) Google Maps Geocoding API
             gkey = getattr(config, "GOOGLE_MAPS_API_KEY", "") or ""
             if gkey:
                 try:
@@ -157,28 +291,65 @@ async def geocode(place: str):
                             lat = float(loc.get("lat", 0))
                             lon = float(loc.get("lng", 0))
                             name = res.get("formatted_address") or place
-                            parts = [x.strip() for x in str(name).split(",")]
-                            short = ", ".join(parts[:4]) if len(parts) > 4 else str(name)
+                            short = _short_name(name, place)
                             _geo_cache[key] = (lat, lon, short)
                             return lat, lon, short
                 except Exception as e:
                     logger.warning(f"Google geocode [{place}]: {e}")
 
-            # 2) Nominatim (OpenStreetMap) — پوشش خوب جهانی
-            for q in (place, f"{place}, Iran"):
+            # ۳) Nominatim — با اولویت به شهر/کشور و importance بالاتر
+            queries = [place]
+            # برای نام‌های عربی/مذهبی، نسخه انگلیسی هم امتحان کن
+            en_map = {
+                "کربلا": "Karbala, Iraq",
+                "کربلاء": "Karbala, Iraq",
+                "نجف": "Najaf, Iraq",
+                "مکه": "Mecca, Saudi Arabia",
+                "مدینه": "Medina, Saudi Arabia",
+                "کاظمین": "Kadhimiya, Iraq",
+                "سامرا": "Samarra, Iraq",
+            }
+            if place in en_map:
+                queries.insert(0, en_map[place])
+            queries.append(f"{place}, Iran")
+
+            for q in queries:
                 try:
                     r = await client.get(
                         "https://nominatim.openstreetmap.org/search",
-                        params={"q": q, "format": "json", "limit": 5, "accept-language": "fa,en"},
+                        params={
+                            "q": q,
+                            "format": "json",
+                            "limit": 8,
+                            "accept-language": "fa,en",
+                            "featuretype": "city",
+                        },
                     )
                     if r.status_code == 200:
-                        data = r.json() or []
-                        if data:
+                        results = r.json() or []
+                        if results:
+                            # ترجیح: type=city/town/administrative با importance بالاتر
+                            def score(item):
+                                t = (item.get("type") or "").lower()
+                                cls = (item.get("class") or "").lower()
+                                imp = float(item.get("importance") or 0)
+                                bonus = 0
+                                if t in ("city", "town", "municipality", "administrative"):
+                                    bonus += 2
+                                if cls in ("place", "boundary"):
+                                    bonus += 1
+                                # جریمه برای نتایج خیلی جزئی
+                                dn = (item.get("display_name") or "").lower()
+                                if any(x in dn for x in ("بخش", "روستا", "دهستان", "village", "hamlet")):
+                                    bonus -= 3
+                                return imp + bonus
+                            results.sort(key=score, reverse=True)
+                            data = results
                             break
                 except Exception:
                     pass
 
-            # 3) Photon fallback
+            # ۴) Photon fallback
             if not data:
                 try:
                     r = await client.get(
@@ -191,8 +362,14 @@ async def geocode(place: str):
                             props = f.get("properties") or {}
                             if len(coords) >= 2:
                                 nm = props.get("name") or place
-                                extra = [props.get(k) for k in ("city", "state", "country") if props.get(k)]
-                                display = ", ".join([nm] + [x for x in extra if x and x != nm])
+                                country = props.get("country") or ""
+                                city = props.get("city") or props.get("state") or ""
+                                if city and country:
+                                    display = f"{city}, {country}"
+                                elif country:
+                                    display = f"{nm}, {country}"
+                                else:
+                                    display = nm
                                 data.append({"lat": coords[1], "lon": coords[0], "display_name": display})
                 except Exception:
                     pass
@@ -203,8 +380,7 @@ async def geocode(place: str):
             lat = float(best["lat"])
             lon = float(best["lon"])
             name = best.get("display_name") or place
-            parts = [x.strip() for x in str(name).split(",")]
-            short = ", ".join(parts[:4]) if len(parts) > 4 else str(name)
+            short = _short_name(name, place)
             _geo_cache[key] = (lat, lon, short)
             return lat, lon, short
     except Exception as e:
