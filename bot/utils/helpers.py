@@ -237,6 +237,40 @@ def get_tools_keyboard():
     )
 
 
+def get_azan_keyboard(settings: dict = None):
+    """کیبورد تنظیم اذان با وضعیت فعلی هر نماز."""
+    if not settings:
+        settings = {
+            "enabled": True,
+            "fajr": True, "dhuhr": False, "asr": False,
+            "maghrib": True, "isha": False,
+        }
+
+    def mark(on: bool) -> str:
+        return "✅" if on else "❌"
+
+    master = "🔔 اعلان‌ها: روشن" if settings.get("enabled") else "🔕 اعلان‌ها: خاموش"
+    return ReplyKeyboardMarkup(
+        [
+            [KeyboardButton(master)],
+            [
+                KeyboardButton(f"{mark(settings.get('fajr'))} اذان صبح"),
+                KeyboardButton(f"{mark(settings.get('dhuhr'))} اذان ظهر"),
+            ],
+            [
+                KeyboardButton(f"{mark(settings.get('asr'))} اذان عصر"),
+                KeyboardButton(f"{mark(settings.get('maghrib'))} اذان مغرب"),
+            ],
+            [
+                KeyboardButton(f"{mark(settings.get('isha'))} اذان عشاء"),
+            ],
+            [KeyboardButton("🔄 همه روشن"), KeyboardButton("⏹ همه خاموش")],
+            [KeyboardButton("🔙 بازگشت به مذهبی")],
+        ],
+        resize_keyboard=True,
+    )
+
+
 def get_fun_keyboard():
     return ReplyKeyboardMarkup(
         [
