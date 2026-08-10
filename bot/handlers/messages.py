@@ -3,7 +3,7 @@ from telegram import Update, KeyboardButton, ReplyKeyboardMarkup
 from telegram.ext import ContextTypes
 from bot.database import (
     update_user_field, get_user_city, set_last_main_msg_id,
-    add_note, get_notes, add_reminder, track_usage,
+    add_reminder, track_usage,
     get_user_usage, set_birth_date, get_birth_date, get_user,
 )
 from bot.utils.helpers import (
@@ -120,7 +120,7 @@ async def _text_handler_inner(update: Update, context: ContextTypes.DEFAULT_TYPE
                 "event_search": _h_event_search, "countdown": _h_countdown,
                 "unit": _h_unit, "calc": _h_calc,
                 "profit": _h_profit, "currency": _h_currency, "distance": _h_distance,
-                "note": _h_note, "reminder": _h_reminder, "birth_save": _h_birth_save,
+                "reminder": _h_reminder, "birth_save": _h_birth_save,
                 "count_text": _h_count_text,
                 "font_text": _h_font_text, "font_all": _h_font_all,
             }
@@ -301,7 +301,12 @@ async def _text_handler_inner(update: Update, context: ContextTypes.DEFAULT_TYPE
     if text in ("🗺 فاصله شهرها", "فاصله شهرها", "🗺 فاصله جهانی", "فاصله جهانی"):
         context.user_data["waiting_for"] = "distance"; track_usage(user_id, "distance")
         await update.message.reply_text(
-            "🗺 **فاصله جهانی**\nنام دو شهر/کشور را با فاصله بفرستید:\nمثال: `تهران استانبول` یا `Paris Tokyo`",
+            "🗺 فاصله جهانی\n\n"
+            "دو مکان را بفرستید (شهر یا کشور):\n"
+            "• تهران مشهد\n"
+            "• تهران تا استانبول\n"
+            "• شیراز آلمان\n"
+            "• Paris to Tokyo",
             reply_markup=get_tools_keyboard(),
         ); return
     if text in ("📍 لوکیشن من", "لوکیشن من"):
@@ -328,19 +333,6 @@ async def _text_handler_inner(update: Update, context: ContextTypes.DEFAULT_TYPE
     if text in ("⏰ یادآوری", "یادآوری"):
         context.user_data["waiting_for"] = "reminder"; track_usage(user_id, "reminder")
         await update.message.reply_text("⏰ حداقل ۵ دقیقه\nمثال: `30 جلسه مهم`", reply_markup=get_tools_keyboard()); return
-    if text in ("📒 یادداشت", "یادداشت"):
-        track_usage(user_id, "note")
-        notes = get_notes(user_id) or []
-        msg = "📒 **یادداشت‌های شما** (دائمی)\n"
-        if notes:
-            for i, n in enumerate(notes[-10:], 1):
-                preview = n[1][:50] + ("…" if len(n[1]) > 50 else "")
-                msg += f"{i}. {preview}\n"
-        else:
-            msg += "هنوز یادداشتی ندارید.\n"
-        msg += "\nمتن جدید را بفرستید (تا ۴۰۰۰ کاراکتر):"
-        context.user_data["waiting_for"] = "note"
-        await update.message.reply_text(msg.replace("**", ""), reply_markup=get_tools_keyboard()); return
 
     # سرگرمی
     if text in ("📖 فال حافظ", "فال حافظ"):
@@ -482,26 +474,17 @@ async def _h_currency(u, c, t, uid):
 
 async def _h_distance(u, c, t, uid):
     c.user_data.pop("waiting_for", None)
-    parts = t.split()
-    if len(parts) >= 2:
-        # پشتیبانی نام‌های چندکلمه‌ای: نصف کن
-        mid = len(parts) // 2
-        p1, p2 = " ".join(parts[:mid]), " ".join(parts[mid:])
-        await u.message.reply_text(await world_distance(p1, p2), reply_markup=get_tools_keyboard())
-    else:
-        await u.message.reply_text("❌ مثال: `تهران استانبول` یا `London Tokyo`", reply_markup=get_tools_keyboard())
-
-async def _h_note(u, c, t, uid):
-    c.user_data.pop("waiting_for", None)
-    if len(t) > 4000:
-        await u.message.reply_text("❌ حداکثر حدود ۴۰۰۰ کاراکتر.", reply_markup=get_tools_keyboard())
+    from bot.features.tools.app_tools import parse_two_places
+    parsed = parse_two_places(t)
+    if not parsed:
+        await u.message.reply_text(
+            "❌ دو مکان بنویسید.\nمثال: تهران مشهد | تهران تا ترکیه | Paris to Tokyo",
+            reply_markup=get_tools_keyboard(),
+        )
         return
-    add_note(uid, t)
-    notes = get_notes(uid) or []
-    await u.message.reply_text(
-        f"✅ یادداشت ذخیره شد.\nتعداد کل: {len(notes)}\n\n{t[:200]}{'…' if len(t)>200 else ''}",
-        reply_markup=get_tools_keyboard(),
-    )
+    p1, p2 = parsed
+    await u.message.reply_text(await world_distance(p1, p2), reply_markup=get_tools_keyboard())
+
 
 
 async def _h_reminder(u, c, t, uid):
