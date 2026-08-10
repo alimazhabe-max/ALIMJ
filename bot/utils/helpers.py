@@ -224,7 +224,7 @@ def get_weather_geo_keyboard():
     return ReplyKeyboardMarkup(
         [
             [KeyboardButton("🌤 پیش‌بینی هوا"), KeyboardButton("🌫 کیفیت هوا")],
-            [KeyboardButton("🗺 فاصله شهرها"), KeyboardButton("📍 لوکیشن من")],
+            [KeyboardButton("📍 لوکیشن من")],
             [KeyboardButton("🔙 بازگشت به بیشتر")],
         ],
         resize_keyboard=True,
@@ -236,7 +236,7 @@ def get_tools_keyboard():
         [
             [KeyboardButton("📐 تبدیل واحد"), KeyboardButton("🔢 ماشین‌حساب")],
             [KeyboardButton("🔐 پسورد تصادفی"), KeyboardButton("📝 شمارش متن")],
-            [KeyboardButton("⚖️ BMI"), KeyboardButton("⏰ یادآوری")],
+            [KeyboardButton("🗺 فاصله جهانی"), KeyboardButton("⏰ یادآوری")],
             [KeyboardButton("📒 یادداشت")],
             [KeyboardButton("🔙 بازگشت به بیشتر")],
         ],
@@ -247,9 +247,9 @@ def get_tools_keyboard():
 def get_fun_keyboard():
     return ReplyKeyboardMarkup(
         [
-            [KeyboardButton("📖 فال حافظ"), KeyboardButton("🎯 حقیقت یا جرات")],
-            [KeyboardButton("😂 جوک روز"), KeyboardButton("🧠 دانستنی روز")],
-            [KeyboardButton("💪 چالش امروز"), KeyboardButton("💖 جمله انگیزشی")],
+            [KeyboardButton("📖 فال حافظ"), KeyboardButton("😂 جوک روز")],
+            [KeyboardButton("🧠 دانستنی روز"), KeyboardButton("💪 چالش امروز")],
+            [KeyboardButton("💖 جمله انگیزشی")],
             [KeyboardButton("🔙 بازگشت به بیشتر")],
         ],
         resize_keyboard=True,
@@ -364,18 +364,45 @@ def get_calendar_text(year, month, day, user_id):
 
 
 def get_font_keyboard():
-    """کیبورد انتخاب فونت"""
+    """کیبورد فونت: فارسی / انگلیسی / همه"""
+    return ReplyKeyboardMarkup(
+        [
+            [KeyboardButton("🇬🇧 فونت انگلیسی"), KeyboardButton("🇮🇷 فونت فارسی")],
+            [KeyboardButton("🌈 همه فونت‌ها"), KeyboardButton("📋 لیست فونت‌ها")],
+            [KeyboardButton("🔙 بازگشت به بیشتر")],
+        ],
+        resize_keyboard=True,
+    )
+
+
+def get_font_en_keyboard():
+    from bot.features.fonts.converter import EN_STYLES
     from bot.features.fonts.styles import FONT_NAMES
-    buttons = []
-    keys = list(FONT_NAMES.keys())
-    row = []
-    for i, k in enumerate(keys[:30]):  # ۳۰ فونت اول برای کیبورد
-        row.append(KeyboardButton(k))
-        if len(row) == 3:
+    buttons, row = [], []
+    for k in EN_STYLES:
+        label = FONT_NAMES.get(k, k)[:18]
+        row.append(KeyboardButton(label))
+        if len(row) == 2:
             buttons.append(row)
             row = []
     if row:
         buttons.append(row)
-    buttons.append([KeyboardButton("📋 لیست همه فونت‌ها"), KeyboardButton("🎲 تصادفی")])
-    buttons.append([KeyboardButton("🔙 بازگشت به بیشتر")])
+    buttons.append([KeyboardButton("🔙 بازگشت فونت")])
     return ReplyKeyboardMarkup(buttons, resize_keyboard=True)
+
+
+def get_font_fa_keyboard():
+    from bot.features.fonts.converter import FA_STYLES
+    from bot.features.fonts.styles import FONT_NAMES
+    buttons, row = [], []
+    for k in FA_STYLES:
+        label = FONT_NAMES.get(k, k)[:18]
+        row.append(KeyboardButton(label))
+        if len(row) == 2:
+            buttons.append(row)
+            row = []
+    if row:
+        buttons.append(row)
+    buttons.append([KeyboardButton("🔙 بازگشت فونت")])
+    return ReplyKeyboardMarkup(buttons, resize_keyboard=True)
+
