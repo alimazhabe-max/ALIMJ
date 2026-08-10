@@ -26,7 +26,7 @@ from bot.features.date.date_tools import (
 from bot.features.date.converters import calculate_age, parse_birth_datetime
 from bot.features.religious import qibla_direction, daily_adhkar, daily_verse_hadith, religious_countdown, istikhara, istikhara_intro
 from bot.features.market.finance import full_market_prices, convert_currency, profit_loss, parse_profit, get_top_crypto, convert_crypto
-from bot.features.tools.app_tools import convert_unit, parse_unit, calculator, generate_password, count_text, world_distance
+from bot.features.tools.app_tools import calculator, generate_password, count_text, world_distance
 from bot.features.fun.fun_tools import hafez_fal, joke_of_day, fact_of_day, daily_challenge
 from bot.features.weather.weather_extra import weather_forecast, air_quality
 from bot.features.fonts import apply_font, list_fonts, get_font_preview, apply_all_fonts
@@ -118,7 +118,7 @@ async def _text_handler_inner(update: Update, context: ContextTypes.DEFAULT_TYPE
                 "birthday": _h_birthday, "zodiac": _h_zodiac, "lunar": _h_lunar,
                 "date_diff": _h_date_diff, "age_diff": _h_age_diff,
                 "event_search": _h_event_search, "countdown": _h_countdown,
-                "unit": _h_unit, "calc": _h_calc,
+                "calc": _h_calc,
                 "profit": _h_profit, "currency": _h_currency, "distance": _h_distance,
                 "birth_save": _h_birth_save,
                 "count_text": _h_count_text,
@@ -348,13 +348,6 @@ async def _text_handler_inner(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text(f"📍 لوکیشن را از 📎 بفرستید.\nشهر فعلی: {city}", reply_markup=get_weather_geo_keyboard()); return
 
     # ابزار
-    if text in ("📐 تبدیل واحد", "تبدیل واحد"):
-        context.user_data["waiting_for"] = "unit"; track_usage(user_id, "unit")
-        await update.message.reply_text(
-            "📐 مثال: `10 km mile` یا `100 C F`\n\n"
-            "🔗 تبدیل‌های پیشرفته‌تر:\nhttps://www.bahesab.ir/calc/unit/",
-            reply_markup=get_tools_keyboard(),
-        ); return
     if text in ("🔢 ماشین‌حساب", "ماشین‌حساب"):
         context.user_data["waiting_for"] = "calc"; track_usage(user_id, "calc")
         await update.message.reply_text("🔢 `2+3*4`", reply_markup=get_tools_keyboard()); return
@@ -484,11 +477,6 @@ async def _h_countdown(u, c, t, uid):
     c.user_data.pop("waiting_for", None)
     p = parse_countdown(t)
     await u.message.reply_text(custom_countdown(*p) if p else "❌", reply_markup=get_date_tools_keyboard())
-
-async def _h_unit(u, c, t, uid):
-    c.user_data.pop("waiting_for", None)
-    p = parse_unit(t)
-    await u.message.reply_text(convert_unit(*p) if p else "❌", reply_markup=get_tools_keyboard())
 
 async def _h_calc(u, c, t, uid):
     c.user_data.pop("waiting_for", None)
