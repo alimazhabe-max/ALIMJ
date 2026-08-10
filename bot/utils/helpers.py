@@ -7,7 +7,7 @@ import pytz
 from datetime import datetime
 from bot.config import config
 from bot.api.calendar import get_today_tehran, get_hijri_date, get_shamsi_events, get_hijri_events
-from bot.api.prayer import get_prayer_times, get_next_prayer_time
+from bot.api.prayer import get_prayer_times, get_next_prayer_time, get_prayer_times_for_date
 from bot.api.weather import get_weather
 from bot.api.tgju import get_market_prices
 from bot.utils.texts import get_text
@@ -29,9 +29,14 @@ def to_persian_num(num):
                '5': '۵', '6': '۶', '7': '۷', '8': '۸', '9': '۹'}
     return ''.join(mapping.get(ch, ch) for ch in str(num))
 
+
+
+
+
 async def build_message(user_id, user_name, city):
     now = datetime.now(pytz.timezone(config.TIMEZONE))
     today = get_today_tehran()
+    nl = chr(10)
 
     weekday = PERSIAN_WEEKDAYS[today.weekday()]
     month_name = PERSIAN_MONTHS[today.month]
@@ -44,28 +49,25 @@ async def build_message(user_id, user_name, city):
     miladi_date = greg.strftime("%B %d, %A") + f" {greg.year}/{greg.month:02d}/{greg.day:02d}"
 
     hijri = get_hijri_date(greg)
-    hijri_date = f"{to_persian_num(hijri['day'])} {hijri['month_name']} {to_persian_num(hijri['year'])} / {to_persian_num(hijri['month'])} / {to_persian_num(hijri['day'])}"
+    hijri_date = f"{to_persian_num(hijri['day'])} {hijri['month_name']} {to_persian_num(hijri['year'])}"
 
     hijri_events_list = get_hijri_events(hijri['month'], hijri['day'])
-    hijri_events_text = "\n".join([f"• {e}" for e in hijri_events_list])
+    hijri_events_text = chr(10).join([f"• {e}" for e in hijri_events_list])
 
     tomorrow = today + jdatetime.timedelta(days=1)
     hijri_tomorrow = get_hijri_date(tomorrow.togregorian())
     hijri_tomorrow_events = get_hijri_events(hijri_tomorrow['month'], hijri_tomorrow['day'])
-    hijri_tomorrow_text = "\n".join([f"• {e}" for e in hijri_tomorrow_events])
+    hijri_tomorrow_text = chr(10).join([f"• {e}" for e in hijri_tomorrow_events])
 
     shamsi_events_list = get_shamsi_events(today.year, today.month, today.day)
-    shamsi_text = "\n".join([f"• {e}" for e in shamsi_events_list])
-
+    shamsi_text = chr(10).join([f"• {e}" for e in shamsi_events_list])
     shamsi_tomorrow = get_shamsi_events(tomorrow.year, tomorrow.month, tomorrow.day)
-    shamsi_tomorrow_text = "\n".join([f"• {e}" for e in shamsi_tomorrow])
+    shamsi_tomorrow_text = chr(10).join([f"• {e}" for e in shamsi_tomorrow])
 
     country = get_user_country(user_id)
     prayer_times = get_prayer_times(city, country=country)
-    prayer_text = ""
     if prayer_times:
-        for key, time in prayer_times.items():
-            prayer_text += f"🕌 {key}: {time}\n"
+        prayer_text = nl.join([f"🕌 {k}: {v}" for k, v in prayer_times.items()])
     else:
         prayer_text = "⚠️ " + get_text(user_id, "no_events")
 
@@ -76,48 +78,41 @@ async def build_message(user_id, user_name, city):
             name, delta = result
             hours = delta.seconds // 3600
             minutes = (delta.seconds % 3600) // 60
-            next_prayer_text = get_text(
-                user_id, "next_prayer",
-                name=name,
-                hours=to_persian_num(hours),
-                minutes=to_persian_num(minutes)
-            ) + "\n"
+            next_prayer_text = nl + f"⏳ تا {name}: {to_persian_num(hours)} ساعت و {to_persian_num(minutes)} دقیقه" + nl
 
     weather = get_weather(city)
-    weather_text = ""
     if weather:
-        weather_text = f"🌡️ دما: {weather['temp']}°C\n🌤️ وضعیت: {weather['condition']}\n💧 رطوبت: {weather['humidity']}%"
+        weather_text = f"🌡️ دما: {weather['temp']}°C" + nl + f"🌤️ وضعیت: {weather['condition']}" + nl + f"💧 رطوبت: {weather['humidity']}%"
     else:
         weather_text = "⚠️ " + get_text(user_id, "no_events")
 
     market = await get_market_prices()
     dollar = market.get("dollar")
     gold18 = market.get("gold18")
-
     market_text = ""
     if dollar:
-        market_text += f"💵 دلار: {to_persian_num(f'{dollar:,}')} ریال\n"
+        market_text += f"💵 دلار: {to_persian_num(f'{dollar:,}')} ریال" + nl
     if gold18:
-        market_text += f"🥇 طلای ۱۸ عیار: {to_persian_num(f'{gold18:,}')} ریال\n"
+        market_text += f"🥇 طلای ۱۸ عیار: {to_persian_num(f'{gold18:,}')} ریال" + nl
     if not market_text:
-        market_text = "⚠️ قیمت بازار در دسترس نیست.\n"
+        market_text = "⚠️ قیمت بازار در دسترس نیست." + nl
 
     motivation = get_motivation()
 
     message = (
-        get_text(user_id, "welcome", name=user_name) + "\n\n" +
-        f"📅 **امروز (شمسی):** {persian_date}\n" +
-        f"📅 **امروز (میلادی):** {miladi_date}\n" +
-        f"🌙 **امروز (قمری):** {hijri_date}\n\n" +
-        f"📌 **مناسبت‌های قمری امروز:**\n{hijri_events_text}\n\n" +
-        f"📌 **مناسبت‌های قمری فردا:**\n{hijri_tomorrow_text}\n\n" +
-        f"📌 **مناسبت‌های شمسی امروز:**\n{shamsi_text}\n\n" +
-        f"🔮 **مناسبت‌های شمسی فردا:**\n{shamsi_tomorrow_text}\n\n" +
-        get_text(user_id, "prayer", city=city) + "\n" + prayer_text +
-        next_prayer_text + "\n" +
-        get_text(user_id, "weather", city=city) + "\n" + weather_text + "\n\n" +
-        "📊 **قیمت بازار:**\n" + market_text + "\n" +
-        get_text(user_id, "motivation") + "\n" + motivation + "\n\n" +
+        get_text(user_id, "welcome", name=user_name) + nl + nl +
+        f"📅 امروز (شمسی): {persian_date}" + nl +
+        f"📅 امروز (میلادی): {miladi_date}" + nl +
+        f"🌙 امروز (قمری): {hijri_date}" + nl + nl +
+        f"📌 مناسبت‌های قمری امروز:" + nl + hijri_events_text + nl + nl +
+        f"📌 مناسبت‌های قمری فردا:" + nl + hijri_tomorrow_text + nl + nl +
+        f"📌 مناسبت‌های شمسی امروز:" + nl + shamsi_text + nl + nl +
+        f"🔮 مناسبت‌های شمسی فردا:" + nl + shamsi_tomorrow_text + nl + nl +
+        get_text(user_id, "prayer", city=city) + nl + prayer_text +
+        next_prayer_text + nl +
+        get_text(user_id, "weather", city=city) + nl + weather_text + nl + nl +
+        "📊 قیمت بازار:" + nl + market_text + nl +
+        get_text(user_id, "motivation") + nl + motivation + nl + nl +
         get_text(user_id, "change_city")
     )
     return message
@@ -326,40 +321,106 @@ def get_calendar_buttons(year, month, day, user_id):
         [InlineKeyboardButton("🔙 بازگشت به منو", callback_data="back_to_main")],
     ])
 
+
 def get_calendar_text(year, month, day, user_id):
+    """متن تقویم برای روز انتخاب‌شده — مناسبت + اوقات شرعی همان روز + هوا همان روز"""
     try:
+        import httpx
+        from bot.features.weather.weather_extra import CITY_COORDS, WEATHER_CODES, _norm_city
+
         target = jdatetime.date(year, month, day)
-        date_str = f"{PERSIAN_WEEKDAYS[target.weekday()]} {to_persian_num(target.day)} {PERSIAN_MONTHS[target.month]} {to_persian_num(target.year)}/{to_persian_num(f'{target.month:02d}')}/{to_persian_num(f'{target.day:02d}')}"
+        date_str = (
+            f"{PERSIAN_WEEKDAYS[target.weekday()]} "
+            f"{to_persian_num(target.day)} {PERSIAN_MONTHS[target.month]} "
+            f"{to_persian_num(target.year)}"
+        )
         shamsi = get_shamsi_events(year, month, day)
-        shamsi_text = "\n".join([f"• {e}" for e in shamsi])
+        shamsi_text = chr(10).join([f"• {e}" for e in shamsi]) if shamsi else "• هیچ مناسبت خاصی ثبت نشده است."
+
         hijri = get_hijri_date(target.togregorian())
         hijri_events_list = get_hijri_events(hijri['month'], hijri['day'])
-        hijri_text = "\n".join([f"• {e}" for e in hijri_events_list])
-        city = get_user_city(user_id)
-        country = get_user_country(user_id)
-        prayer = get_prayer_times(city, country=country)
-        prayer_text = ""
+        hijri_text = chr(10).join([f"• {e}" for e in hijri_events_list]) if hijri_events_list else "• هیچ مناسبت قمری خاصی ثبت نشده است."
+
+        city = get_user_city(user_id) or "تهران"
+        country = get_user_country(user_id) or "Iran"
+        g = target.togregorian()
+        # Aladhan: DD-MM-YYYY
+        g_str = f"{g.day:02d}-{g.month:02d}-{g.year}"
+        prayer = get_prayer_times_for_date(city, g_str, country=country)
         if prayer:
-            prayer_text = "\n".join([f"🕌 {k}: {v}" for k, v in prayer.items()])
+            prayer_text = chr(10).join([f"🕌 {k}: {v}" for k, v in prayer.items()])
         else:
-            prayer_text = "⚠️ " + get_text(user_id, "no_events")
-        weather = get_weather(city)
-        weather_text = ""
-        if weather:
-            weather_text = f"🌡️ دما: {weather['temp']}°C\n🌤️ وضعیت: {weather['condition']}\n💧 رطوبت: {weather['humidity']}%"
-        else:
-            weather_text = "⚠️ " + get_text(user_id, "no_events")
+            prayer_text = "⚠️ اوقات شرعی در دسترس نیست."
+
+        # هوا برای همان روز (Open-Meteo)
+        weather_text = "⚠️ آب و هوا در دسترس نیست."
+        try:
+            cname = _norm_city(city)
+            coords = CITY_COORDS.get(cname) or CITY_COORDS.get("تهران")
+            lat, lon = coords
+            iso = f"{g.year:04d}-{g.month:02d}-{g.day:02d}"
+            params = {
+                "latitude": lat,
+                "longitude": lon,
+                "daily": "weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum",
+                "timezone": "Asia/Tehran",
+                "start_date": iso,
+                "end_date": iso,
+            }
+            # sync request ساده
+            import requests as _req
+            r = _req.get("https://api.open-meteo.com/v1/forecast", params=params, timeout=10)
+            if r.status_code == 200:
+                daily = r.json().get("daily", {})
+                tmax = (daily.get("temperature_2m_max") or [None])[0]
+                tmin = (daily.get("temperature_2m_min") or [None])[0]
+                code = (daily.get("weather_code") or daily.get("weathercode") or [0])[0]
+                try:
+                    code = int(code or 0)
+                except Exception:
+                    code = 0
+                desc = WEATHER_CODES.get(code, "")
+                pr = (daily.get("precipitation_sum") or [0])[0]
+                weather_text = (
+                    f"🌡️ حداقل: {to_persian_num(tmin)}°C  |  حداکثر: {to_persian_num(tmax)}°C" + chr(10) +
+                    f"🌤️ وضعیت: {desc}" + chr(10) +
+                    f"🌧 بارش: {to_persian_num(pr)} mm"
+                )
+            else:
+                # fallback امروز از wttr
+                weather = get_weather(city)
+                if weather:
+                    weather_text = (
+                        f"🌡️ دما: {weather['temp']}°C" + chr(10) +
+                        f"🌤️ وضعیت: {weather['condition']}" + chr(10) +
+                        f"💧 رطوبت: {weather['humidity']}%" + chr(10) +
+                        "⚠️ (هوای لحظه‌ای — پیش‌بینی روز در دسترس نبود)"
+                    )
+        except Exception as e:
+            from bot.logger import logger
+            logger.error(f"calendar weather: {e}")
+            weather = get_weather(city)
+            if weather:
+                weather_text = (
+                    f"🌡️ دما: {weather['temp']}°C" + chr(10) +
+                    f"🌤️ وضعیت: {weather['condition']}" + chr(10) +
+                    f"💧 رطوبت: {weather['humidity']}%"
+                )
+
         return (
-            f"📅 **{date_str}**\n"
-            f"🌙 **قمری:** {to_persian_num(hijri['day'])} {hijri['month_name']} {to_persian_num(hijri['year'])}\n\n"
-            f"📌 **مناسبت‌های شمسی:**\n{shamsi_text}\n\n"
-            f"📌 **مناسبت‌های قمری:**\n{hijri_text}\n\n"
-            f"⏰ **اوقات شرعی ({city}):**\n{prayer_text}\n\n"
-            f"🌦️ **آب و هوا:**\n{weather_text}\n\n"
+            f"📅 {date_str}" + chr(10) +
+            f"🌙 قمری: {to_persian_num(hijri['day'])} {hijri['month_name']} {to_persian_num(hijri['year'])}" + chr(10)*2 +
+            f"📌 مناسبت‌های شمسی:" + chr(10) + shamsi_text + chr(10)*2 +
+            f"📌 مناسبت‌های قمری:" + chr(10) + hijri_text + chr(10)*2 +
+            f"⏰ اوقات شرعی ({city}) — همین روز" + chr(10) + prayer_text + chr(10)*2 +
+            f"🌦️ آب و هوا — همین روز" + chr(10) + weather_text + chr(10)*2 +
             "🔄 با دکمه‌های زیر روز یا ماه را تغییر دهید."
         )
-    except Exception:
+    except Exception as e:
+        from bot.logger import logger
+        logger.error(f"get_calendar_text: {e}")
         return "❌ خطا در نمایش تقویم."
+
 
 
 def get_font_keyboard():
