@@ -29,8 +29,11 @@ class Config:
     CACHE_TTL = int(os.getenv("CACHE_TTL", "300"))  # 5 دقیقه
 
     # محدودیت درخواست (تعداد در دقیقه)
-    RATE_LIMIT = int(os.getenv("RATE_LIMIT", "200"))
+    RATE_LIMIT = int(os.getenv("RATE_LIMIT", "300"))
     START_RATE_LIMIT = int(os.getenv("START_RATE_LIMIT", "10"))
+
+    # کلید Google Maps (اختیاری — برای فاصله جهانی دقیق‌تر)
+    GOOGLE_MAPS_API_KEY = os.getenv("GOOGLE_MAPS_API_KEY", "")
 
     # سطح لاگ
     LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
