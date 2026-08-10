@@ -237,7 +237,6 @@ def get_tools_keyboard():
             [KeyboardButton("📐 تبدیل واحد"), KeyboardButton("🔢 ماشین‌حساب")],
             [KeyboardButton("🔐 پسورد تصادفی"), KeyboardButton("📝 شمارش متن")],
             [KeyboardButton("🗺 فاصله جهانی"), KeyboardButton("⏰ یادآوری")],
-            [KeyboardButton("📒 یادداشت")],
             [KeyboardButton("🔙 بازگشت به بیشتر")],
         ],
         resize_keyboard=True,
