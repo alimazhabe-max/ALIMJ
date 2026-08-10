@@ -165,11 +165,7 @@ async def convert_crypto(amount: float, symbol: str) -> str:
         except Exception:
             pass
     if not coin_id:
-        return (
-            "❌ ارز پیدا نشد.\n\n"
-            "مثال: `20 ton` یا `1.5 btc` یا `100 usdt`\n"
-            "بیش از ۵۰۰ ارز پشتیبانی می‌شود."
-        )
+        return "❌ ارز پیدا نشد." + chr(10)*2 + "مثال: 20 ton یا 1.5 btc یا 100 usdt"
     prices = await _crypto_simple([coin_id])
     usd_price = prices.get(coin_id, {}).get("usd")
     if not usd_price:
@@ -177,14 +173,18 @@ async def convert_crypto(amount: float, symbol: str) -> str:
     total_usd = amount * usd_price
     usd_rial = await _get_usd_rial() or 0
     total_toman = total_usd * (usd_rial / 10) if usd_rial else 0
-    return (
-        f"💎 **تبدیل کریپتو**\n\n"
-        f"مقدار: **{pn(amount)} {symbol.upper()}**\n"
-        f"قیمت واحد: **${usd_price:,.6f}**\n\n"
-        f"💵 معادل: **${total_usd:,.2f}**\n"
-        f"🇮🇷 معادل: **{pn(f'{total_toman:,.0f}')} تومان**"
-        + (f"\n(نرخ دلار: {pn(f'{usd_rial/10:,.0f}')} تومان)" if usd_rial else "")
-    )
+    lines = [
+        "🔄 مبدل ارز",
+        "────────────────────",
+        f"از: {pn(amount)} {symbol.upper()}",
+        f"قیمت واحد: ${usd_price:,.6f}",
+        "────────────────────",
+        f"💵 دلار: ${total_usd:,.4f}",
+        f"🇮🇷 تومان: {pn(f'{total_toman:,.0f}')}",
+    ]
+    if usd_rial:
+        lines.append(f"📊 نرخ دلار: {pn(f'{usd_rial/10:,.0f}')} تومان")
+    return chr(10).join(lines)
 
 
 async def full_market_prices() -> str:
