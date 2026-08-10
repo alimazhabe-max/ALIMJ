@@ -89,25 +89,97 @@ async def _get_usd_rial():
     return await _tgju_price("price_dollar_rl")
 
 
+
+
 async def _crypto_simple(ids: list):
     key = "cg_" + ",".join(sorted(ids))
     now = datetime.now().timestamp()
     if key in _cache and now - _cache_t.get(key, 0) < 60:
         return _cache[key]
+    headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
+    # CoinGecko
     try:
-        async with httpx.AsyncClient(timeout=8.0) as c:
-            r = await c.get(
+        async with httpx.AsyncClient(timeout=12.0, headers=headers) as client:
+            r = await client.get(
                 "https://api.coingecko.com/api/v3/simple/price",
                 params={"ids": ",".join(ids), "vs_currencies": "usd"},
             )
-            r.raise_for_status()
-            data = r.json()
-            _cache[key] = data
-            _cache_t[key] = now
-            return data
+            if r.status_code == 200:
+                data = r.json()
+                _cache[key] = data
+                _cache_t[key] = now
+                return data
     except Exception as e:
-        logger.error(f"coingecko: {e}")
-        return {}
+        logger.error(f"coingecko simple: {e}")
+    # CoinPaprika fallback for known ids
+    mapping = {
+        "bitcoin": "btc-bitcoin", "ethereum": "eth-ethereum", "tether": "usdt-tether",
+        "binancecoin": "bnb-binance-coin", "solana": "sol-solana", "ripple": "xrp-xrp",
+        "the-open-network": "ton-toncoin", "dogecoin": "doge-dogecoin", "cardano": "ada-cardano",
+        "tron": "trx-tron", "chainlink": "link-chainlink", "litecoin": "ltc-litecoin",
+    }
+    out = {}
+    try:
+        async with httpx.AsyncClient(timeout=12.0, headers=headers) as client:
+            for cid in ids:
+                pid = mapping.get(cid)
+                if not pid:
+                    continue
+                r = await client.get(f"https://api.coinpaprika.com/v1/tickers/{pid}")
+                if r.status_code == 200:
+                    price = r.json().get("quotes", {}).get("USD", {}).get("price")
+                    if price:
+                        out[cid] = {"usd": float(price)}
+        if out:
+            _cache[key] = out
+            _cache_t[key] = now
+            return out
+    except Exception as e:
+        logger.error(f"paprika simple: {e}")
+    return {}
+
+
+async def _top_from_coinlore(limit: int = 20):
+    try:
+        async with httpx.AsyncClient(timeout=12.0, headers={"User-Agent": "Mozilla/5.0"}) as client:
+            r = await client.get(f"https://api.coinlore.net/api/tickers/?start=0&limit={limit}")
+            if r.status_code != 200:
+                return []
+            data = (r.json() or {}).get("data") or []
+            out = []
+            for row in data:
+                out.append({
+                    "symbol": (row.get("symbol") or "").upper(),
+                    "price": float(row.get("price_usd") or 0),
+                    "chg": float(row.get("percent_change_24h") or 0),
+                })
+            return out
+    except Exception as e:
+        logger.error(f"coinlore: {e}")
+        return []
+
+
+async def _top_from_paprika(limit: int = 20):
+    try:
+        async with httpx.AsyncClient(timeout=12.0, headers={"User-Agent": "Mozilla/5.0"}) as client:
+            r = await client.get("https://api.coinpaprika.com/v1/tickers")
+            if r.status_code != 200:
+                return []
+            data = r.json() or []
+            # sort by rank
+            data = sorted(data, key=lambda x: x.get("rank") or 9999)[:limit]
+            out = []
+            for row in data:
+                q = (row.get("quotes") or {}).get("USD") or {}
+                out.append({
+                    "symbol": (row.get("symbol") or "").upper(),
+                    "price": float(q.get("price") or 0),
+                    "chg": float(q.get("percent_change_24h") or 0),
+                })
+            return out
+    except Exception as e:
+        logger.error(f"paprika top: {e}")
+        return []
 
 
 async def get_top_crypto(limit: int = 20) -> str:
@@ -115,9 +187,15 @@ async def get_top_crypto(limit: int = 20) -> str:
     now = datetime.now().timestamp()
     if key in _cache and now - _cache_t.get(key, 0) < 90:
         return _cache[key]
+
+    usd_rial = await _get_usd_rial() or 0
+    coins = []
+    headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
+
+    # 1) CoinGecko
     try:
-        async with httpx.AsyncClient(timeout=10.0) as c:
-            r = await c.get(
+        async with httpx.AsyncClient(timeout=12.0, headers=headers) as client:
+            r = await client.get(
                 "https://api.coingecko.com/api/v3/coins/markets",
                 params={
                     "vs_currency": "usd",
@@ -128,28 +206,46 @@ async def get_top_crypto(limit: int = 20) -> str:
                     "price_change_percentage": "24h",
                 },
             )
-            r.raise_for_status()
-            coins = r.json()
-        usd_rial = await _get_usd_rial() or 0
-        lines = ["💎 **۲۰ ارز برتر کریپتو**\n(دلار + تومان)\n"]
-        for i, coin in enumerate(coins, 1):
-            sym = (coin.get("symbol") or "").upper()
-            price = coin.get("current_price") or 0
-            chg = coin.get("price_change_percentage_24h") or 0
-            emoji = "🟢" if chg >= 0 else "🔴"
-            toman = price * (usd_rial / 10) if usd_rial else 0
-            p_str = f"${price:,.2f}" if price >= 1 else f"${price:.6f}"
-            lines.append(
-                f"{pn(i)}. **{sym}** {emoji} {chg:+.1f}%\n"
-                f"   {p_str}  ≈  {pn(f'{toman:,.0f}')} تومان"
-            )
-        result = "\n".join(lines)
-        _cache[key] = result
-        _cache_t[key] = now
-        return result
+            if r.status_code == 200:
+                for coin in r.json():
+                    coins.append({
+                        "symbol": (coin.get("symbol") or "").upper(),
+                        "price": coin.get("current_price") or 0,
+                        "chg": coin.get("price_change_percentage_24h") or 0,
+                    })
     except Exception as e:
-        logger.error(f"top crypto: {e}")
-        return "❌ لیست کریپتو موقتاً در دسترس نیست. کمی بعد امتحان کنید."
+        logger.error(f"coingecko markets: {e}")
+
+    # 2) CoinLore
+    if not coins:
+        coins = await _top_from_coinlore(limit)
+
+    # 3) CoinPaprika
+    if not coins:
+        coins = await _top_from_paprika(limit)
+
+    if not coins:
+        return "❌ لیست کریپتو موقتاً در دسترس نیست.\nکمی بعد دوباره امتحان کنید."
+
+    lines = ["💎 ۲۰ ارز برتر کریپتو", "(دلار + تومان)", ""]
+    for i, coin in enumerate(coins[:limit], 1):
+        sym = coin.get("symbol") or "?"
+        price = float(coin.get("price") or 0)
+        chg = float(coin.get("chg") or 0)
+        emoji = "🟢" if chg >= 0 else "🔴"
+        toman = price * (usd_rial / 10) if usd_rial else 0
+        p_str = f"${price:,.2f}" if price >= 1 else f"${price:.6f}"
+        chg_str = f"{chg:+.1f}%" if chg else ""
+        line = f"{pn(i)}. {sym} {emoji} {chg_str}".strip()
+        line += f"\n   {p_str}"
+        if toman:
+            line += f"  ≈  {pn(f'{toman:,.0f}')} تومان"
+        lines.append(line)
+
+    result = "\n".join(lines)
+    _cache[key] = result
+    _cache_t[key] = now
+    return result
 
 
 async def convert_crypto(amount: float, symbol: str) -> str:
