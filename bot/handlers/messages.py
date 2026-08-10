@@ -40,6 +40,18 @@ import pytz
 from bot.config import config
 
 
+
+async def _safe_reply(update, text, **kwargs):
+    """ارسال امن بدون کرش بابت Markdown"""
+    kwargs.pop("parse_mode", None)
+    try:
+        await update.message.reply_text(text, **kwargs)
+    except Exception:
+        try:
+            await update.message.reply_text(str(text)[:4000], reply_markup=kwargs.get("reply_markup"))
+        except Exception:
+            pass
+
 async def _send_main(update, context, text, user_id):
     context.user_data.pop("waiting_for", None)
     await update.message.reply_text("🏠 منوی اصلی", reply_markup=get_main_keyboard())
@@ -64,6 +76,18 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_and_rate_limit(update, context):
         return
 
+    try:
+        await _text_handler_inner(update, context)
+    except Exception as e:
+        from bot.logger import logger
+        logger.error(f"text_handler error: {e}", exc_info=True)
+        try:
+            await update.message.reply_text("⚠️ این بخش موقتاً در دسترس نیست. کمی بعد دوباره امتحان کنید.")
+        except Exception:
+            pass
+
+
+async def _text_handler_inner(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
     user_id = update.effective_user.id
     first_name = update.effective_user.first_name or "کاربر"
@@ -271,9 +295,8 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         track_usage(user_id, "password")
         pwd = generate_password(16)
         await update.message.reply_text(
-            f"🔐 **پسورد تصادفی**\n\n`{pwd}`\n\n👆 لمس کنید تا کپی شود",
+            f"🔐 پسورد تصادفی:\n\n{pwd}\n\n👆 این متن را کپی کنید",
             reply_markup=get_tools_keyboard(),
-            parse_mode="Markdown",
         ); return
     if text in ("📝 شمارش متن", "شمارش متن"):
         context.user_data["waiting_for"] = "count_text"; track_usage(user_id, "count")
@@ -293,18 +316,18 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             msg += "هنوز یادداشتی ندارید.\n"
         msg += "\nمتن جدید را بفرستید (تا ۴۰۰۰ کاراکتر):"
         context.user_data["waiting_for"] = "note"
-        await update.message.reply_text(msg, reply_markup=get_tools_keyboard(), parse_mode="Markdown"); return
+        await update.message.reply_text(msg.replace("**", ""), reply_markup=get_tools_keyboard()); return
 
     # سرگرمی
     if text in ("📖 فال حافظ", "فال حافظ"):
-        track_usage(user_id, "hafez"); await update.message.reply_text(hafez_fal(user_id), reply_markup=get_fun_keyboard()); return
+        track_usage(user_id, "hafez"); await update.message.reply_text(await hafez_fal(user_id), reply_markup=get_fun_keyboard()); return
     
     if text in ("😂 جوک روز", "جوک روز"):
-        track_usage(user_id, "joke"); await update.message.reply_text(joke_of_day(), reply_markup=get_fun_keyboard()); return
+        track_usage(user_id, "joke"); await update.message.reply_text(await joke_of_day(), reply_markup=get_fun_keyboard()); return
     if text in ("🧠 دانستنی روز", "دانستنی روز"):
-        track_usage(user_id, "fact"); await update.message.reply_text(fact_of_day(), reply_markup=get_fun_keyboard()); return
+        track_usage(user_id, "fact"); await update.message.reply_text(await fact_of_day(), reply_markup=get_fun_keyboard()); return
     if text in ("💪 چالش امروز", "چالش امروز"):
-        track_usage(user_id, "challenge"); await update.message.reply_text(daily_challenge(), reply_markup=get_fun_keyboard()); return
+        track_usage(user_id, "challenge"); await update.message.reply_text(await daily_challenge(), reply_markup=get_fun_keyboard()); return
     if text in ("💖 جمله انگیزشی", "جمله انگیزشی"):
         track_usage(user_id, "motivation"); await update.message.reply_text(f"💖 {get_motivation()}", reply_markup=get_fun_keyboard()); return
 
@@ -321,11 +344,11 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             photos = await context.bot.get_user_profile_photos(user_id, limit=1)
             if photos.total_count > 0:
                 file_id = photos.photos[0][-1].file_id
-                await update.message.reply_photo(file_id, caption=txt, parse_mode="Markdown", reply_markup=get_profile_keyboard())
+                await update.message.reply_photo(file_id, caption=txt.replace("**", "").replace("`","")+ "", reply_markup=get_profile_keyboard())
             else:
-                await update.message.reply_text(txt, reply_markup=get_profile_keyboard(), parse_mode="Markdown")
+                await update.message.reply_text(txt.replace("**", "").replace("`",""), reply_markup=get_profile_keyboard())
         except Exception:
-            await update.message.reply_text(txt, reply_markup=get_profile_keyboard(), parse_mode="Markdown")
+            await update.message.reply_text(txt.replace("**", "").replace("`",""), reply_markup=get_profile_keyboard())
         return
     if text in ("📊 آمار من", "آمار من"):
         track_usage(user_id, "stats")
