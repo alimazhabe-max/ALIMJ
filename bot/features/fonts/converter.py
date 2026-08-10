@@ -1,5 +1,5 @@
-"""مبدل فونت — انگلیسی (یونیکد فانتزی). فونت‌های فارسی حذف و به فونت‌یاب ارجاع داده شد."""
-from .styles import STYLES, FONT_NAMES
+"""مبدل فونت — انگلیسی + بهترین استایل‌های یونیکد سازگار با فارسی و عربی"""
+from .styles import STYLES, FONT_NAMES, PERSIAN_COMPATIBLE
 import random
 import re
 
@@ -11,22 +11,21 @@ EN_STYLES = [
     "strikethrough", "underline", "spaced", "reverse",
 ]
 
-# فونت‌های فارسی حذف شدند — برای فونت واقعی فارسی به فونت‌یاب مراجعه کنید
-FA_STYLES = []
+# بهترین استایل‌های سازگار با فارسی و عربی
+FA_STYLES = list(PERSIAN_COMPATIBLE)
 
 
 def list_fonts() -> str:
     lines = ["🎨 **لیست فونت‌ها**\n"]
-    lines.append("🇬🇧 انگلیسی (یونیکد فانتزی):")
+    lines.append("🇬🇧 انگلیسی:")
     for k in EN_STYLES:
         if k in FONT_NAMES:
             lines.append(f"• `{k}` — {FONT_NAMES[k]}")
-    lines.append(
-        "\n🇮🇷 **فونت‌های فارسی:**\n"
-        "برای دانلود فونت‌های فارسی واقعی به سایت فونت‌یاب مراجعه کنید:\n"
-        "https://www.fontyab.com/farsi-font\n\n"
-        "📌 بعد از انتخاب فونت انگلیسی، متن را بفرستید."
-    )
+    lines.append("\n🇮🇷 فارسی / عربی (بهترین استایل‌ها):")
+    for k in FA_STYLES:
+        if k in FONT_NAMES:
+            lines.append(f"• `{k}` — {FONT_NAMES[k]}")
+    lines.append("\n📌 بعد از انتخاب فونت، متن را بفرستید.")
     return "\n".join(lines)
 
 
@@ -78,21 +77,13 @@ def _is_mostly_persian(text: str) -> bool:
 
 
 def apply_all_fonts(text: str) -> str:
-    """اعمال همه فونت‌های انگلیسی. برای فارسی واقعی به فونت‌یاب مراجعه شود."""
+    """اعمال همه فونت‌های مرتبط (هوشمند فارسی/عربی یا انگلیسی)"""
     if not text or not text.strip():
         return "❌ متن خالی است."
     text = text.strip()
     if len(text) > 80:
         text = text[:80]
-    if _is_mostly_persian(text):
-        return (
-            "🇮🇷 متن فارسی تشخیص داده شد.\n\n"
-            "فونت‌های فارسی از این بخش حذف شده‌اند.\n"
-            "برای دانلود فونت‌های فارسی واقعی:\n"
-            "https://www.fontyab.com/farsi-font\n\n"
-            "اگر می‌خواهید استایل یونیکد انگلیسی روی متن اعمال شود، متن انگلیسی بفرستید."
-        )
-    keys = EN_STYLES
+    keys = FA_STYLES if _is_mostly_persian(text) else EN_STYLES
     lines = [f"🎨 **همه فونت‌ها** روی:\n`{text}`\n"]
     for k in keys:
         if k not in STYLES:

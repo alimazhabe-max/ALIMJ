@@ -1,4 +1,4 @@
-"""نقشه‌های یونیکد برای فونت‌های فانتزی (انگلیسی کامل + تقریبی فارسی)"""
+"""نقشه‌های یونیکد برای فونت‌های فانتزی (انگلیسی کامل + سازگار با فارسی/عربی)"""
 
 # Base maps for A-Z a-z 0-9
 def _make_map(upper_start, lower_start=None, digits=None):
@@ -12,20 +12,41 @@ def _make_map(upper_start, lower_start=None, digits=None):
             m[str(i)] = chr(digits + i)
     return m
 
+
+def _combining(mark: str):
+    """اعمال علامت ترکیبی روی هر کاراکتر (کار می‌کند روی فارسی و عربی)"""
+    return lambda t: "".join(c + mark if c.strip() else c for c in t)
+
+
+def _multi_combining(*marks: str):
+    """چند علامت ترکیبی پشت‌سرهم"""
+    return lambda t: "".join(c + "".join(marks) if c.strip() else c for c in t)
+
+
+def _wrap_emoji(emoji: str):
+    return lambda t: f" {emoji} ".join(t.split()) if " " in t else f"{emoji} {t} {emoji}"
+
+
+def _frame(left: str, right: str = None):
+    right = right or left
+    return lambda t: f"{left} {t} {right}"
+
+
 STYLES = {
-    "bold": _make_map(0x1D400, 0x1D41A, 0x1D7CE),          # Mathematical Bold
-    "italic": _make_map(0x1D434, 0x1D44E),                 # Mathematical Italic
-    "bold_italic": _make_map(0x1D468, 0x1D482),            # Bold Italic
-    "script": _make_map(0x1D49C, 0x1D4B6),                 # Script
-    "bold_script": _make_map(0x1D4D0, 0x1D4EA),            # Bold Script
-    "fraktur": _make_map(0x1D504, 0x1D51E),                # Fraktur
-    "bold_fraktur": _make_map(0x1D56C, 0x1D586),           # Bold Fraktur
-    "double": _make_map(0x1D538, 0x1D552, 0x1D7D8),        # Double-Struck
-    "monospace": _make_map(0x1D670, 0x1D68A, 0x1D7F6),     # Monospace
-    "sans": _make_map(0x1D5A0, 0x1D5BA, 0x1D7E2),          # Sans-Serif
-    "sans_bold": _make_map(0x1D5D4, 0x1D5EE, 0x1D7EC),     # Sans Bold
-    "sans_italic": _make_map(0x1D608, 0x1D622),            # Sans Italic
-    "sans_bold_italic": _make_map(0x1D63C, 0x1D656),      # Sans Bold Italic
+    # ——— انگلیسی (Mathematical Alphanumeric) ———
+    "bold": _make_map(0x1D400, 0x1D41A, 0x1D7CE),
+    "italic": _make_map(0x1D434, 0x1D44E),
+    "bold_italic": _make_map(0x1D468, 0x1D482),
+    "script": _make_map(0x1D49C, 0x1D4B6),
+    "bold_script": _make_map(0x1D4D0, 0x1D4EA),
+    "fraktur": _make_map(0x1D504, 0x1D51E),
+    "bold_fraktur": _make_map(0x1D56C, 0x1D586),
+    "double": _make_map(0x1D538, 0x1D552, 0x1D7D8),
+    "monospace": _make_map(0x1D670, 0x1D68A, 0x1D7F6),
+    "sans": _make_map(0x1D5A0, 0x1D5BA, 0x1D7E2),
+    "sans_bold": _make_map(0x1D5D4, 0x1D5EE, 0x1D7EC),
+    "sans_italic": _make_map(0x1D608, 0x1D622),
+    "sans_bold_italic": _make_map(0x1D63C, 0x1D656),
     "fullwidth": {chr(65+i): chr(0xFF21+i) for i in range(26)} | {chr(97+i): chr(0xFF41+i) for i in range(26)} | {str(i): chr(0xFF10+i) for i in range(10)},
     "circled": {chr(65+i): chr(0x24B6+i) for i in range(26)} | {chr(97+i): chr(0x24D0+i) for i in range(26)} | {str(i): chr(0x2460+i-1) if i > 0 else "⓪" for i in range(10)},
     "squared": {chr(65+i): chr(0x1F130+i) for i in range(26)},
@@ -57,33 +78,92 @@ STYLES = {
         ' ':' ',
     }.get(c, c) for c in t[::-1])),
     "bubble": {chr(65+i): chr(0x24B6+i) for i in range(26)} | {chr(97+i): chr(0x24D0+i) for i in range(26)},
-    "regional": {chr(65+i): chr(0x1F1E6+i) for i in range(26)},  # flag letters
+    "regional": {chr(65+i): chr(0x1F1E6+i) for i in range(26)},
     "wide": {chr(65+i): chr(0xFF21+i) for i in range(26)} | {chr(97+i): chr(0xFF41+i) for i in range(26)},
-    "strikethrough": lambda t: "".join(c + "\u0336" for c in t),
-    "underline": lambda t: "".join(c + "\u0332" for c in t),
-    "overline": lambda t: "".join(c + "\u0305" for c in t),
-    "double_underline": lambda t: "".join(c + "\u0333" for c in t),
-    "slash": lambda t: "".join(c + "\u0338" for c in t),
-    "dots": lambda t: "".join(c + "\u0307" for c in t),
-    "zigzag": lambda t: "".join(c + "\u035B" for c in t),
-    "bridge": lambda t: "".join(c + "\u0346" for c in t),
-    "reverse": lambda t: t[::-1],
+
+    # ——— سازگار با فارسی و عربی (Combining Marks) ———
+    "strikethrough": _combining("\u0336"),       # خط‌خورده
+    "underline": _combining("\u0332"),           # زیرخط
+    "overline": _combining("\u0305"),            # بالای خط
+    "double_underline": _combining("\u0333"),    # دو زیرخط
+    "slash": _combining("\u0338"),               # اسلش
+    "dots": _combining("\u0307"),                # نقطه بالا
+    "double_dot": _combining("\u0308"),          # دو نقطه (مثل اومlaut)
+    "zigzag": _combining("\u035B"),              # زیگزاگ
+    "bridge": _combining("\u0346"),              # پل بالا
+    "tilde": _combining("\u0303"),               # تیلد
+    "caron": _combining("\u030C"),               # کَرون
+    "ring": _combining("\u030A"),                # حلقه بالا
+    "hook": _combining("\u0309"),                # هوک
+    "grave": _combining("\u0300"),               # گراو
+    "acute": _combining("\u0301"),               # اکوت
+    "diaeresis": _combining("\u0308"),           # دو نقطه
+    "macron": _combining("\u0304"),              # مکرون
+    "breve": _combining("\u0306"),               # بِرِو
+    "dot_below": _combining("\u0323"),           # نقطه زیر
+    "line_below": _combining("\u0331"),          # خط زیر
+    "circle_below": _combining("\u0325"),        # دایره زیر
+    "double_acute": _combining("\u030B"),        # دو اکوت
+    "inverted_breve": _combining("\u0311"),      # بِرِو معکوس
+    "candrabindu": _combining("\u0310"),         # چندرابیندو
+    "perispomeni": _combining("\u0342"),         # پریسپومنی
+    "x_above": _combining("\u033D"),             # ضربدر بالا
+    "vertical_line": _combining("\u030D"),       # خط عمودی
+    "double_vertical": _combining("\u030E"),     # دو خط عمودی
+    "seagull": _combining("\u033C"),             # مرغ دریایی زیر
+    "asterisk_below": _combining("\u0359"),      # ستاره زیر
+    "plus_below": _combining("\u031F"),          # به‌علاوه زیر
+
+    # ترکیب‌های چندتایی (زیباتر برای فارسی)
+    "fancy1": _multi_combining("\u0305", "\u0332"),          # بالا + زیرخط
+    "fancy2": _multi_combining("\u0307", "\u0332"),          # نقطه + زیرخط
+    "fancy3": _multi_combining("\u0308", "\u0332"),          # دو نقطه + زیرخط
+    "fancy4": _multi_combining("\u0336", "\u0305"),          # خط‌خورده + بالای خط
+    "fancy5": _multi_combining("\u0304", "\u0331"),          # مکرون + خط زیر
+    "fancy6": _multi_combining("\u0301", "\u0323"),          # اکوت + نقطه زیر
+    "fancy7": _multi_combining("\u030A", "\u0332"),          # حلقه + زیرخط
+    "fancy8": _multi_combining("\u035B", "\u0332"),          # زیگزاگ + زیرخط
+    "fancy9": _multi_combining("\u0307", "\u0307", "\u0332"), # دو نقطه بالا + زیرخط
+    "fancy10": _multi_combining("\u0336", "\u0336"),         # دو خط‌خورده
+
+    # فاصله و معکوس
     "spaced": lambda t: " ".join(t),
     "double_spaced": lambda t: "  ".join(t),
-    "clap": lambda t: " 👏 ".join(t.split()),
-    "heart": lambda t: " ❤️ ".join(t.split()),
-    "star": lambda t: " ⭐ ".join(t.split()),
-    "fire": lambda t: " 🔥 ".join(t.split()),
-    "sparkle": lambda t: " ✨ ".join(t.split()),
-    "wave": lambda t: " 🌊 ".join(t.split()),
-    "rainbow": lambda t: " 🌈 ".join(t.split()),
-    "moon": lambda t: " 🌙 ".join(t.split()),
-    "sun": lambda t: " ☀️ ".join(t.split()),
-    "flower": lambda t: " 🌸 ".join(t.split()),
-    "persian_bold_approx": lambda t: t,  # placeholder - real Persian unicode limited
+    "reverse": lambda t: t[::-1],
+    "letter_space": lambda t: "\u2009".join(t),   # thin space بین حروف
+    "wide_space": lambda t: "\u2003".join(t),     # em space
+
+    # فریم و تزئین
+    "frame_star": _frame("★", "★"),
+    "frame_diamond": _frame("◆", "◆"),
+    "frame_flower": _frame("❀", "❀"),
+    "frame_heart": _frame("♥", "♥"),
+    "frame_moon": _frame("☽", "☾"),
+    "frame_bracket": _frame("【", "】"),
+    "frame_corner": _frame("『", "』"),
+    "frame_ornament": _frame("❧", "❧"),
+    "frame_arabic": _frame("﴾", "﴿"),             # براکت عربی
+    "frame_quran": _frame("۝", "۝"),               # علامت پایان آیه
+
+    # ایموجی بین کلمات
+    "clap": _wrap_emoji("👏"),
+    "heart": _wrap_emoji("❤️"),
+    "star": _wrap_emoji("⭐"),
+    "fire": _wrap_emoji("🔥"),
+    "sparkle": _wrap_emoji("✨"),
+    "wave": _wrap_emoji("🌊"),
+    "rainbow": _wrap_emoji("🌈"),
+    "moon": _wrap_emoji("🌙"),
+    "sun": _wrap_emoji("☀️"),
+    "flower": _wrap_emoji("🌸"),
+    "rose": _wrap_emoji("🌹"),
+    "diamond": _wrap_emoji("💎"),
+    "crown": _wrap_emoji("👑"),
+    "gem": _wrap_emoji("💠"),
+    "spark": _wrap_emoji("💫"),
 }
 
-# نام‌های فارسی/انگلیسی برای نمایش به کاربر
+# نام‌های نمایشی
 FONT_NAMES = {
     "bold": "𝐁𝐨𝐥𝐝 (ضخیم)",
     "italic": "𝐼𝑡𝑎𝑙𝑖𝑐 (ایتالیک)",
@@ -110,28 +190,92 @@ FONT_NAMES = {
     "bubble": "ⓑⓤⓑⓑⓛⓔ",
     "regional": "🇷 🇪 🇬 🇮 🇴 🇳 🇦 🇱",
     "wide": "Ｗｉｄｅ",
-    "strikethrough": "S̶t̶r̶i̶k̶e̶",
-    "underline": "U̲n̲d̲e̲r̲l̲i̲n̲e̲",
-    "overline": "O̅v̅e̅r̅l̅i̅n̅e̅",
-    "double_underline": "D̳o̳u̳b̳l̳e̳",
-    "slash": "S̸l̸a̸s̸h̸",
-    "dots": "Ḋȯṫṡ",
-    "zigzag": "Z͛i͛g͛z͛a͛g͛",
-    "bridge": "B͆r͆i͆d͆g͆e͆",
-    "reverse": "esreveR",
-    "spaced": "S p a c e d",
-    "double_spaced": "D  o  u  b  l  e",
-    "clap": "👏 Clap 👏",
-    "heart": "❤️ Heart ❤️",
-    "star": "⭐ Star ⭐",
-    "fire": "🔥 Fire 🔥",
-    "sparkle": "✨ Sparkle ✨",
-    "wave": "🌊 Wave 🌊",
-    "rainbow": "🌈 Rainbow 🌈",
-    "moon": "🌙 Moon 🌙",
-    "sun": "☀️ Sun ☀️",
-    "flower": "🌸 Flower 🌸",
+    # فارسی/عربی
+    "strikethrough": "خط‌خورده",
+    "underline": "زیرخط",
+    "overline": "بالاخـط",
+    "double_underline": "دو زیرخط",
+    "slash": "اسلش",
+    "dots": "نقطه‌دار",
+    "double_dot": "دونقطه",
+    "zigzag": "زیگزاگ",
+    "bridge": "پل",
+    "tilde": "تیلد",
+    "caron": "کَرون",
+    "ring": "حلقه",
+    "hook": "قلاب",
+    "grave": "گراو",
+    "acute": "اکوت",
+    "diaeresis": "دیاِرِسیس",
+    "macron": "مکرون",
+    "breve": "بِرِو",
+    "dot_below": "نقطه زیر",
+    "line_below": "خط زیر",
+    "circle_below": "دایره زیر",
+    "double_acute": "دو اکوت",
+    "inverted_breve": "بِرِو معکوس",
+    "candrabindu": "چندرابیندو",
+    "perispomeni": "پریسپومنی",
+    "x_above": "ضربدر",
+    "vertical_line": "خط عمودی",
+    "double_vertical": "دو خط عمودی",
+    "seagull": "مرغ‌دریایی",
+    "asterisk_below": "ستاره زیر",
+    "plus_below": "به‌علاوه زیر",
+    "fancy1": "فانتزی ۱ (بالا+زیر)",
+    "fancy2": "فانتزی ۲ (نقطه+زیر)",
+    "fancy3": "فانتزی ۳ (دونقطه+زیر)",
+    "fancy4": "فانتزی ۴ (خط‌خورده+بالا)",
+    "fancy5": "فانتزی ۵ (مکرون+زیر)",
+    "fancy6": "فانتزی ۶ (اکوت+نقطه)",
+    "fancy7": "فانتزی ۷ (حلقه+زیر)",
+    "fancy8": "فانتزی ۸ (زیگزاگ+زیر)",
+    "fancy9": "فانتزی ۹ (دونقطه+زیرخط)",
+    "fancy10": "فانتزی ۱۰ (دوبل خط)",
+    "spaced": "فاصله‌دار",
+    "double_spaced": "فاصله دوبل",
+    "reverse": "معکوس",
+    "letter_space": "فاصله نازک",
+    "wide_space": "فاصله عریض",
+    "frame_star": "قاب ستاره ★",
+    "frame_diamond": "قاب لوزی ◆",
+    "frame_flower": "قاب گل ❀",
+    "frame_heart": "قاب قلب ♥",
+    "frame_moon": "قاب ماه ☽☾",
+    "frame_bracket": "قاب براکت 【】",
+    "frame_corner": "قاب گوشه 『』",
+    "frame_ornament": "قاب تزئینی ❧",
+    "frame_arabic": "قاب عربی ﴾﴿",
+    "frame_quran": "قاب قرآنی ۝",
+    "clap": "👏 تشویق",
+    "heart": "❤️ قلب",
+    "star": "⭐ ستاره",
+    "fire": "🔥 آتش",
+    "sparkle": "✨ درخشش",
+    "wave": "🌊 موج",
+    "rainbow": "🌈 رنگین‌کمان",
+    "moon": "🌙 ماه",
+    "sun": "☀️ خورشید",
+    "flower": "🌸 شکوفه",
+    "rose": "🌹 گل‌سرخ",
+    "diamond": "💎 الماس",
+    "crown": "👑 تاج",
+    "gem": "💠 نگین",
+    "spark": "💫 جرقه",
 }
 
-# برای فارسی: چند استایل ترکیبی که روی کاراکترهای فارسی هم کار می‌کنند (combining)
-PERSIAN_COMPATIBLE = ["strikethrough", "underline", "overline", "double_underline", "slash", "dots", "zigzag", "bridge", "spaced", "reverse", "clap", "heart", "star", "fire", "sparkle", "wave", "rainbow", "moon", "sun", "flower"]
+# بهترین استایل‌های سازگار با فارسی و عربی
+PERSIAN_COMPATIBLE = [
+    "strikethrough", "underline", "overline", "double_underline", "slash",
+    "dots", "double_dot", "zigzag", "bridge", "tilde", "caron", "ring",
+    "hook", "grave", "acute", "macron", "breve", "dot_below", "line_below",
+    "circle_below", "double_acute", "inverted_breve", "x_above",
+    "vertical_line", "double_vertical", "seagull", "asterisk_below", "plus_below",
+    "fancy1", "fancy2", "fancy3", "fancy4", "fancy5",
+    "fancy6", "fancy7", "fancy8", "fancy9", "fancy10",
+    "spaced", "double_spaced", "reverse", "letter_space", "wide_space",
+    "frame_star", "frame_diamond", "frame_flower", "frame_heart", "frame_moon",
+    "frame_bracket", "frame_corner", "frame_ornament", "frame_arabic", "frame_quran",
+    "clap", "heart", "star", "fire", "sparkle", "wave", "rainbow",
+    "moon", "sun", "flower", "rose", "diamond", "crown", "gem", "spark",
+]
