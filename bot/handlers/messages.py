@@ -5,6 +5,7 @@ from bot.database import (
     update_user_field, get_user_city, set_last_main_msg_id,
     add_reminder, track_usage,
     get_user_usage, set_birth_date, get_birth_date, get_user,
+    get_azan_settings, set_azan_master, toggle_azan_prayer,
 )
 from bot.utils.helpers import (
     build_message, get_main_keyboard, get_refresh_button,
@@ -13,6 +14,7 @@ from bot.utils.helpers import (
     get_religious_keyboard, get_market_keyboard, get_weather_geo_keyboard,
     get_tools_keyboard, get_fun_keyboard, get_profile_keyboard,
     get_calendar_text, get_calendar_buttons, ALL_CITIES, CITY_COUNTRY,
+    get_azan_keyboard,
 )
 from bot.api.calendar import get_today_tehran
 from bot.handlers.middleware import check_and_rate_limit
@@ -262,36 +264,48 @@ async def _text_handler_inner(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     if text in ("🔔 تنظیم اذان", "تنظیم اذان"):
         track_usage(user_id, "azan")
-        from bot.database import get_user
-        from bot.api.prayer import get_prayer_times, get_next_prayer_time
-        from datetime import datetime
-        import pytz
-        from bot.config import config
-        urow = get_user(user_id)
-        # users table: assume notification_enabled near end — safe defaults
-        enabled = True
-        try:
-            # tuple index may vary; try field by querying helpers if any
-            enabled = bool(urow and len(urow) > 6 and urow[6])
-        except Exception:
-            enabled = True
-        times = get_prayer_times(city) or {}
-        now = datetime.now(pytz.timezone(config.TIMEZONE))
-        nxt_name, nxt_delta = get_next_prayer_time(times, now) if times else (None, None)
-        lines = [f"🔔 تنظیم اذان — {city}\n"]
-        if times:
-            for k, v in times.items():
-                lines.append(f"• {k}: {v}")
-        else:
-            lines.append("⚠️ دریافت اوقات شرعی ناموفق بود.")
-        if nxt_name and nxt_delta:
-            secs = int(nxt_delta.total_seconds())
-            h, r = divmod(secs, 3600)
-            mi, _ = divmod(r, 60)
-            lines.append(f"\n⏳ اذان بعدی: **{nxt_name}** تا {h} ساعت و {mi} دقیقه")
-        lines.append("\nاعلان خودکار اذان برای کاربران فعال است (صبح و مغرب به‌صورت پیش‌فرض).")
-        lines.append("شهر فعلی برای محاسبه اذان استفاده می‌شود.")
-        await update.message.reply_text("\n".join(lines).replace("**",""), reply_markup=get_religious_keyboard()); return
+        await _show_azan_settings(update, user_id, city)
+        return
+
+    # دکمه‌های شخصی‌سازی اذان
+    if text in ("🔔 اعلان‌ها: روشن", "🔕 اعلان‌ها: خاموش"):
+        settings = get_azan_settings(user_id)
+        set_azan_master(user_id, not settings["enabled"])
+        await _show_azan_settings(update, user_id, city, note="وضعیت کلی اعلان‌ها تغییر کرد.")
+        return
+
+    if text in ("🔄 همه روشن",):
+        set_azan_master(user_id, True)
+        for key in ("fajr", "dhuhr", "asr", "maghrib", "isha"):
+            field = f"notify_{key}"
+            update_user_field(user_id, field, 1)
+        await _show_azan_settings(update, user_id, city, note="همه اذان‌ها روشن شدند.")
+        return
+
+    if text in ("⏹ همه خاموش",):
+        for key in ("fajr", "dhuhr", "asr", "maghrib", "isha"):
+            update_user_field(user_id, f"notify_{key}", 0)
+        await _show_azan_settings(update, user_id, city, note="همه اذان‌ها خاموش شدند.")
+        return
+
+    # دکمه‌های تکی اذان (با ✅ یا ❌)
+    _azan_btn_map = {
+        "اذان صبح": "fajr",
+        "اذان ظهر": "dhuhr",
+        "اذان عصر": "asr",
+        "اذان مغرب": "maghrib",
+        "اذان عشاء": "isha",
+    }
+    for label, key in _azan_btn_map.items():
+        if text.endswith(label) and (text.startswith("✅") or text.startswith("❌")):
+            new_state = toggle_azan_prayer(user_id, key)
+            status = "روشن" if new_state else "خاموش"
+            await _show_azan_settings(update, user_id, city, note=f"{label} {status} شد.")
+            return
+
+    if text in ("🔙 بازگشت به مذهبی",):
+        await update.message.reply_text("🕌 مذهبی:", reply_markup=get_religious_keyboard())
+        return
 
     # بازار
     if text in ("💵 قیمت کامل بازار", "قیمت کامل بازار"):
@@ -544,3 +558,46 @@ async def _h_font_text(u, c, t, uid):
 async def _h_font_all(u, c, t, uid):
     c.user_data.pop("waiting_for", None)
     await u.message.reply_text(apply_all_fonts(t), reply_markup=get_font_keyboard())
+
+
+async def _show_azan_settings(update, user_id, city, note: str = None):
+    """نمایش پنل تنظیم اذان با وضعیت فعلی و اوقات شرعی"""
+    from bot.api.prayer import get_prayer_times, get_next_prayer_time
+    from datetime import datetime
+    import pytz
+    from bot.config import config
+
+    settings = get_azan_settings(user_id)
+    times = get_prayer_times(city) or {}
+    now = datetime.now(pytz.timezone(config.TIMEZONE))
+    nxt_name, nxt_delta = get_next_prayer_time(times, now) if times else (None, None)
+
+    def mark(on: bool) -> str:
+        return "✅" if on else "❌"
+
+    lines = [f"🔔 تنظیم اذان — {city}\n"]
+    if note:
+        lines.append(f"ℹ️ {note}\n")
+
+    master = "روشن ✅" if settings["enabled"] else "خاموش ❌"
+    lines.append(f"اعلان کلی: {master}\n")
+    lines.append("انتخاب اذان‌ها:")
+    lines.append(f"{mark(settings['fajr'])} اذان صبح" + (f"  ({times.get('اذان صبح', '—')})" if times else ""))
+    lines.append(f"{mark(settings['dhuhr'])} اذان ظهر" + (f"  ({times.get('اذان ظهر', '—')})" if times else ""))
+    lines.append(f"{mark(settings['asr'])} اذان عصر" + (f"  ({times.get('اذان عصر', '—')})" if times else ""))
+    lines.append(f"{mark(settings['maghrib'])} اذان مغرب" + (f"  ({times.get('اذان مغرب', '—')})" if times else ""))
+    lines.append(f"{mark(settings['isha'])} اذان عشاء" + (f"  ({times.get('اذان عشاء', '—')})" if times else ""))
+
+    if nxt_name and nxt_delta and settings["enabled"]:
+        secs = int(nxt_delta.total_seconds())
+        h, r = divmod(secs, 3600)
+        mi, _ = divmod(r, 60)
+        lines.append(f"\n⏳ اذان بعدی: {nxt_name} — {h} ساعت و {mi} دقیقه")
+    elif not settings["enabled"]:
+        lines.append("\n🔕 اعلان‌ها خاموش است.")
+
+    lines.append("\nروی هر دکمه بزن تا روشن/خاموش شود.")
+    await update.message.reply_text(
+        "\n".join(lines),
+        reply_markup=get_azan_keyboard(settings),
+    )
