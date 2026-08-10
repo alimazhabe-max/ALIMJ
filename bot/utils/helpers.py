@@ -229,9 +229,8 @@ def get_weather_geo_keyboard():
 def get_tools_keyboard():
     return ReplyKeyboardMarkup(
         [
-            [KeyboardButton("📐 تبدیل واحد"), KeyboardButton("🔢 ماشین‌حساب")],
-            [KeyboardButton("🔐 پسورد تصادفی"), KeyboardButton("📝 شمارش متن")],
-            [KeyboardButton("🗺 فاصله جهانی")],
+            [KeyboardButton("🔢 ماشین‌حساب"), KeyboardButton("🔐 پسورد تصادفی")],
+            [KeyboardButton("📝 شمارش متن"), KeyboardButton("🗺 فاصله جهانی")],
             [KeyboardButton("🔙 بازگشت به بیشتر")],
         ],
         resize_keyboard=True,
