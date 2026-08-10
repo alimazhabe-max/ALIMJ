@@ -228,7 +228,7 @@ def date_diff(y1, m1, d1, y2, m2, d2) -> str:
             months -= 1
             pm = b.month - 1 if b.month > 1 else 12
             py = b.year if b.month > 1 else b.year - 1
-            days += jdatetime.date(py, pm, 1).daysinmonth
+            days += jdatetime.j_days_in_month(pm, jdatetime.date(py, 1, 1).isleap())
         if months < 0:
             years -= 1
             months += 12
@@ -293,7 +293,7 @@ def month_calendar(year=None, month=None) -> str:
         year = year or today.year
         month = month or today.month
         first = jdatetime.date(year, month, 1)
-        days_in = jdatetime.j_days_in_month(month, jdatetime.date.isleap(year))
+        days_in = jdatetime.j_days_in_month(month, jdatetime.date(year, 1, 1).isleap())
         start_wd = first.weekday()  # 0=شنبه
         lines = [f"📅 **{PERSIAN_MONTHS[month]} {pn(year)}**\n", "ش ی د س چ پ ج"]
         row = ["  "] * start_wd
