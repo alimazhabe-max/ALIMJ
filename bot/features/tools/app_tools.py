@@ -97,8 +97,9 @@ def count_text(text: str) -> str:
         f"خط: {pn(lines)}"
     )
 
-# ——— فاصله جهانی (شهر↔شهر / شهر↔کشور) ———
+# ——— فاصله جهانی (همه شهرها و کشورهای دنیا — OpenStreetMap/Nominatim) ———
 import math
+import asyncio
 import httpx
 from bot.logger import logger
 
@@ -106,40 +107,86 @@ _geo_cache = {}
 
 
 async def geocode(place: str):
-    """جستجوی مختصات مکان (شهر یا کشور) با Nominatim"""
-    key = place.strip().lower()
-    if not key:
+    """جستجوی مختصات هر شهر یا کشور در دنیا"""
+    place = (place or "").strip()
+    if not place:
         return None
+    key = place.lower()
     if key in _geo_cache:
         return _geo_cache[key]
+
+    headers = {"User-Agent": "ALIMJBot/2.0 (distance; contact@local)"}
+    queries = [place]
+    # اگر فارسی/تک‌کلمه بود، همان را هم با country جستجو کن
+    if " " not in place:
+        queries.append(place)
+
     try:
-        async with httpx.AsyncClient(timeout=10.0, headers={"User-Agent": "ALIMJBot/1.0"}) as client:
+        async with httpx.AsyncClient(timeout=12.0, headers=headers, follow_redirects=True) as client:
+            for q in queries:
+                # جستجوی عمومی جهانی
+                r = await client.get(
+                    "https://nominatim.openstreetmap.org/search",
+                    params={
+                        "q": q,
+                        "format": "json",
+                        "limit": 5,
+                        "addressdetails": 1,
+                        "accept-language": "fa,en",
+                    },
+                )
+                if r.status_code != 200:
+                    continue
+                data = r.json() or []
+                if not data:
+                    continue
+
+                # اولویت: شهر/روستا/استان، بعد کشور
+                def score(item):
+                    t = f"{item.get('type','')} {item.get('class','')}".lower()
+                    s = 0
+                    if any(x in t for x in ("city", "town", "village", "municipality", "county", "province", "state", "region")):
+                        s += 3
+                    if "country" in t or item.get("type") == "administrative":
+                        s += 1
+                    # ترجیح نتایج دقیق‌تر
+                    if item.get("importance"):
+                        try:
+                            s += float(item["importance"])
+                        except Exception:
+                            pass
+                    return s
+
+                data.sort(key=score, reverse=True)
+                best = data[0]
+                lat, lon = float(best["lat"]), float(best["lon"])
+                name = best.get("display_name", place)
+                parts = [x.strip() for x in name.split(",")]
+                short = ", ".join(parts[:4]) if len(parts) > 4 else name
+                _geo_cache[key] = (lat, lon, short)
+                return lat, lon, short
+
+            # تلاش دوم: جستجو فقط به‌عنوان کشور
             r = await client.get(
                 "https://nominatim.openstreetmap.org/search",
                 params={
-                    "q": place,
+                    "country": place,
                     "format": "json",
-                    "limit": 3,
+                    "limit": 1,
                     "addressdetails": 1,
+                    "accept-language": "fa,en",
                 },
             )
-            data = r.json()
-            if not data:
-                return None
-            # ترجیح: city/town، بعد country
-            best = data[0]
-            for item in data:
-                t = (item.get("type") or "") + " " + (item.get("class") or "")
-                if any(x in t for x in ("city", "town", "village", "municipality", "province", "state")):
-                    best = item
-                    break
-            lat, lon = float(best["lat"]), float(best["lon"])
-            name = best.get("display_name", place)
-            # کوتاه‌کردن نام
-            parts = [x.strip() for x in name.split(",")]
-            short = ", ".join(parts[:3]) if len(parts) > 3 else name
-            _geo_cache[key] = (lat, lon, short)
-            return lat, lon, short
+            if r.status_code == 200:
+                data = r.json() or []
+                if data:
+                    best = data[0]
+                    lat, lon = float(best["lat"]), float(best["lon"])
+                    name = best.get("display_name", place)
+                    parts = [x.strip() for x in name.split(",")]
+                    short = ", ".join(parts[:4]) if len(parts) > 4 else name
+                    _geo_cache[key] = (lat, lon, short)
+                    return lat, lon, short
     except Exception as e:
         logger.error(f"geocode [{place}]: {e}")
     return None
@@ -171,53 +218,55 @@ def _fmt_duration(hours: float) -> str:
 
 
 def parse_two_places(text: str):
-    """پارس دو مکان از متن کاربر
-    پشتیبانی:
-      تهران مشهد
-      تهران تا استانبول
-      تهران - ترکیه
-      Paris to Tokyo
-      تهران، آلمان
-    """
-    t = text.strip()
+    """پارس دو مکان از متن کاربر (شهر یا کشور)"""
+    t = (text or "").strip()
     if not t:
         return None
-    # جداکننده‌های رایج
-    for sep in [" تا ", " to ", " - ", " – ", " — ", "،", ",", "\t"]:
+    for sep in [" تا ", " to ", " - ", " – ", " — ", "،", ",", "\t", " -> ", " → "]:
         if sep in t:
             parts = [p.strip() for p in t.split(sep, 1)]
             if len(parts) == 2 and parts[0] and parts[1]:
                 return parts[0], parts[1]
     parts = t.split()
     if len(parts) >= 2:
-        # اگر ۳+ کلمه: نصف کن
         mid = len(parts) // 2
         return " ".join(parts[:mid]), " ".join(parts[mid:])
     return None
 
 
 async def world_distance(place1: str, place2: str = None) -> str:
-    """فاصله شهر به شهر یا شهر به کشور یا کشور به کشور"""
+    """فاصله بین هر دو نقطه در دنیا: شهر↔شهر، شهر↔کشور، کشور↔کشور"""
     if place2 is None:
         parsed = parse_two_places(place1)
         if not parsed:
             return (
                 "❌ فرمت درست نیست.\n\n"
+                "🌍 همه شهرها و کشورهای دنیا پشتیبانی می‌شوند.\n\n"
                 "مثال‌ها:\n"
-                "• `تهران مشهد`\n"
-                "• `تهران تا استانبول`\n"
-                "• `شیراز آلمان`\n"
-                "• `Paris to Tokyo`\n"
-                "• `اصفهان - ترکیه`"
+                "• تهران مشهد\n"
+                "• تهران تا استانبول\n"
+                "• شیراز آلمان\n"
+                "• ایران ژاپن\n"
+                "• Paris to Tokyo\n"
+                "• New York - Brazil"
             )
         place1, place2 = parsed
 
-    g1 = await geocode(place1)
-    g2 = await geocode(place2)
+    # موازی برای سرعت
+    g1, g2 = await asyncio.gather(geocode(place1), geocode(place2))
+
     if not g1:
-        return f"❌ «{place1}» پیدا نشد.\nنام شهر یا کشور را دقیق‌تر بنویسید."
+        return (
+            f"❌ «{place1}» پیدا نشد.\n"
+            "نام شهر یا کشور را دقیق‌تر بنویسید (فارسی یا انگلیسی).\n"
+            "مثال: تهران | Istanbul | آلمان | Japan"
+        )
     if not g2:
-        return f"❌ «{place2}» پیدا نشد.\nنام شهر یا کشور را دقیق‌تر بنویسید."
+        return (
+            f"❌ «{place2}» پیدا نشد.\n"
+            "نام شهر یا کشور را دقیق‌تر بنویسید (فارسی یا انگلیسی).\n"
+            "مثال: مشهد | Turkey | فرانسه | Brazil"
+        )
 
     lat1, lon1, n1 = g1
     lat2, lon2, n2 = g2
@@ -237,5 +286,6 @@ async def world_distance(place1: str, place2: str = None) -> str:
         f"🚲 دوچرخه (≈۱۸km/h): {_fmt_duration(bike)}\n"
         f"🚶 پیاده (≈۵km/h): {_fmt_duration(walk)}\n"
         f"✈️ هواپیما (تقریبی): {_fmt_duration(plane)}\n\n"
-        f"⚠️ فاصله خط مستقیم است؛ مسیر واقعی جاده‌ای ممکن است بیشتر باشد."
+        f"🌍 منبع: OpenStreetMap — پوشش همه شهرها و کشورهای دنیا\n"
+        f"⚠️ فاصله خط مستقیم است؛ مسیر جاده‌ای واقعی ممکن است بیشتر باشد."
     )
