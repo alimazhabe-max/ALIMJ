@@ -1,4 +1,4 @@
-"""ابزارها — تبدیل واحد، ماشین‌حساب، پسورد، شمارش متن، فاصله جهانی"""
+"""ابزارها — ماشین‌حساب، پسورد، شمارش متن، فاصله جهانی"""
 import re
 import math
 import asyncio
@@ -10,82 +10,6 @@ from bot.logger import logger
 
 def pn(n):
     return str(n).translate(str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹"))
-
-
-LENGTH = {
-    "m": 1, "meter": 1, "meters": 1, "متر": 1, "م": 1,
-    "km": 1000, "کیلومتر": 1000,
-    "cm": 0.01, "سانتی‌متر": 0.01, "سانتیمتر": 0.01, "سانت": 0.01,
-    "mm": 0.001, "میلی‌متر": 0.001, "میلیمتر": 0.001,
-    "mile": 1609.34, "miles": 1609.34, "مایل": 1609.34,
-    "yard": 0.9144, "foot": 0.3048, "ft": 0.3048, "feet": 0.3048,
-    "inch": 0.0254, "in": 0.0254,
-}
-WEIGHT = {
-    "kg": 1, "کیلو": 1, "کیلوگرم": 1,
-    "g": 0.001, "gram": 0.001, "گرم": 0.001,
-    "mg": 1e-6, "ton": 1000, "تن": 1000, "t": 1000,
-    "lb": 0.453592, "pound": 0.453592, "oz": 0.0283495,
-}
-VOLUME = {
-    "l": 1, "liter": 1, "litre": 1, "لیتر": 1,
-    "ml": 0.001, "میلی‌لیتر": 0.001, "میلیلیتر": 0.001,
-    "m3": 1000, "gal": 3.78541, "gallon": 3.78541,
-}
-TEMP = {"c", "f", "k", "سانتیگراد", "فارنهایت", "کلوین", "celsius", "fahrenheit", "kelvin"}
-
-
-def convert_unit(amount: float, from_u: str, to_u: str) -> str:
-    fu, tu = from_u.lower().strip(), to_u.lower().strip()
-    if fu in TEMP or tu in TEMP:
-        return _temp_convert(amount, fu, tu) + "\n\n🔗 تبدیل‌های بیشتر: https://www.bahesab.ir/calc/unit/"
-    for table, name in ((LENGTH, "طول"), (WEIGHT, "وزن"), (VOLUME, "حجم")):
-        if fu in table and tu in table:
-            result = amount * table[fu] / table[tu]
-            return (
-                f"📐 تبدیل {name}\n\n"
-                f"{pn(amount)} {from_u} = {pn(f'{result:,.6g}')} {to_u}\n\n"
-                f"🔗 تبدیل واحدهای بیشتر و دقیق‌تر:\nhttps://www.bahesab.ir/calc/unit/"
-            )
-    return (
-        "❌ واحد پشتیبانی نمی‌شود.\n\n"
-        "مثال:\n10 km m\n5 kg g\n100 c f\n"
-        "طول: m km cm mile ft\nوزن: kg g lb\nحجم: l ml\nدما: c f k\n\n"
-        "🔗 برای همه واحدها به سایت باحساب مراجعه کنید:\n"
-        "https://www.bahesab.ir/calc/unit/"
-    )
-
-
-def _temp_convert(val, fu, tu):
-    if fu in ("c", "celsius", "سانتیگراد"):
-        c = val
-    elif fu in ("f", "fahrenheit", "فارنهایت"):
-        c = (val - 32) * 5 / 9
-    elif fu in ("k", "kelvin", "کلوین"):
-        c = val - 273.15
-    else:
-        return "❌ واحد دما نامعتبر"
-    if tu in ("c", "celsius", "سانتیگراد"):
-        r = c
-    elif tu in ("f", "fahrenheit", "فارنهایت"):
-        r = c * 9 / 5 + 32
-    elif tu in ("k", "kelvin", "کلوین"):
-        r = c + 273.15
-    else:
-        return "❌ واحد دما نامعتبر"
-    return f"🌡 تبدیل دما\n\n{pn(val)} {fu} = {pn(f'{r:,.2f}')} {tu}"
-
-
-def parse_unit(text: str):
-    t = text.strip().translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789"))
-    t = t.replace(" به ", " ").replace(" to ", " ").replace("->", " ").replace("→", " ")
-    m = re.match(r"([\d.]+)\s*([a-zA-Zآ-ی‌]+)\s+([a-zA-Zآ-ی‌]+)", t)
-    if m:
-        return float(m.group(1)), m.group(2).lower(), m.group(3).lower()
-    m = re.match(r"([\d.]+)\s*([a-zA-Z]+)\s*([a-zA-Z]+)", t)
-    if m:
-        return float(m.group(1)), m.group(2).lower(), m.group(3).lower()
-    return None
 
 
 def calculator(expr: str) -> str:
