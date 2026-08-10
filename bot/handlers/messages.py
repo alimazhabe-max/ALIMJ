@@ -301,12 +301,14 @@ async def _text_handler_inner(update: Update, context: ContextTypes.DEFAULT_TYPE
     if text in ("🗺 فاصله شهرها", "فاصله شهرها", "🗺 فاصله جهانی", "فاصله جهانی"):
         context.user_data["waiting_for"] = "distance"; track_usage(user_id, "distance")
         await update.message.reply_text(
-            "🗺 فاصله جهانی\n\n"
-            "دو مکان را بفرستید (شهر یا کشور):\n"
+            "🗺 فاصله جهانی\n"
+            "🌍 همه شهرها و کشورهای دنیا پشتیبانی می‌شود.\n\n"
+            "دو مکان را بفرستید:\n"
             "• تهران مشهد\n"
-            "• تهران تا استانبول\n"
-            "• شیراز آلمان\n"
-            "• Paris to Tokyo",
+            "• تهران تا ترکیه\n"
+            "• ایران ژاپن\n"
+            "• Paris to Tokyo\n"
+            "• New York - Brazil",
             reply_markup=get_tools_keyboard(),
         ); return
     if text in ("📍 لوکیشن من", "لوکیشن من"):
