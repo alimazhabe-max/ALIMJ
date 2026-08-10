@@ -128,7 +128,7 @@ def _g2h(g: date) -> dict:
 # ── ۱. روزشمار تولد ──
 def birthday_countdown(y, m, d) -> str:
     try:
-        today = jdatetime.datetime.now(tehran_tz).date()
+        today = jdatetime.datetime.now().date()
         try:
             this_bd = jdatetime.date(today.year, m, d)
         except ValueError:
@@ -289,7 +289,7 @@ def convert_with_weekday(kind, y, m, d) -> str:
 # ── ۷. تقویم ماه کامل ──
 def month_calendar(year=None, month=None) -> str:
     try:
-        today = jdatetime.datetime.now(tehran_tz).date()
+        today = jdatetime.datetime.now().date()
         year = year or today.year
         month = month or today.month
         first = jdatetime.date(year, month, 1)
@@ -345,7 +345,7 @@ def search_events(query: str) -> str:
 
 # ── ۹. شمارش‌معکوس نوروز ──
 def nowruz_countdown() -> str:
-    today = jdatetime.datetime.now(tehran_tz).date()
+    today = jdatetime.datetime.now().date()
     year = today.year if (today.month, today.day) < (1, 1) else today.year + 1
     # اگر هنوز به ۱ فروردین نرسیده‌ایم
     if today.month == 1 and today.day == 1:
@@ -375,7 +375,7 @@ def world_clock() -> str:
 # ── شمارش‌معکوس سفارشی ──
 def custom_countdown(y, m, d, label="رویداد") -> str:
     try:
-        today = jdatetime.datetime.now(tehran_tz).date()
+        today = jdatetime.datetime.now().date()
         target = jdatetime.date(y, m, d)
         delta = (target - today).days
         if delta > 0:
