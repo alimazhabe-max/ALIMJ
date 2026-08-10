@@ -32,13 +32,36 @@ def run_flask():
 
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """جلوگیری از کرش کامل ربات — همه خطاها لاگ و به کاربر پیام دوستانه"""
-    logger.error("Exception while handling an update:", exc_info=context.error)
+    """جلوگیری از کرش — خطاهای شبکه را بی‌صدا رد کن، بقیه را لاگ کن"""
+    err = context.error
+    # خطاهای رایج تلگرام/شبکه — به کاربر پیام نده
+    ignore_names = (
+        "NetworkError", "TimedOut", "RetryAfter", "BadGateway",
+        "ServiceUnavailable", "RequestTimeout", "httpx",
+    )
+    err_name = type(err).__name__ if err else ""
+    err_str = str(err) or ""
+    if any(x in err_name or x in err_str for x in ignore_names):
+        logger.warning(f"Ignored transient error: {err_name}: {err_str[:120]}")
+        return
+
+    logger.error("Exception while handling an update:", exc_info=err)
+
+    # از تکرار پیام خطا برای یک کاربر در ۳۰ ثانیه جلوگیری کن
     try:
-        if update and isinstance(update, Update) and update.effective_message:
+        if not update or not isinstance(update, Update) or not update.effective_user:
+            return
+        uid = update.effective_user.id
+        now = datetime.now().timestamp()
+        last = getattr(error_handler, "_last", {})
+        if now - last.get(uid, 0) < 30:
+            return
+        last[uid] = now
+        error_handler._last = last
+
+        if update.effective_message:
             await update.effective_message.reply_text(
-                "⚠️ خطایی رخ داد. لطفاً دوباره امتحان کنید.\n"
-                "اگر مشکل ادامه داشت، چند لحظه صبر کنید."
+                "⚠️ موقتاً مشکلی پیش آمد. چند ثانیه بعد دوباره امتحان کنید."
             )
     except Exception:
         pass
