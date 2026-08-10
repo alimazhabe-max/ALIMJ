@@ -1,11 +1,22 @@
 from datetime import time, datetime
 import pytz
 from bot.logger import logger
-from bot.database import get_all_users, update_stats
+from bot.database import get_all_users, update_stats, get_users_for_azan
 from bot.utils.helpers import build_message, get_refresh_button
 from bot.config import config
 from bot.api.prayer import get_prayer_times
 import asyncio
+
+# نگاشت کلید فارسی اذان → ایندکس تنظیمات کاربر
+# get_users_for_azan: (user_id, city, enabled, fajr, dhuhr, asr, maghrib, isha)
+PRAYER_FLAGS = {
+    "اذان صبح": 3,   # fajr
+    "اذان ظهر": 4,   # dhuhr
+    "اذان عصر": 5,   # asr
+    "اذان مغرب": 6,  # maghrib
+    "اذان عشاء": 7,  # isha
+}
+
 
 async def send_daily_messages(context):
     logger.info("Starting daily broadcast...")
@@ -27,17 +38,20 @@ async def send_daily_messages(context):
 
 
 async def check_azan_notifications(context):
-    """هر دقیقه: نزدیک اذان صبح/مغرب اطلاع بده"""
+    """هر دقیقه: اذان‌هایی که کاربر فعال کرده را اطلاع بده"""
     tehran = pytz.timezone(config.TIMEZONE)
     now = datetime.now(tehran)
-    users = get_all_users()
+    users = get_users_for_azan()
     for row in users:
         try:
             user_id = row[0]
-            city = row[2] if len(row) > 2 else "تهران"
+            city = row[1] if len(row) > 1 and row[1] else "تهران"
             times = get_prayer_times(city) or {}
-            for key in ("اذان صبح", "اذان مغرب"):
-                tstr = times.get(key)
+            for prayer_name, flag_idx in PRAYER_FLAGS.items():
+                # آیا این اذان برای کاربر روشن است؟
+                if flag_idx >= len(row) or not row[flag_idx]:
+                    continue
+                tstr = times.get(prayer_name)
                 if not tstr:
                     continue
                 try:
@@ -48,21 +62,12 @@ async def check_azan_notifications(context):
                 diff = (target - now).total_seconds()
                 if 0 <= diff < 60:
                     text = (
-                        f"🔔 {key}\n"
+                        f"🔔 {prayer_name}\n"
                         f"شهر: {city}\n"
                         f"ساعت: {tstr}\n\n"
                         f"الله اکبر"
-                    ).replace("\\n", "\n")
-                    # real newlines:
-                    text = f"🔔 {key}\nشهر: {city}\nساعت: {tstr}\n\nالله اکبر"
-                    text = text.encode().decode("unicode_escape") if False else (
-                        "🔔 " + key + "\nشهر: " + str(city) + "\nساعت: " + str(tstr) + "\n\nالله اکبر"
                     )
-                    text = "🔔 " + str(key) + "\n" + "شهر: " + str(city) + "\n" + "ساعت: " + str(tstr) + "\n\nالله اکبر"
-                    # simplest:
-                    text = "🔔 %s\nشهر: %s\nساعت: %s\n\nالله اکبر" % (key, city, tstr)
-                    text = text.replace("\n", "\n")
-                    await context.bot.send_message(chat_id=user_id, text="🔔 " + key + chr(10) + "شهر: " + str(city) + chr(10) + "ساعت: " + str(tstr) + chr(10)+chr(10) + "الله اکبر")
+                    await context.bot.send_message(chat_id=user_id, text=text)
                     await asyncio.sleep(0.05)
         except Exception as e:
             logger.error(f"azan notify error: {e}")
@@ -92,4 +97,4 @@ def setup_scheduler(app):
         first=10,
         name="azan_timer",
     )
-    logger.info("Scheduler ready: daily + azan timer")
+    logger.info("Scheduler ready: daily + azan timer (personalized)")
