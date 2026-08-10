@@ -99,21 +99,45 @@ async def _text_handler_inner(update: Update, context: ContextTypes.DEFAULT_TYPE
             context.user_data.pop("waiting_for", None)
             await update.message.reply_text("➕ منوی بیشتر:", reply_markup=get_more_keyboard())
             return
-        handlers = {
-            "date_convert": _h_date_convert, "age_calc": _h_age_calc,
-            "birthday": _h_birthday, "zodiac": _h_zodiac, "lunar": _h_lunar,
-            "date_diff": _h_date_diff, "age_diff": _h_age_diff,
-            "event_search": _h_event_search, "countdown": _h_countdown,
-            "unit": _h_unit, "calc": _h_calc,
-            "profit": _h_profit, "currency": _h_currency, "distance": _h_distance,
-            "note": _h_note, "reminder": _h_reminder, "birth_save": _h_birth_save,
-            "count_text": _h_count_text,
-            "font_text": _h_font_text, "font_all": _h_font_all,
-        }
-        fn = handlers.get(waiting)
-        if fn:
-            await fn(update, context, text, user_id)
-            return
+        # اگر کاربر دکمه منو زد، waiting را رها کن و ادامه بده
+        menu_starts = (
+            "➕", "🏠", "📅", "🕌", "💰", "🌤", "🛠", "🎮", "🎨", "👤",
+            "🏙", "🌍", "🔙", "💵", "💎", "🔄", "📈", "📐", "🔢", "🔐",
+            "📝", "🗺", "⏰", "📒", "📖", "😂", "🧠", "💪", "💖", "🕋",
+            "📿", "🙏", "🔔", "🌫", "📍", "🇬🇧", "🇮🇷", "🌈", "📋",
+        )
+        if text.startswith(menu_starts) or text in (
+            "بیشتر", "بازار", "مذهبی", "ابزارها", "سرگرمی", "فونت", "پروفایل",
+            "تاریخ و سن", "هوا و مکان", "انتخاب شهر", "تقویم", "زبان",
+        ):
+            context.user_data.pop("waiting_for", None)
+            waiting = None
+        else:
+            handlers = {
+                "date_convert": _h_date_convert, "age_calc": _h_age_calc,
+                "birthday": _h_birthday, "zodiac": _h_zodiac, "lunar": _h_lunar,
+                "date_diff": _h_date_diff, "age_diff": _h_age_diff,
+                "event_search": _h_event_search, "countdown": _h_countdown,
+                "unit": _h_unit, "calc": _h_calc,
+                "profit": _h_profit, "currency": _h_currency, "distance": _h_distance,
+                "note": _h_note, "reminder": _h_reminder, "birth_save": _h_birth_save,
+                "count_text": _h_count_text,
+                "font_text": _h_font_text, "font_all": _h_font_all,
+            }
+            fn = handlers.get(waiting)
+            if fn:
+                try:
+                    await fn(update, context, text, user_id)
+                except Exception as e:
+                    from bot.logger import logger
+                    logger.error(f"waiting handler {waiting}: {e}", exc_info=True)
+                    context.user_data.pop("waiting_for", None)
+                    await update.message.reply_text(
+                        "⚠️ خطا در پردازش. دوباره از منو انتخاب کنید.",
+                        reply_markup=get_more_keyboard(),
+                    )
+                return
+            context.user_data.pop("waiting_for", None)
 
     if text in ("🏙 انتخاب شهر", "انتخاب شهر"):
         await update.message.reply_text("🏙 کشور:", reply_markup=get_country_keyboard()); return
@@ -518,3 +542,8 @@ async def _h_font_text(u, c, t, uid):
     c.user_data.pop("waiting_for", None)
     font = c.user_data.get("selected_font", "bold")
     await u.message.reply_text(apply_font(t, font), reply_markup=get_font_keyboard())
+
+
+async def _h_font_all(u, c, t, uid):
+    c.user_data.pop("waiting_for", None)
+    await u.message.reply_text(apply_all_fonts(t), reply_markup=get_font_keyboard())
