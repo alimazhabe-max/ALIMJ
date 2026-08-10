@@ -30,6 +30,7 @@ class Config:
 
     # محدودیت درخواست (تعداد در دقیقه)
     RATE_LIMIT = int(os.getenv("RATE_LIMIT", "60"))
+    START_RATE_LIMIT = int(os.getenv("START_RATE_LIMIT", "10"))
 
     # سطح لاگ
     LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
