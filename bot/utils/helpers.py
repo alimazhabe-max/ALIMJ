@@ -352,49 +352,57 @@ def get_calendar_text(year, month, day, user_id):
         else:
             prayer_text = "⚠️ اوقات شرعی در دسترس نیست."
 
-        # هوا برای همان روز (Open-Meteo)
+
+        # هوا: اول Open-Meteo حرفه‌ای ۷روزه از همان روز، بعد fallback
         weather_text = "⚠️ آب و هوا در دسترس نیست."
         try:
+            from bot.features.weather.weather_extra import CITY_COORDS, WEATHER_CODES, _norm_city
+            import requests as _req
             cname = _norm_city(city)
             coords = CITY_COORDS.get(cname) or CITY_COORDS.get("تهران")
             lat, lon = coords
-            iso = f"{g.year:04d}-{g.month:02d}-{g.day:02d}"
+            start = f"{g.year:04d}-{g.month:02d}-{g.day:02d}"
+            from datetime import timedelta as _td
+            end_d = g + _td(days=6)
+            end = f"{end_d.year:04d}-{end_d.month:02d}-{end_d.day:02d}"
             params = {
                 "latitude": lat,
                 "longitude": lon,
-                "daily": "weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum",
+                "daily": "weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum,windspeed_10m_max",
                 "timezone": "Asia/Tehran",
-                "start_date": iso,
-                "end_date": iso,
+                "start_date": start,
+                "end_date": end,
             }
-            # sync request ساده
-            import requests as _req
-            r = _req.get("https://api.open-meteo.com/v1/forecast", params=params, timeout=10)
+            r = _req.get("https://api.open-meteo.com/v1/forecast", params=params, timeout=12)
             if r.status_code == 200:
                 daily = r.json().get("daily", {})
-                tmax = (daily.get("temperature_2m_max") or [None])[0]
-                tmin = (daily.get("temperature_2m_min") or [None])[0]
-                code = (daily.get("weather_code") or daily.get("weathercode") or [0])[0]
-                try:
-                    code = int(code or 0)
-                except Exception:
-                    code = 0
-                desc = WEATHER_CODES.get(code, "")
-                pr = (daily.get("precipitation_sum") or [0])[0]
-                weather_text = (
-                    f"🌡️ حداقل: {to_persian_num(tmin)}°C  |  حداکثر: {to_persian_num(tmax)}°C" + chr(10) +
-                    f"🌤️ وضعیت: {desc}" + chr(10) +
-                    f"🌧 بارش: {to_persian_num(pr)} mm"
-                )
+                times = daily.get("time") or []
+                tmax = daily.get("temperature_2m_max") or []
+                tmin = daily.get("temperature_2m_min") or []
+                codes = daily.get("weather_code") or daily.get("weathercode") or []
+                wind = daily.get("windspeed_10m_max") or []
+                precip = daily.get("precipitation_sum") or []
+                names = ["روز۱", "روز۲", "روز۳", "روز۴", "روز۵", "روز۶", "روز۷"]
+                lines = ["🌤 پیش‌بینی ۷روزه (از این تاریخ)"]
+                for i in range(min(7, len(times))):
+                    d = times[i][5:] if times[i] else ""
+                    mx = tmax[i] if i < len(tmax) else "?"
+                    mn = tmin[i] if i < len(tmin) else "?"
+                    try:
+                        code = int(codes[i]) if i < len(codes) else 0
+                    except Exception:
+                        code = 0
+                    desc = WEATHER_CODES.get(code, "")
+                    wd = wind[i] if i < len(wind) else "?"
+                    lines.append(f"• {names[i]} ({d}): {to_persian_num(mn)}°~{to_persian_num(mx)}° {desc}")
+                weather_text = chr(10).join(lines)
             else:
-                # fallback امروز از wttr
                 weather = get_weather(city)
                 if weather:
                     weather_text = (
                         f"🌡️ دما: {weather['temp']}°C" + chr(10) +
                         f"🌤️ وضعیت: {weather['condition']}" + chr(10) +
-                        f"💧 رطوبت: {weather['humidity']}%" + chr(10) +
-                        "⚠️ (هوای لحظه‌ای — پیش‌بینی روز در دسترس نبود)"
+                        f"💧 رطوبت: {weather['humidity']}%"
                     )
         except Exception as e:
             from bot.logger import logger
@@ -413,7 +421,7 @@ def get_calendar_text(year, month, day, user_id):
             f"📌 مناسبت‌های شمسی:" + chr(10) + shamsi_text + chr(10)*2 +
             f"📌 مناسبت‌های قمری:" + chr(10) + hijri_text + chr(10)*2 +
             f"⏰ اوقات شرعی ({city}) — همین روز" + chr(10) + prayer_text + chr(10)*2 +
-            f"🌦️ آب و هوا — همین روز" + chr(10) + weather_text + chr(10)*2 +
+            f"🌦️ آب و هوا (۷ روز از این تاریخ)" + chr(10) + weather_text + chr(10)*2 +
             "🔄 با دکمه‌های زیر روز یا ماه را تغییر دهید."
         )
     except Exception as e:
