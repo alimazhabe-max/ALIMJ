@@ -293,7 +293,10 @@ def month_calendar(year=None, month=None) -> str:
         year = year or today.year
         month = month or today.month
         first = jdatetime.date(year, month, 1)
-        days_in = jdatetime.j_days_in_month(month, jdatetime.date(year, 1, 1).isleap())
+        # jdatetime.j_days_in_month یک لیست است نه تابع
+        days_in = jdatetime.j_days_in_month[month - 1]
+        if month == 12 and jdatetime.date(year, 1, 1).isleap():
+            days_in = 30
         start_wd = first.weekday()  # 0=شنبه
         lines = [f"📅 **{PERSIAN_MONTHS[month]} {pn(year)}**\n", "ش ی د س چ پ ج"]
         row = ["  "] * start_wd
