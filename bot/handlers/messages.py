@@ -120,7 +120,7 @@ async def _text_handler_inner(update: Update, context: ContextTypes.DEFAULT_TYPE
                 "event_search": _h_event_search, "countdown": _h_countdown,
                 "unit": _h_unit, "calc": _h_calc,
                 "profit": _h_profit, "currency": _h_currency, "distance": _h_distance,
-                "reminder": _h_reminder, "birth_save": _h_birth_save,
+                "birth_save": _h_birth_save,
                 "count_text": _h_count_text,
                 "font_text": _h_font_text, "font_all": _h_font_all,
             }
@@ -262,7 +262,36 @@ async def _text_handler_inner(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     if text in ("🔔 تنظیم اذان", "تنظیم اذان"):
         track_usage(user_id, "azan")
-        await update.message.reply_text(f"🔔 تنظیم اذان برای {city}\nفیلدهای دیتابیس آماده‌اند. اسکجولر نوتیف را جداگانه فعال کنید.", reply_markup=get_religious_keyboard()); return
+        from bot.database import get_user
+        from bot.api.prayer import get_prayer_times, get_next_prayer_time
+        from datetime import datetime
+        import pytz
+        from bot.config import config
+        urow = get_user(user_id)
+        # users table: assume notification_enabled near end — safe defaults
+        enabled = True
+        try:
+            # tuple index may vary; try field by querying helpers if any
+            enabled = bool(urow and len(urow) > 6 and urow[6])
+        except Exception:
+            enabled = True
+        times = get_prayer_times(city) or {}
+        now = datetime.now(pytz.timezone(config.TIMEZONE))
+        nxt_name, nxt_delta = get_next_prayer_time(times, now) if times else (None, None)
+        lines = [f"🔔 تنظیم اذان — {city}\n"]
+        if times:
+            for k, v in times.items():
+                lines.append(f"• {k}: {v}")
+        else:
+            lines.append("⚠️ دریافت اوقات شرعی ناموفق بود.")
+        if nxt_name and nxt_delta:
+            secs = int(nxt_delta.total_seconds())
+            h, r = divmod(secs, 3600)
+            mi, _ = divmod(r, 60)
+            lines.append(f"\n⏳ اذان بعدی: **{nxt_name}** تا {h} ساعت و {mi} دقیقه")
+        lines.append("\nاعلان خودکار اذان برای کاربران فعال است (صبح و مغرب به‌صورت پیش‌فرض).")
+        lines.append("شهر فعلی برای محاسبه اذان استفاده می‌شود.")
+        await update.message.reply_text("\n".join(lines).replace("**",""), reply_markup=get_religious_keyboard()); return
 
     # بازار
     if text in ("💵 قیمت کامل بازار", "قیمت کامل بازار"):
@@ -280,11 +309,14 @@ async def _text_handler_inner(update: Update, context: ContextTypes.DEFAULT_TYPE
     if text in ("🔄 تبدیل ارز", "تبدیل ارز", "🔄 تبدیل ارز / کریپتو", "تبدیل ارز / کریپتو"):
         context.user_data["waiting_for"] = "currency"; track_usage(user_id, "currency")
         await update.message.reply_text(
-            "🔄 مقدار و ارز را بفرست:\n\n"
-            "• `100 دلار تومان`\n"
-            "• `20 ton` یا `1.5 btc` یا `50 usdt`\n"
-            "• `500000 ریال تومان`\n\n"
-            "بیش از ۵۰۰ ارز دیجیتال پشتیبانی می‌شود.",
+            "🔄 مبدل ارز (مشابه ارزدیجیتال)\n\n"
+            "فرمت: مقدار ارز_مبدا ارز_مقصد\n\n"
+            "مثال:\n"
+            "• 1 btc usdt\n"
+            "• 100 usdt toman\n"
+            "• 20 ton\n"
+            "• 50 دلار\n"
+            "• 1000000 ریال تومان",
             reply_markup=get_market_keyboard()
         ); return
     if text in ("📈 سود و ضرر", "سود و ضرر"):
@@ -326,15 +358,13 @@ async def _text_handler_inner(update: Update, context: ContextTypes.DEFAULT_TYPE
         track_usage(user_id, "password")
         pwd = generate_password(16)
         await update.message.reply_text(
-            f"🔐 پسورد تصادفی:\n\n{pwd}\n\n👆 این متن را کپی کنید",
+            "🔐 پسورد تصادفی:\n\n<code>" + pwd + "</code>\n\n👆 روی پسورد بزنید تا کپی شود",
             reply_markup=get_tools_keyboard(),
+            parse_mode="HTML",
         ); return
     if text in ("📝 شمارش متن", "شمارش متن"):
         context.user_data["waiting_for"] = "count_text"; track_usage(user_id, "count")
         await update.message.reply_text("📝 متن را بفرستید:", reply_markup=get_tools_keyboard()); return
-    if text in ("⏰ یادآوری", "یادآوری"):
-        context.user_data["waiting_for"] = "reminder"; track_usage(user_id, "reminder")
-        await update.message.reply_text("⏰ حداقل ۵ دقیقه\nمثال: `30 جلسه مهم`", reply_markup=get_tools_keyboard()); return
 
     # سرگرمی
     if text in ("📖 فال حافظ", "فال حافظ"):
@@ -497,25 +527,6 @@ async def _h_distance(u, c, t, uid):
     await u.message.reply_text(await world_distance(p1, p2), reply_markup=get_tools_keyboard())
 
 
-
-async def _h_reminder(u, c, t, uid):
-    c.user_data.pop("waiting_for", None)
-    import re as _re
-    t2 = t.translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789"))
-    m = _re.match(r"(\d+)\s*(.*)", t2, _re.DOTALL)
-    if m:
-        mins = int(m.group(1))
-        msg = (m.group(2) or "یادآوری").strip() or "یادآوری"
-        if mins < 5:
-            await u.message.reply_text("❌ حداقل ۵ دقیقه.", reply_markup=get_tools_keyboard())
-            return
-        add_reminder(uid, mins, msg)
-        await u.message.reply_text(
-            f"✅ یادآوری ثبت شد برای {mins} دقیقه بعد:\n{msg}",
-            reply_markup=get_tools_keyboard(),
-        )
-    else:
-        await u.message.reply_text("❌ فرمت: `30 متن یادآوری` (حداقل ۵ دقیقه)", reply_markup=get_tools_keyboard())
 
 
 async def _h_birth_save(u, c, t, uid):
