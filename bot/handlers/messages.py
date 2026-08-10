@@ -368,8 +368,17 @@ async def _text_handler_inner(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
     if text in ("📊 آمار من", "آمار من"):
         track_usage(user_id, "stats")
-        usage = get_user_usage(user_id)
-        msg = "📊 آمار:\n" + ("\n".join(f"• {f}: {c}" for f, c in usage[:15]) if usage else "خالی")
+        usage = get_user_usage(user_id) or []
+        if usage:
+            lines = []
+            for row in usage[:15]:
+                try:
+                    lines.append(f"• {row[0]}: {row[1]}")
+                except Exception:
+                    pass
+            msg = "📊 آمار:\n" + ("\n".join(lines) if lines else "خالی")
+        else:
+            msg = "📊 آمار:\nخالی"
         await update.message.reply_text(msg, reply_markup=get_profile_keyboard()); return
     if text in ("🎂 ذخیره تاریخ تولد", "ذخیره تاریخ تولد"):
         context.user_data["waiting_for"] = "birth_save"
