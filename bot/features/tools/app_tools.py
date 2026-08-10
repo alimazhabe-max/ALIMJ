@@ -38,15 +38,21 @@ TEMP = {"c", "f", "k", "سانتیگراد", "فارنهایت", "کلوین", "
 def convert_unit(amount: float, from_u: str, to_u: str) -> str:
     fu, tu = from_u.lower().strip(), to_u.lower().strip()
     if fu in TEMP or tu in TEMP:
-        return _temp_convert(amount, fu, tu)
+        return _temp_convert(amount, fu, tu) + "\n\n🔗 تبدیل‌های بیشتر: https://www.bahesab.ir/calc/unit/"
     for table, name in ((LENGTH, "طول"), (WEIGHT, "وزن"), (VOLUME, "حجم")):
         if fu in table and tu in table:
             result = amount * table[fu] / table[tu]
-            return f"📐 تبدیل {name}\n\n{pn(amount)} {from_u} = {pn(f'{result:,.6g}')} {to_u}"
+            return (
+                f"📐 تبدیل {name}\n\n"
+                f"{pn(amount)} {from_u} = {pn(f'{result:,.6g}')} {to_u}\n\n"
+                f"🔗 تبدیل واحدهای بیشتر و دقیق‌تر:\nhttps://www.bahesab.ir/calc/unit/"
+            )
     return (
         "❌ واحد پشتیبانی نمی‌شود.\n\n"
         "مثال:\n10 km m\n5 kg g\n100 c f\n"
-        "طول: m km cm mile ft\nوزن: kg g lb\nحجم: l ml\nدما: c f k"
+        "طول: m km cm mile ft\nوزن: kg g lb\nحجم: l ml\nدما: c f k\n\n"
+        "🔗 برای همه واحدها به سایت باحساب مراجعه کنید:\n"
+        "https://www.bahesab.ir/calc/unit/"
     )
 
 
@@ -117,6 +123,11 @@ _geo_cache = {}
 
 
 async def geocode(place: str):
+    """
+    تبدیل نام مکان به مختصات.
+    اولویت: Google Maps Geocoding API (اگر کلید موجود باشد) → Nominatim → Photon
+    پشتیبانی از همه شهرها و کشورهای جهان.
+    """
     place = (place or "").strip()
     if not place:
         return None
@@ -126,9 +137,34 @@ async def geocode(place: str):
 
     headers = {"User-Agent": "ALIMJBot/2.1 (telegram-bot)"}
     try:
+        from bot.config import config
         async with httpx.AsyncClient(timeout=15.0, headers=headers, follow_redirects=True) as client:
             data = []
-            # 1) Nominatim
+
+            # 1) Google Maps Geocoding API (بهترین پوشش جهانی)
+            gkey = getattr(config, "GOOGLE_MAPS_API_KEY", "") or ""
+            if gkey:
+                try:
+                    r = await client.get(
+                        "https://maps.googleapis.com/maps/api/geocode/json",
+                        params={"address": place, "key": gkey, "language": "fa"},
+                    )
+                    if r.status_code == 200:
+                        js = r.json() or {}
+                        if js.get("status") == "OK" and js.get("results"):
+                            res = js["results"][0]
+                            loc = res.get("geometry", {}).get("location") or {}
+                            lat = float(loc.get("lat", 0))
+                            lon = float(loc.get("lng", 0))
+                            name = res.get("formatted_address") or place
+                            parts = [x.strip() for x in str(name).split(",")]
+                            short = ", ".join(parts[:4]) if len(parts) > 4 else str(name)
+                            _geo_cache[key] = (lat, lon, short)
+                            return lat, lon, short
+                except Exception as e:
+                    logger.warning(f"Google geocode [{place}]: {e}")
+
+            # 2) Nominatim (OpenStreetMap) — پوشش خوب جهانی
             for q in (place, f"{place}, Iran"):
                 try:
                     r = await client.get(
@@ -141,7 +177,8 @@ async def geocode(place: str):
                             break
                 except Exception:
                     pass
-            # 2) Photon fallback
+
+            # 3) Photon fallback
             if not data:
                 try:
                     r = await client.get(
@@ -159,6 +196,7 @@ async def geocode(place: str):
                                 data.append({"lat": coords[1], "lon": coords[0], "display_name": display})
                 except Exception:
                     pass
+
             if not data:
                 return None
             best = data[0]
@@ -217,27 +255,58 @@ async def world_distance(place1: str, place2: str = None) -> str:
         if not parsed:
             return (
                 "❌ دو مکان بنویسید.\n\n"
-                "مثال:\nتهران مشهد\nتهران تا ترکیه\nParis to Tokyo"
+                "مثال:\nتهران مشهد\nتهران تا ترکیه\nParis to Tokyo\nNew York to London"
             )
         place1, place2 = parsed
 
     g1, g2 = await asyncio.gather(geocode(place1), geocode(place2))
     if not g1:
-        return f"❌ «{place1}» پیدا نشد.\nفارسی یا انگلیسی بنویسید (مثال: Tehran)"
+        return f"❌ «{place1}» پیدا نشد.\nنام شهر یا کشور را فارسی یا انگلیسی بنویسید (همه شهرها و کشورها پشتیبانی می‌شوند)."
     if not g2:
-        return f"❌ «{place2}» پیدا نشد.\nفارسی یا انگلیسی بنویسید (مثال: Turkey)"
+        return f"❌ «{place2}» پیدا نشد.\nنام شهر یا کشور را فارسی یا انگلیسی بنویسید (همه شهرها و کشورها پشتیبانی می‌شوند)."
 
     lat1, lon1, n1 = g1
     lat2, lon2, n2 = g2
     km = haversine(lat1, lon1, lat2, lon2)
+
+    # اگر کلید Google موجود باشد، فاصله و زمان واقعی رانندگی را هم بگیر
+    driving_info = ""
+    try:
+        from bot.config import config
+        gkey = getattr(config, "GOOGLE_MAPS_API_KEY", "") or ""
+        if gkey:
+            async with httpx.AsyncClient(timeout=12.0) as client:
+                r = await client.get(
+                    "https://maps.googleapis.com/maps/api/distancematrix/json",
+                    params={
+                        "origins": f"{lat1},{lon1}",
+                        "destinations": f"{lat2},{lon2}",
+                        "mode": "driving",
+                        "language": "fa",
+                        "units": "metric",
+                        "key": gkey,
+                    },
+                )
+                if r.status_code == 200:
+                    js = r.json() or {}
+                    el = ((js.get("rows") or [{}])[0].get("elements") or [{}])[0]
+                    if el.get("status") == "OK":
+                        dist_txt = (el.get("distance") or {}).get("text", "")
+                        dur_txt = (el.get("duration") or {}).get("text", "")
+                        if dist_txt or dur_txt:
+                            driving_info = f"\n🚗 فاصله جاده‌ای (گوگل مپ): {dist_txt} — زمان تقریبی: {dur_txt}\n"
+    except Exception as e:
+        logger.warning(f"Distance Matrix: {e}")
+
     return (
         f"🗺 فاصله جهانی\n\n"
         f"از: {n1}\n"
         f"تا: {n2}\n\n"
-        f"📏 فاصله مستقیم: {pn(f'{km:,.1f}')} کیلومتر\n\n"
-        f"🚗 خودرو: {_fmt_duration(km / 80)}\n"
+        f"📏 فاصله مستقیم (خط هوایی): {pn(f'{km:,.1f}')} کیلومتر\n"
+        f"{driving_info}"
+        f"\n🚗 خودرو (تقریبی): {_fmt_duration(km / 80)}\n"
         f"🚲 دوچرخه: {_fmt_duration(km / 18)}\n"
         f"🚶 پیاده: {_fmt_duration(km / 5)}\n"
         f"✈️ هواپیما: {_fmt_duration(km / 800 + 0.5)}\n\n"
-        f"⚠️ فاصله خط مستقیم است."
+        f"✅ پشتیبانی از همه شهرها و کشورهای جهان"
     )
