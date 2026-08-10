@@ -1,14 +1,35 @@
-"""مبدل فونت — پشتیبانی بیش از ۵۰ استایل یونیکد"""
-from .styles import STYLES, FONT_NAMES, PERSIAN_COMPATIBLE
+"""مبدل فونت — فارسی / انگلیسی / همه فونت‌ها"""
+from .styles import STYLES, FONT_NAMES
 import random
+import re
+
+# فونت‌های مناسب انگلیسی (unicode fancy)
+EN_STYLES = [
+    "bold", "italic", "bold_italic", "script", "bold_script", "fraktur", "bold_fraktur",
+    "double", "monospace", "sans", "sans_bold", "sans_italic", "sans_bold_italic",
+    "fullwidth", "circled", "small_caps", "superscript", "subscript", "upside_down",
+    "strikethrough", "underline", "spaced", "reverse",
+]
+
+# فونت‌های سازگار با فارسی (combining marks + spaced)
+FA_STYLES = [
+    "strikethrough", "underline", "overline", "double_underline", "slash", "dots",
+    "zigzag", "bridge", "spaced", "double_spaced", "reverse",
+    "clap", "heart", "star", "fire", "sparkle", "wave", "rainbow", "moon", "sun", "flower",
+]
 
 
 def list_fonts() -> str:
     lines = ["🎨 **لیست فونت‌ها**\n"]
-    lines.append("برای استفاده: فونت را انتخاب کنید سپس متن بفرستید.\n")
-    for i, (key, name) in enumerate(FONT_NAMES.items(), 1):
-        lines.append(f"{i}. `{key}` → {name}")
-    lines.append("\n📌 مثال: بعد از انتخاب فونت، بنویسید:\n`سلام دنیا` یا `Hello World`")
+    lines.append("🇬🇧 انگلیسی:")
+    for k in EN_STYLES:
+        if k in FONT_NAMES:
+            lines.append(f"• `{k}` — {FONT_NAMES[k]}")
+    lines.append("\n🇮🇷 فارسی / تزئینی:")
+    for k in FA_STYLES:
+        if k in FONT_NAMES:
+            lines.append(f"• `{k}` — {FONT_NAMES[k]}")
+    lines.append("\n📌 بعد از انتخاب فونت، متن را بفرستید.")
     return "\n".join(lines)
 
 
@@ -19,14 +40,11 @@ def get_font_preview(style_key: str = None) -> str:
         en = _apply(sample_en, style_key)
         fa = _apply(sample_fa, style_key)
         return f"🎨 **پیش‌نمایش `{style_key}`**\n\nانگلیسی:\n{en}\n\nفارسی:\n{fa}"
-    # چند نمونه تصادفی
     keys = list(STYLES.keys())
     random.shuffle(keys)
-    lines = ["🎨 **چند نمونه فونت**\n"]
-    for k in keys[:8]:
-        name = FONT_NAMES.get(k, k)
-        en = _apply(sample_en, k)
-        lines.append(f"**{name}**\n{en}\n")
+    lines = ["🎨 **چند نمونه**\n"]
+    for k in keys[:6]:
+        lines.append(f"**{FONT_NAMES.get(k, k)}**\n{_apply(sample_en, k)}\n")
     return "\n".join(lines)
 
 
@@ -36,21 +54,16 @@ def _apply(text: str, style_key: str) -> str:
         return text
     if callable(style):
         return style(text)
-    # str.maketrans returns a mapping with int ordinals
     if isinstance(style, dict) and style and all(isinstance(k, int) for k in style.keys()):
         return text.translate(style)
-    # char -> char dict
-    result = []
-    for ch in text:
-        result.append(style.get(ch, ch))
-    return "".join(result)
+    return "".join(style.get(ch, ch) for ch in text)
 
 
 def apply_font(text: str, style_key: str) -> str:
     if not text or not text.strip():
         return "❌ متن خالی است."
     if style_key not in STYLES:
-        return f"❌ فونت «{style_key}» پیدا نشد.\nاز لیست فونت‌ها یکی انتخاب کنید."
+        return f"❌ فونت «{style_key}» پیدا نشد."
     converted = _apply(text, style_key)
     name = FONT_NAMES.get(style_key, style_key)
     return (
@@ -59,3 +72,30 @@ def apply_font(text: str, style_key: str) -> str:
         f"━━━━━━━━━━━━━━━━━━━━\n"
         f"متن اصلی: {text}"
     )
+
+
+def _is_mostly_persian(text: str) -> bool:
+    fa = len(re.findall(r"[\u0600-\u06FF]", text))
+    en = len(re.findall(r"[A-Za-z]", text))
+    return fa >= en
+
+
+def apply_all_fonts(text: str) -> str:
+    """اعمال همه فونت‌های مرتبط (هوشمند فارسی/انگلیسی)"""
+    if not text or not text.strip():
+        return "❌ متن خالی است."
+    text = text.strip()
+    if len(text) > 80:
+        text = text[:80]
+    keys = FA_STYLES if _is_mostly_persian(text) else EN_STYLES
+    lines = [f"🎨 **همه فونت‌ها** روی:\n`{text}`\n"]
+    for k in keys:
+        if k not in STYLES:
+            continue
+        try:
+            conv = _apply(text, k)
+            name = FONT_NAMES.get(k, k)
+            lines.append(f"**{name}**\n{conv}\n")
+        except Exception:
+            continue
+    return "\n".join(lines)
