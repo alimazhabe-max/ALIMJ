@@ -1,111 +1,89 @@
-"""
-ابزارهای کاربردی — واحد، ماشین‌حساب، پسورد، شمارش، BMI، یادآوری، یادداشت
-"""
+"""ابزارها — تبدیل واحد، ماشین‌حساب، پسورد، شمارش متن، یادداشت"""
 import re
 import random
 import string
-import math
-from datetime import datetime, timedelta
-import jdatetime
-import pytz
-from bot.config import config
-
-tehran_tz = pytz.timezone(config.TIMEZONE)
-
+import secrets
 
 def pn(n):
     return str(n).translate(str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹"))
 
 
-# ── ۲۶. تبدیل واحد ──
-UNIT_CONV = {
-    # طول → متر
-    "km": 1000, "کیلومتر": 1000, "m": 1, "متر": 1,
-    "cm": 0.01, "سانتی‌متر": 0.01, "mm": 0.001, "میلی‌متر": 0.001,
-    "mile": 1609.34, "مایل": 1609.34, "ft": 0.3048, "فوت": 0.3048,
-    "inch": 0.0254, "اینچ": 0.0254,
-    # وزن → گرم
-    "kg": 1000, "کیلوگرم": 1000, "کیلو": 1000, "g": 1, "گرم": 1,
-    "mg": 0.001, "میلی‌گرم": 0.001, "lb": 453.592, "پوند": 453.592,
-    "oz": 28.3495, "اونس": 28.3495,
-    # حجم → لیتر
-    "l": 1, "لیتر": 1, "ml": 0.001, "میلی‌لیتر": 0.001,
-    "gal": 3.78541, "گالن": 3.78541,
-}
-
-TEMP_UNITS = {"c", "f", "k", "سلسیوس", "فارنهایت", "کلوین", "°c", "°f"}
+# ——— تبدیل واحد ———
+LENGTH = {"m": 1, "meter": 1, "متر": 1, "km": 1000, "کیلومتر": 1000, "cm": 0.01, "سانتی‌متر": 0.01, "سانتیمتر": 0.01,
+          "mm": 0.001, "mile": 1609.34, "مایل": 1609.34, "yard": 0.9144, "foot": 0.3048, "ft": 0.3048, "inch": 0.0254}
+WEIGHT = {"kg": 1, "کیلو": 1, "کیلوگرم": 1, "g": 0.001, "گرم": 0.001, "mg": 1e-6, "ton": 1000, "تن": 1000,
+          "lb": 0.453592, "pound": 0.453592, "oz": 0.0283495}
+VOLUME = {"l": 1, "liter": 1, "لیتر": 1, "ml": 0.001, "میلی‌لیتر": 0.001, "m3": 1000, "gal": 3.78541}
+TEMP = {"c", "f", "k", "سانتیگراد", "فارنهایت", "کلوین", "celsius", "fahrenheit", "kelvin"}
 
 
 def convert_unit(amount: float, from_u: str, to_u: str) -> str:
     fu, tu = from_u.lower().strip(), to_u.lower().strip()
     # دما
-    if fu in TEMP_UNITS or tu in TEMP_UNITS:
+    if fu in TEMP or tu in TEMP:
         return _temp_convert(amount, fu, tu)
-    if fu not in UNIT_CONV or tu not in UNIT_CONV:
-        return (
-            "❌ واحد نامعتبر.\n"
-            "طول: km m cm mile ft inch\n"
-            "وزن: kg g lb oz\n"
-            "حجم: l ml gal\n"
-            "دما: C F K\n"
-            "مثال: `10 km mile`"
-        )
-    # گروه یکسان؟
-    base = amount * UNIT_CONV[fu]
-    result = base / UNIT_CONV[tu]
-    return f"📐 **{pn(amount)} {from_u}** = **{pn(f'{result:.6g}')} {to_u}**"
+    for table, name in ((LENGTH, "طول"), (WEIGHT, "وزن"), (VOLUME, "حجم")):
+        if fu in table and tu in table:
+            base = amount * table[fu]
+            result = base / table[tu]
+            return f"📐 **تبدیل {name}**\n\n{pn(amount)} {from_u} = **{pn(f'{result:,.6g}')} {to_u}**"
+    return (
+        "❌ واحد پشتیبانی نمی‌شود.\n\n"
+        "مثال: `10 km m` یا `5 kg g` یا `100 c f`\n"
+        "طول: m, km, cm, mile, ft\n"
+        "وزن: kg, g, lb, ton\n"
+        "حجم: l, ml, gal\n"
+        "دما: c, f, k"
+    )
 
 
 def _temp_convert(val, fu, tu):
     # به سلسیوس
-    if fu in ("f", "فارنهایت", "°f"):
+    if fu in ("c", "celsius", "سانتیگراد"):
+        c = val
+    elif fu in ("f", "fahrenheit", "فارنهایت"):
         c = (val - 32) * 5 / 9
-    elif fu in ("k", "کلوین"):
+    elif fu in ("k", "kelvin", "کلوین"):
         c = val - 273.15
     else:
-        c = val
-    if tu in ("f", "فارنهایت", "°f"):
+        return "❌ واحد دما نامعتبر"
+    if tu in ("c", "celsius", "سانتیگراد"):
+        r = c
+    elif tu in ("f", "fahrenheit", "فارنهایت"):
         r = c * 9 / 5 + 32
-        return f"🌡 {pn(val)}° → **{pn(f'{r:.2f}')}°F**"
-    if tu in ("k", "کلوین"):
+    elif tu in ("k", "kelvin", "کلوین"):
         r = c + 273.15
-        return f"🌡 {pn(val)}° → **{pn(f'{r:.2f}')} K**"
-    return f"🌡 {pn(val)}° → **{pn(f'{c:.2f}')}°C**"
+    else:
+        return "❌ واحد دما نامعتبر"
+    return f"🌡 **تبدیل دما**\n\n{pn(val)} {fu} = **{pn(f'{r:,.2f}')} {tu}**"
 
 
 def parse_unit(text: str):
-    n = text.translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹", "0123456789"))
-    m = re.match(r"([\d.]+)\s*(\S+)\s+(\S+)", n.strip())
+    t = text.strip().translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789"))
+    m = re.match(r"([\d.]+)\s*([a-zA-Zآ-ی‌]+)\s+([a-zA-Zآ-ی‌]+)", t)
     if m:
         return float(m.group(1)), m.group(2), m.group(3)
     return None
 
 
-# ── ۲۷. ماشین‌حساب ──
-SAFE_MATH = re.compile(r"^[\d\s\+\-\*\/\.\(\)\%\^]+$")
-
-
 def calculator(expr: str) -> str:
-    expr = expr.translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹×÷", "0123456789*/")).strip()
-    expr = expr.replace("^", "**").replace("%", "/100*")
-    if not SAFE_MATH.match(expr.replace("**", "")):
-        return "❌ فقط اعداد و + - * / ( ) مجاز است."
+    t = expr.translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩×÷", "01234567890123456789*/"))
+    t = re.sub(r"[^0-9+\-*/().%\s]", "", t)
     try:
-        result = eval(expr, {"__builtins__": {}}, {})
-        return f"🔢 **{expr}** = **{pn(f'{result:,.10g}')}**"
+        # امن
+        result = eval(t, {"__builtins__": {}}, {})
+        return f"🔢 **نتیجه:** {pn(result)}"
     except Exception:
-        return "❌ عبارت نامعتبر."
+        return "❌ عبارت نامعتبر. مثال: `2+3*4` یا `(10-2)/4`"
 
 
-# ── ۲۸. پسورد ──
 def generate_password(length: int = 12) -> str:
-    length = max(6, min(length, 64))
-    chars = string.ascii_letters + string.digits + "!@#$%&*"
-    pwd = "".join(random.choice(chars) for _ in range(length))
-    return f"🔐 **پسورد تصادفی** ({pn(length)} کاراکتر)\n\n`{pwd}`\n\n⚠️ این پیام را پاک کنید."
+    length = max(6, min(64, length))
+    alphabet = string.ascii_letters + string.digits + "!@#$%&*"
+    pwd = "".join(secrets.choice(alphabet) for _ in range(length))
+    return pwd
 
 
-# ── ۲۹. شمارش متن ──
 def count_text(text: str) -> str:
     chars = len(text)
     chars_no_space = len(text.replace(" ", "").replace("\n", ""))
@@ -113,40 +91,85 @@ def count_text(text: str) -> str:
     lines = text.count("\n") + 1
     return (
         f"📝 **شمارش متن**\n\n"
-        f"• کاراکتر (با فاصله): {pn(chars)}\n"
-        f"• کاراکتر (بدون فاصله): {pn(chars_no_space)}\n"
-        f"• کلمه: {pn(words)}\n"
-        f"• خط: {pn(lines)}"
+        f"کاراکتر (با فاصله): {pn(chars)}\n"
+        f"کاراکتر (بدون فاصله): {pn(chars_no_space)}\n"
+        f"کلمه: {pn(words)}\n"
+        f"خط: {pn(lines)}"
     )
 
 
-# ── ۳۰. BMI ──
-def bmi_calc(weight_kg: float, height_cm: float) -> str:
-    if weight_kg <= 0 or height_cm <= 0:
-        return "❌ وزن و قد باید مثبت باشند."
-    h = height_cm / 100
-    bmi = weight_kg / (h * h)
-    if bmi < 18.5:
-        status = "کمبود وزن"
-    elif bmi < 25:
-        status = "نرمال ✅"
-    elif bmi < 30:
-        status = "اضافه وزن"
-    else:
-        status = "چاقی"
-    # کالری تقریبی پایه (مرد، ۳۰ ساله، کم‌تحرک - فرمول ساده)
-    bmr = 10 * weight_kg + 6.25 * height_cm - 5 * 30 + 5  # مرد
-    return (
-        f"⚖️ **BMI و کالری**\n\n"
-        f"وزن: {pn(weight_kg)} kg | قد: {pn(height_cm)} cm\n"
-        f"BMI: **{pn(f'{bmi:.1f}')}** → {status}\n\n"
-        f"🔥 کالری پایه تقریبی (BMR): ~{pn(f'{bmr:.0f}')} kcal/روز\n"
-        f"(بستگی به سن، جنسیت و فعالیت دارد)"
-    )
+# ——— فاصله جهانی ———
+import math
+import httpx
+from bot.logger import logger
+
+_geo_cache = {}
 
 
-def parse_bmi(text: str):
-    nums = re.findall(r"[\d.]+", text.translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹", "0123456789")))
-    if len(nums) >= 2:
-        return float(nums[0]), float(nums[1])
+async def geocode(place: str):
+    key = place.strip().lower()
+    if key in _geo_cache:
+        return _geo_cache[key]
+    try:
+        async with httpx.AsyncClient(timeout=8.0, headers={"User-Agent": "ALIMJBot/1.0"}) as c:
+            r = await c.get(
+                "https://nominatim.openstreetmap.org/search",
+                params={"q": place, "format": "json", "limit": 1},
+            )
+            data = r.json()
+            if data:
+                lat, lon = float(data[0]["lat"]), float(data[0]["lon"])
+                name = data[0].get("display_name", place)[:60]
+                _geo_cache[key] = (lat, lon, name)
+                return lat, lon, name
+    except Exception as e:
+        logger.error(f"geocode: {e}")
     return None
+
+
+def haversine(lat1, lon1, lat2, lon2):
+    R = 6371
+    dlat = math.radians(lat2 - lat1)
+    dlon = math.radians(lon2 - lon1)
+    a = math.sin(dlat / 2) ** 2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon / 2) ** 2
+    return R * 2 * math.asin(math.sqrt(a))
+
+
+def _fmt_duration(hours: float) -> str:
+    if hours < 1:
+        return f"{int(hours * 60)} دقیقه"
+    h = int(hours)
+    m = int((hours - h) * 60)
+    if h >= 24:
+        d = h // 24
+        h = h % 24
+        return f"{d} روز و {h} ساعت"
+    return f"{h} ساعت و {m} دقیقه" if m else f"{h} ساعت"
+
+
+async def world_distance(place1: str, place2: str) -> str:
+    g1 = await geocode(place1)
+    g2 = await geocode(place2)
+    if not g1:
+        return f"❌ مکان «{place1}» پیدا نشد. نام شهر/کشور را دقیق‌تر بنویسید."
+    if not g2:
+        return f"❌ مکان «{place2}» پیدا نشد."
+    lat1, lon1, n1 = g1
+    lat2, lon2, n2 = g2
+    km = haversine(lat1, lon1, lat2, lon2)
+    # سرعت تقریبی
+    car = km / 80
+    bike = km / 18
+    walk = km / 5
+    plane = km / 800 + 0.5  # + نیم‌ساعت فرودگاه
+    return (
+        f"🗺 **فاصله جهانی**\n\n"
+        f"از: {n1}\n"
+        f"تا: {n2}\n\n"
+        f"📏 فاصله مستقیم: **{pn(f'{km:,.1f}')} کیلومتر**\n\n"
+        f"🚗 با خودرو (≈۸۰km/h): {_fmt_duration(car)}\n"
+        f"🚲 با دوچرخه (≈۱۸km/h): {_fmt_duration(bike)}\n"
+        f"🚶 پیاده (≈۵km/h): {_fmt_duration(walk)}\n"
+        f"✈️ هواپیما (تقریبی): {_fmt_duration(plane)}\n\n"
+        f"⚠️ فاصله هوایی مستقیم است؛ مسیر واقعی ممکن است بیشتر باشد."
+    )
