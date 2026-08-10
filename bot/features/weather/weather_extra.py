@@ -64,8 +64,9 @@ def _get_coords(city: str):
 
 
 
+
 async def weather_forecast(city: str) -> str:
-    """پیش‌بینی ۷ روزه با Open-Meteo + fallback"""
+    """پیش‌بینی ۷ روزه — اول Open-Meteo حرفه‌ای، بعد wttr.in"""
     city = _norm_city(city) or "تهران"
     key = f"fc7_{city}"
     now = datetime.now().timestamp()
@@ -74,7 +75,6 @@ async def weather_forecast(city: str) -> str:
 
     coords = _get_coords(city)
     if not coords:
-        # geocode با nominatim
         try:
             async with httpx.AsyncClient(timeout=10.0, headers={"User-Agent": "ALIMJBot/2.0"}) as client:
                 r = await client.get(
@@ -88,13 +88,12 @@ async def weather_forecast(city: str) -> str:
             logger.error(f"geocode weather {city}: {e}")
     if not coords:
         coords = CITY_COORDS.get("تهران")
-
     lat, lon = coords
+
+    # ——— ۱) Open-Meteo حرفه‌ای (اولویت) ———
     data = None
-    last_err = None
     for attempt in range(2):
         try:
-            url = "https://api.open-meteo.com/v1/forecast"
             params = {
                 "latitude": lat,
                 "longitude": lon,
@@ -104,98 +103,101 @@ async def weather_forecast(city: str) -> str:
                 "forecast_days": 7,
             }
             async with httpx.AsyncClient(timeout=15.0) as client:
-                r = await client.get(url, params=params)
+                r = await client.get("https://api.open-meteo.com/v1/forecast", params=params)
                 r.raise_for_status()
                 data = r.json()
             break
         except Exception as e:
-            last_err = e
-            logger.error(f"forecast attempt {attempt+1} {city}: {e}")
+            logger.error(f"open-meteo forecast {attempt+1} {city}: {e}")
 
-    if not data:
-        # fallback ساده wttr.in
+    if data:
+        current = data.get("current", {})
+        daily = data.get("daily", {})
+        times = daily.get("time", [])
+        tmax = daily.get("temperature_2m_max", [])
+        tmin = daily.get("temperature_2m_min", [])
+        codes = daily.get("weather_code") or daily.get("weathercode") or []
+        precip = daily.get("precipitation_sum", [])
+        wind = daily.get("windspeed_10m_max") or daily.get("wind_speed_10m_max") or []
+        uv = daily.get("uv_index_max", [])
+
+        cur_temp = current.get("temperature_2m", "?")
+        cur_hum = current.get("relative_humidity_2m", "?")
+        cur_code = current.get("weather_code") or current.get("weathercode") or 0
         try:
-            async with httpx.AsyncClient(timeout=12.0) as client:
-                r = await client.get(f"https://wttr.in/{city}?format=j1")
-                if r.status_code == 200:
-                    j = r.json()
-                    cur = j["current_condition"][0]
-                    days = j.get("weather", [])[:7]
-                    lines = [
-                        f"🌤 پیش‌بینی هوای {city}",
-                        f"📍 الان: {pn(cur.get('temp_C','?'))}°C — {cur.get('weatherDesc',[{}])[0].get('value','')}",
-                        f"💧 رطوبت: {pn(cur.get('humidity','?'))}%",
-                        "━━━━━━━━━━━━━━━━━━━━",
-                    ]
-                    names = ["امروز", "فردا", "پس‌فردا", "روز ۴", "روز ۵", "روز ۶", "روز ۷"]
-                    for i, d in enumerate(days):
-                        mx = d.get("maxtempC", "?")
-                        mn = d.get("mintempC", "?")
-                        desc = ""
-                        try:
-                            desc = d["hourly"][4]["weatherDesc"][0]["value"]
-                        except Exception:
-                            pass
-                        lines.append(f"• {names[i]}: {pn(mn)}° ~ {pn(mx)}°  {desc}")
-                    result = "\n".join(lines)
-                    _cache[key] = result
-                    _cache_t[key] = now
-                    return result
-        except Exception as e:
-            logger.error(f"wttr fallback {city}: {e}")
-        return (
-            f"❌ پیش‌بینی هوای {city} موقتاً در دسترس نیست.\n"
-            "لطفاً چند لحظه بعد دوباره امتحان کنید."
-        )
-
-    current = data.get("current", {})
-    daily = data.get("daily", {})
-    times = daily.get("time", [])
-    tmax = daily.get("temperature_2m_max", [])
-    tmin = daily.get("temperature_2m_min", [])
-    codes = daily.get("weather_code") or daily.get("weathercode") or []
-    precip = daily.get("precipitation_sum", [])
-    wind = daily.get("windspeed_10m_max") or daily.get("wind_speed_10m_max") or []
-    uv = daily.get("uv_index_max", [])
-
-    cur_temp = current.get("temperature_2m", "?")
-    cur_hum = current.get("relative_humidity_2m", "?")
-    cur_code = current.get("weather_code") or current.get("weathercode") or 0
-    cur_wind = current.get("wind_speed_10m", "?")
-    cur_desc = WEATHER_CODES.get(int(cur_code) if str(cur_code).isdigit() else 0, "نامشخص")
-
-    lines = [
-        f"🌤 پیش‌بینی هوای {city} (۷ روزه)\n",
-        f"📍 الان: {pn(cur_temp)}°C  {cur_desc}",
-        f"💧 رطوبت: {pn(cur_hum)}%  |  💨 باد: {pn(cur_wind)} km/h\n",
-        "━━━━━━━━━━━━━━━━━━━━",
-    ]
-
-    day_names = ["امروز", "فردا", "پس‌فردا", "روز ۴", "روز ۵", "روز ۶", "روز ۷"]
-    for i in range(min(7, len(times))):
-        d = times[i][5:] if times[i] else ""
-        mx = tmax[i] if i < len(tmax) else "?"
-        mn = tmin[i] if i < len(tmin) else "?"
-        code = codes[i] if i < len(codes) else 0
-        try:
-            code = int(code)
+            cur_code = int(cur_code)
         except Exception:
-            code = 0
-        desc = WEATHER_CODES.get(code, "")
-        pr = precip[i] if i < len(precip) else 0
-        wd = wind[i] if i < len(wind) else "?"
-        u = uv[i] if i < len(uv) else "?"
-        rain = f"  |  🌧 {pn(pr)}mm" if pr and float(pr) > 0 else ""
-        lines.append(
-            f"• {day_names[i]} ({d})\n"
-            f"  {pn(mn)}° ~ {pn(mx)}°  {desc}\n"
-            f"  💨 {pn(wd)} km/h  |  ☀️ UV {pn(u)}{rain}"
-        )
+            cur_code = 0
+        cur_wind = current.get("wind_speed_10m", "?")
+        cur_desc = WEATHER_CODES.get(cur_code, "نامشخص")
 
-    result = "\n".join(lines)
-    _cache[key] = result
-    _cache_t[key] = now
-    return result
+        lines = [
+            f"🌤 پیش‌بینی هوای {city} (۷ روزه)",
+            "",
+            f"📍 الان: {pn(cur_temp)}°C  {cur_desc}",
+            f"💧 رطوبت: {pn(cur_hum)}%  |  💨 باد: {pn(cur_wind)} km/h",
+            "━━━━━━━━━━━━━━━━━━━━",
+        ]
+        day_names = ["امروز", "فردا", "پس‌فردا", "روز ۴", "روز ۵", "روز ۶", "روز ۷"]
+        for i in range(min(7, len(times))):
+            d = times[i][5:] if times[i] else ""
+            mx = tmax[i] if i < len(tmax) else "?"
+            mn = tmin[i] if i < len(tmin) else "?"
+            code = codes[i] if i < len(codes) else 0
+            try:
+                code = int(code)
+            except Exception:
+                code = 0
+            desc = WEATHER_CODES.get(code, "")
+            pr = precip[i] if i < len(precip) else 0
+            wd = wind[i] if i < len(wind) else "?"
+            u = uv[i] if i < len(uv) else "?"
+            rain = f"  |  🌧 {pn(pr)}mm" if pr and float(pr) > 0 else ""
+            lines.append(f"• {day_names[i]} ({d})")
+            lines.append(f"  {pn(mn)}° ~ {pn(mx)}°  {desc}")
+            lines.append(f"  💨 {pn(wd)} km/h  |  ☀️ UV {pn(u)}{rain}")
+
+        result = "\n".join(lines)
+        _cache[key] = result
+        _cache_t[key] = now
+        return result
+
+    # ——— ۲) fallback: wttr.in هفت‌روزه ———
+    try:
+        async with httpx.AsyncClient(timeout=12.0) as client:
+            r = await client.get(f"https://wttr.in/{city}?format=j1")
+            if r.status_code == 200:
+                j = r.json()
+                cur = j["current_condition"][0]
+                days = j.get("weather", [])[:7]
+                lines = [
+                    f"🌤 پیش‌بینی هوای {city} (۷ روزه)",
+                    "",
+                    f"📍 الان: {pn(cur.get('temp_C','?'))}°C — {cur.get('weatherDesc',[{}])[0].get('value','')}",
+                    f"💧 رطوبت: {pn(cur.get('humidity','?'))}%",
+                    "━━━━━━━━━━━━━━━━━━━━",
+                ]
+                names = ["امروز", "فردا", "پس‌فردا", "روز ۴", "روز ۵", "روز ۶", "روز ۷"]
+                for i, d in enumerate(days):
+                    mx = d.get("maxtempC", "?")
+                    mn = d.get("mintempC", "?")
+                    desc = ""
+                    try:
+                        desc = d["hourly"][4]["weatherDesc"][0]["value"]
+                    except Exception:
+                        pass
+                    lines.append(f"• {names[i]}: {pn(mn)}° ~ {pn(mx)}°  {desc}")
+                result = "\n".join(lines)
+                _cache[key] = result
+                _cache_t[key] = now
+                return result
+    except Exception as e:
+        logger.error(f"wttr fallback {city}: {e}")
+
+    return (
+        f"❌ پیش‌بینی هوای {city} موقتاً در دسترس نیست.\n"
+        "لطفاً چند لحظه بعد دوباره امتحان کنید."
+    )
 
 
 
