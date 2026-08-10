@@ -7,28 +7,31 @@ from bot.logger import logger
 from bot.database import get_user, save_user, get_user_language
 from bot.utils.texts import TEXTS
 
+# پیام‌های عادی: حداکثر ۶۰ در دقیقه
 user_requests = defaultdict(list)
+# /start جدا: حداکثر ۱۰ در دقیقه
+start_requests = defaultdict(list)
+
 
 async def rate_limit_middleware(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
-    """محدودیت نرخ درخواست‌ها — پیش‌فرض ۶۰ در دقیقه (قابل تنظیم با RATE_LIMIT)"""
+    """
+    هر کاربر: حداکثر ۶۰ پیام در دقیقه
+    بعد از رسیدن به سقف: ۵ ثانیه صبر
+    """
     if not update.effective_user:
         return True
 
     user_id = update.effective_user.id
 
-    # ادمین‌ها محدودیت ندارند
     if user_id in getattr(config, "ADMIN_IDS", []):
         return True
 
     now = time.time()
-    # فقط درخواست‌های ۶۰ ثانیه اخیر را نگه دار
     user_requests[user_id] = [t for t in user_requests[user_id] if now - t < 60]
 
     limit = getattr(config, "RATE_LIMIT", 60)
     if len(user_requests[user_id]) >= limit:
-        remaining = 60 - int(now - user_requests[user_id][0]) if user_requests[user_id] else 5
-        remaining = max(1, min(remaining, 60))
-        text = f"⏳ کمی سریع زدید.\nلطفاً حدود {remaining} ثانیه صبر کنید و دوباره امتحان کنید."
+        text = "⏳ به سقف ۶۰ پیام در دقیقه رسیدی.\nلطفاً ۵ ثانیه صبر کن و دوباره بفرست."
         try:
             if update.message:
                 await update.message.reply_text(text)
@@ -42,12 +45,39 @@ async def rate_limit_middleware(update: Update, context: ContextTypes.DEFAULT_TY
     user_requests[user_id].append(now)
     return True
 
+
+async def start_rate_limit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    """حداکثر ۱۰ بار /start در دقیقه"""
+    if not update.effective_user:
+        return True
+
+    user_id = update.effective_user.id
+    if user_id in getattr(config, "ADMIN_IDS", []):
+        return True
+
+    now = time.time()
+    start_requests[user_id] = [t for t in start_requests[user_id] if now - t < 60]
+    limit = getattr(config, "START_RATE_LIMIT", 10)
+
+    if len(start_requests[user_id]) >= limit:
+        text = "⏳ بیش از ۱۰ بار /start در یک دقیقه.\nلطفاً کمی صبر کن."
+        try:
+            if update.message:
+                await update.message.reply_text(text)
+        except Exception:
+            pass
+        logger.warning(f"Start rate limit for user {user_id}")
+        return False
+
+    start_requests[user_id].append(now)
+    return True
+
+
 async def check_membership(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
     """بررسی عضویت کاربر در کانال اجباری"""
     if not update.effective_user:
         return False
     user_id = update.effective_user.id
-    # ادمین از عضویت معاف
     if user_id in getattr(config, "ADMIN_IDS", []):
         return True
     try:
@@ -56,12 +86,11 @@ async def check_membership(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             return True
     except Exception as e:
         logger.error(f"Membership check failed for {user_id}: {e}")
-        # در صورت خطای API کانال، اجازه بده (تا ربات گیر نکند)
         return True
     return False
 
+
 async def ensure_user_registered(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """ثبت کاربر در دیتابیس در صورت عدم وجود"""
     if not update.effective_user:
         return
     user = update.effective_user
@@ -69,16 +98,14 @@ async def ensure_user_registered(update: Update, context: ContextTypes.DEFAULT_T
         save_user(user.id, user.first_name or "کاربر")
         logger.info(f"New user registered: {user.id}")
 
+
 async def check_and_rate_limit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
-    """
-    تابع کمکی برای استفاده در هر هندلر (به جز /start)
-    """
+    """عضویت + محدودیت ۶۰ پیام/دقیقه (برای همه به‌جز منطق جداگانه استارت)"""
     if not update.effective_user:
         return False
 
     await ensure_user_registered(update, context)
 
-    # بررسی عضویت (برای همه به جز /start)
     is_start = (
         update.message
         and update.message.text
@@ -100,7 +127,7 @@ async def check_and_rate_limit(update: Update, context: ContextTypes.DEFAULT_TYP
                     pass
             return False
 
-    if not await rate_limit_middleware(update, context):
-        return False
+        if not await rate_limit_middleware(update, context):
+            return False
 
     return True

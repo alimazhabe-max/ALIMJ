@@ -1,5 +1,5 @@
 from telegram import Update
-from bot.handlers.middleware import check_and_rate_limit
+from bot.handlers.middleware import check_and_rate_limit, start_rate_limit
 from telegram.ext import ContextTypes
 from bot.database import (
     save_user,
@@ -23,6 +23,8 @@ import asyncio
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await start_rate_limit(update, context):
+        return
     user = update.effective_user
     user_id = user.id
     first_name = user.first_name or "کاربر"
