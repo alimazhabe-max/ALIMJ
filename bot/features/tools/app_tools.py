@@ -97,8 +97,7 @@ def count_text(text: str) -> str:
         f"خط: {pn(lines)}"
     )
 
-
-# ——— فاصله جهانی ———
+# ——— فاصله جهانی (شهر↔شهر / شهر↔کشور) ———
 import math
 import httpx
 from bot.logger import logger
@@ -107,69 +106,136 @@ _geo_cache = {}
 
 
 async def geocode(place: str):
+    """جستجوی مختصات مکان (شهر یا کشور) با Nominatim"""
     key = place.strip().lower()
+    if not key:
+        return None
     if key in _geo_cache:
         return _geo_cache[key]
     try:
-        async with httpx.AsyncClient(timeout=8.0, headers={"User-Agent": "ALIMJBot/1.0"}) as c:
-            r = await c.get(
+        async with httpx.AsyncClient(timeout=10.0, headers={"User-Agent": "ALIMJBot/1.0"}) as client:
+            r = await client.get(
                 "https://nominatim.openstreetmap.org/search",
-                params={"q": place, "format": "json", "limit": 1},
+                params={
+                    "q": place,
+                    "format": "json",
+                    "limit": 3,
+                    "addressdetails": 1,
+                },
             )
             data = r.json()
-            if data:
-                lat, lon = float(data[0]["lat"]), float(data[0]["lon"])
-                name = data[0].get("display_name", place)[:60]
-                _geo_cache[key] = (lat, lon, name)
-                return lat, lon, name
+            if not data:
+                return None
+            # ترجیح: city/town، بعد country
+            best = data[0]
+            for item in data:
+                t = (item.get("type") or "") + " " + (item.get("class") or "")
+                if any(x in t for x in ("city", "town", "village", "municipality", "province", "state")):
+                    best = item
+                    break
+            lat, lon = float(best["lat"]), float(best["lon"])
+            name = best.get("display_name", place)
+            # کوتاه‌کردن نام
+            parts = [x.strip() for x in name.split(",")]
+            short = ", ".join(parts[:3]) if len(parts) > 3 else name
+            _geo_cache[key] = (lat, lon, short)
+            return lat, lon, short
     except Exception as e:
-        logger.error(f"geocode: {e}")
+        logger.error(f"geocode [{place}]: {e}")
     return None
 
 
 def haversine(lat1, lon1, lat2, lon2):
-    R = 6371
+    R = 6371.0
     dlat = math.radians(lat2 - lat1)
     dlon = math.radians(lon2 - lon1)
-    a = math.sin(dlat / 2) ** 2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon / 2) ** 2
-    return R * 2 * math.asin(math.sqrt(a))
+    a = (
+        math.sin(dlat / 2) ** 2
+        + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon / 2) ** 2
+    )
+    return R * 2 * math.asin(math.sqrt(min(1.0, a)))
 
 
 def _fmt_duration(hours: float) -> str:
+    if hours < 0.01:
+        return "کمتر از ۱ دقیقه"
     if hours < 1:
         return f"{int(hours * 60)} دقیقه"
     h = int(hours)
     m = int((hours - h) * 60)
     if h >= 24:
         d = h // 24
-        h = h % 24
-        return f"{d} روز و {h} ساعت"
+        h2 = h % 24
+        return f"{d} روز و {h2} ساعت" if h2 else f"{d} روز"
     return f"{h} ساعت و {m} دقیقه" if m else f"{h} ساعت"
 
 
-async def world_distance(place1: str, place2: str) -> str:
+def parse_two_places(text: str):
+    """پارس دو مکان از متن کاربر
+    پشتیبانی:
+      تهران مشهد
+      تهران تا استانبول
+      تهران - ترکیه
+      Paris to Tokyo
+      تهران، آلمان
+    """
+    t = text.strip()
+    if not t:
+        return None
+    # جداکننده‌های رایج
+    for sep in [" تا ", " to ", " - ", " – ", " — ", "،", ",", "\t"]:
+        if sep in t:
+            parts = [p.strip() for p in t.split(sep, 1)]
+            if len(parts) == 2 and parts[0] and parts[1]:
+                return parts[0], parts[1]
+    parts = t.split()
+    if len(parts) >= 2:
+        # اگر ۳+ کلمه: نصف کن
+        mid = len(parts) // 2
+        return " ".join(parts[:mid]), " ".join(parts[mid:])
+    return None
+
+
+async def world_distance(place1: str, place2: str = None) -> str:
+    """فاصله شهر به شهر یا شهر به کشور یا کشور به کشور"""
+    if place2 is None:
+        parsed = parse_two_places(place1)
+        if not parsed:
+            return (
+                "❌ فرمت درست نیست.\n\n"
+                "مثال‌ها:\n"
+                "• `تهران مشهد`\n"
+                "• `تهران تا استانبول`\n"
+                "• `شیراز آلمان`\n"
+                "• `Paris to Tokyo`\n"
+                "• `اصفهان - ترکیه`"
+            )
+        place1, place2 = parsed
+
     g1 = await geocode(place1)
     g2 = await geocode(place2)
     if not g1:
-        return f"❌ مکان «{place1}» پیدا نشد. نام شهر/کشور را دقیق‌تر بنویسید."
+        return f"❌ «{place1}» پیدا نشد.\nنام شهر یا کشور را دقیق‌تر بنویسید."
     if not g2:
-        return f"❌ مکان «{place2}» پیدا نشد."
+        return f"❌ «{place2}» پیدا نشد.\nنام شهر یا کشور را دقیق‌تر بنویسید."
+
     lat1, lon1, n1 = g1
     lat2, lon2, n2 = g2
     km = haversine(lat1, lon1, lat2, lon2)
-    # سرعت تقریبی
+
     car = km / 80
     bike = km / 18
     walk = km / 5
-    plane = km / 800 + 0.5  # + نیم‌ساعت فرودگاه
+    plane = (km / 800) + 0.5
+
     return (
-        f"🗺 **فاصله جهانی**\n\n"
+        f"🗺 فاصله جهانی\n\n"
         f"از: {n1}\n"
         f"تا: {n2}\n\n"
-        f"📏 فاصله مستقیم: **{pn(f'{km:,.1f}')} کیلومتر**\n\n"
-        f"🚗 با خودرو (≈۸۰km/h): {_fmt_duration(car)}\n"
-        f"🚲 با دوچرخه (≈۱۸km/h): {_fmt_duration(bike)}\n"
+        f"📏 فاصله مستقیم: {pn(f'{km:,.1f}')} کیلومتر\n\n"
+        f"🚗 خودرو (≈۸۰km/h): {_fmt_duration(car)}\n"
+        f"🚲 دوچرخه (≈۱۸km/h): {_fmt_duration(bike)}\n"
         f"🚶 پیاده (≈۵km/h): {_fmt_duration(walk)}\n"
         f"✈️ هواپیما (تقریبی): {_fmt_duration(plane)}\n\n"
-        f"⚠️ فاصله هوایی مستقیم است؛ مسیر واقعی ممکن است بیشتر باشد."
+        f"⚠️ فاصله خط مستقیم است؛ مسیر واقعی جاده‌ای ممکن است بیشتر باشد."
     )
