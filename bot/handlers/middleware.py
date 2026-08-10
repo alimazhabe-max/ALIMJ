@@ -7,7 +7,7 @@ from bot.logger import logger
 from bot.database import get_user, save_user, get_user_language
 from bot.utils.texts import TEXTS
 
-# پیام‌های عادی: حداکثر ۶۰ در دقیقه
+# پیام‌های عادی: حداکثر ۳۰۰ در دقیقه
 user_requests = defaultdict(list)
 # /start جدا: حداکثر ۱۰ در دقیقه
 start_requests = defaultdict(list)
@@ -15,7 +15,7 @@ start_requests = defaultdict(list)
 
 async def rate_limit_middleware(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
     """
-    هر کاربر: حداکثر ۶۰ پیام در دقیقه
+    هر کاربر: حداکثر ۳۰۰ پیام در دقیقه
     بعد از رسیدن به سقف: ۵ ثانیه صبر
     """
     if not update.effective_user:
@@ -29,9 +29,9 @@ async def rate_limit_middleware(update: Update, context: ContextTypes.DEFAULT_TY
     now = time.time()
     user_requests[user_id] = [t for t in user_requests[user_id] if now - t < 60]
 
-    limit = getattr(config, "RATE_LIMIT", 60)
+    limit = getattr(config, "RATE_LIMIT", 300)
     if len(user_requests[user_id]) >= limit:
-        text = "⏳ به سقف ۶۰ پیام در دقیقه رسیدی.\nلطفاً ۵ ثانیه صبر کن و دوباره بفرست."
+        text = "⏳ به سقف ۳۰۰ پیام در دقیقه رسیدی.\nلطفاً ۵ ثانیه صبر کن و دوباره بفرست."
         try:
             if update.message:
                 await update.message.reply_text(text)
@@ -100,7 +100,7 @@ async def ensure_user_registered(update: Update, context: ContextTypes.DEFAULT_T
 
 
 async def check_and_rate_limit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
-    """عضویت + محدودیت ۶۰ پیام/دقیقه (برای همه به‌جز منطق جداگانه استارت)"""
+    """عضویت + محدودیت ۳۰۰ پیام/دقیقه (برای همه به‌جز منطق جداگانه استارت)"""
     if not update.effective_user:
         return False
 

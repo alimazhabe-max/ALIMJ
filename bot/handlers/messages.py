@@ -350,7 +350,11 @@ async def _text_handler_inner(update: Update, context: ContextTypes.DEFAULT_TYPE
     # ابزار
     if text in ("📐 تبدیل واحد", "تبدیل واحد"):
         context.user_data["waiting_for"] = "unit"; track_usage(user_id, "unit")
-        await update.message.reply_text("📐 `10 km mile` یا `100 C F`", reply_markup=get_tools_keyboard()); return
+        await update.message.reply_text(
+            "📐 مثال: `10 km mile` یا `100 C F`\n\n"
+            "🔗 تبدیل‌های پیشرفته‌تر:\nhttps://www.bahesab.ir/calc/unit/",
+            reply_markup=get_tools_keyboard(),
+        ); return
     if text in ("🔢 ماشین‌حساب", "ماشین‌حساب"):
         context.user_data["waiting_for"] = "calc"; track_usage(user_id, "calc")
         await update.message.reply_text("🔢 `2+3*4`", reply_markup=get_tools_keyboard()); return
