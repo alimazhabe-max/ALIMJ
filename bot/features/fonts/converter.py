@@ -1,4 +1,4 @@
-"""مبدل فونت — فارسی / انگلیسی / همه فونت‌ها"""
+"""مبدل فونت — انگلیسی (یونیکد فانتزی). فونت‌های فارسی حذف و به فونت‌یاب ارجاع داده شد."""
 from .styles import STYLES, FONT_NAMES
 import random
 import re
@@ -11,25 +11,22 @@ EN_STYLES = [
     "strikethrough", "underline", "spaced", "reverse",
 ]
 
-# فونت‌های سازگار با فارسی (combining marks + spaced)
-FA_STYLES = [
-    "strikethrough", "underline", "overline", "double_underline", "slash", "dots",
-    "zigzag", "bridge", "spaced", "double_spaced", "reverse",
-    "clap", "heart", "star", "fire", "sparkle", "wave", "rainbow", "moon", "sun", "flower",
-]
+# فونت‌های فارسی حذف شدند — برای فونت واقعی فارسی به فونت‌یاب مراجعه کنید
+FA_STYLES = []
 
 
 def list_fonts() -> str:
     lines = ["🎨 **لیست فونت‌ها**\n"]
-    lines.append("🇬🇧 انگلیسی:")
+    lines.append("🇬🇧 انگلیسی (یونیکد فانتزی):")
     for k in EN_STYLES:
         if k in FONT_NAMES:
             lines.append(f"• `{k}` — {FONT_NAMES[k]}")
-    lines.append("\n🇮🇷 فارسی / تزئینی:")
-    for k in FA_STYLES:
-        if k in FONT_NAMES:
-            lines.append(f"• `{k}` — {FONT_NAMES[k]}")
-    lines.append("\n📌 بعد از انتخاب فونت، متن را بفرستید.")
+    lines.append(
+        "\n🇮🇷 **فونت‌های فارسی:**\n"
+        "برای دانلود فونت‌های فارسی واقعی به سایت فونت‌یاب مراجعه کنید:\n"
+        "https://www.fontyab.com/farsi-font\n\n"
+        "📌 بعد از انتخاب فونت انگلیسی، متن را بفرستید."
+    )
     return "\n".join(lines)
 
 
@@ -81,13 +78,21 @@ def _is_mostly_persian(text: str) -> bool:
 
 
 def apply_all_fonts(text: str) -> str:
-    """اعمال همه فونت‌های مرتبط (هوشمند فارسی/انگلیسی)"""
+    """اعمال همه فونت‌های انگلیسی. برای فارسی واقعی به فونت‌یاب مراجعه شود."""
     if not text or not text.strip():
         return "❌ متن خالی است."
     text = text.strip()
     if len(text) > 80:
         text = text[:80]
-    keys = FA_STYLES if _is_mostly_persian(text) else EN_STYLES
+    if _is_mostly_persian(text):
+        return (
+            "🇮🇷 متن فارسی تشخیص داده شد.\n\n"
+            "فونت‌های فارسی از این بخش حذف شده‌اند.\n"
+            "برای دانلود فونت‌های فارسی واقعی:\n"
+            "https://www.fontyab.com/farsi-font\n\n"
+            "اگر می‌خواهید استایل یونیکد انگلیسی روی متن اعمال شود، متن انگلیسی بفرستید."
+        )
+    keys = EN_STYLES
     lines = [f"🎨 **همه فونت‌ها** روی:\n`{text}`\n"]
     for k in keys:
         if k not in STYLES:
