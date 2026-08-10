@@ -69,3 +69,34 @@ def get_next_prayer_time(prayer_times, now_dt):
         next_day_prayers = [(key, dt + timedelta(days=1)) for key, dt in prayer_datetimes]
         next_prayer = min(next_day_prayers, key=lambda x: x[1])
         return next_prayer[0], next_prayer[1] - now_dt
+
+
+def get_prayer_times_for_date(city, date_str, country="Iran", method=None):
+    """اوقات شرعی برای یک تاریخ مشخص — date_str: DD-MM-YYYY"""
+    method = method if method is not None else config.PRAYER_METHOD
+    key = f"{city}_{country}_{date_str}"
+    now = datetime.now().timestamp()
+    if key in _cache_data and now - _cache_time.get(key, 0) < config.CACHE_TTL:
+        return _cache_data[key]
+    try:
+        url = (
+            f"https://api.aladhan.com/v1/timingsByCity/{date_str}"
+            f"?city={city}&country={country}&method={method}&school=0"
+        )
+        response = requests.get(url, timeout=10)
+        response.raise_for_status()
+        timings = response.json()["data"]["timings"]
+        result = {
+            "اذان صبح": timings["Fajr"],
+            "طلوع آفتاب": timings["Sunrise"],
+            "اذان ظهر": timings["Dhuhr"],
+            "اذان عصر": timings["Asr"],
+            "اذان مغرب": timings["Maghrib"],
+            "اذان عشاء": timings["Isha"],
+        }
+        _cache_data[key] = result
+        _cache_time[key] = now
+        return result
+    except Exception as e:
+        logger.error(f"prayer for date {date_str} {city}: {e}")
+        return get_prayer_times(city, country=country, method=method)
