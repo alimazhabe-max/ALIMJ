@@ -71,11 +71,15 @@ async def check_azan_notifications(context):
 
 
 async def periodic_backup(context):
-    """بکاپ محلی + ارسال فایل به ادمین در تلگرام (رایگان)"""
+    """بکاپ خودکار: GitHub (اگر ست شده) + تلگرام ادمین"""
     try:
-        backup_db()
-        ok, msg = await send_db_to_admins(context.bot)
-        logger.info(f"Periodic telegram backup: {msg}")
+        from bot.db_persist import auto_backup, send_db_to_admins, github_enabled
+        ok, msg = auto_backup()
+        logger.info(f"auto_backup: {msg}")
+        # اگر GitHub نبود، به تلگرام هم بفرست
+        if not github_enabled():
+            ok2, msg2 = await send_db_to_admins(context.bot)
+            logger.info(f"telegram backup: {msg2}")
     except Exception as e:
         logger.error(f"periodic backup error: {e}")
 

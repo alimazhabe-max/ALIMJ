@@ -83,6 +83,12 @@ def restore_from_backup_if_needed():
 def init_db():
     logger.info(f"Initializing database at {DB_PATH} ...")
     restore_from_backup_if_needed()
+    # ریستور خودکار از GitHub (اگر DB خالی و تنظیمات موجود باشد)
+    try:
+        from bot.db_persist import auto_restore_if_empty
+        auto_restore_if_empty()
+    except Exception as e:
+        logger.error(f"auto_restore_if_empty: {e}")
 
     conn = get_db_connection()
     c = conn.cursor()
