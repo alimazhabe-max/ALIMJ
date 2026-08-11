@@ -7,78 +7,123 @@ from bot.logger import logger
 from bot.database import get_user, save_user, get_user_language
 from bot.utils.texts import TEXTS
 
-# پیام‌های عادی: حداکثر ۳۰۰ در دقیقه
-user_requests = defaultdict(list)
-# /start جدا: حداکثر ۱۰ در دقیقه
-start_requests = defaultdict(list)
+# تاریخچه زمان پیام‌ها برای هر کاربر
+_user_hits = defaultdict(list)
+# تا این زمان کاربر موقتاً بلاک است (ضد اسپم)
+_user_block_until = defaultdict(float)
+# آخرین باری که به کاربر پیام هشدار دادیم (جلوگیری از اسپم هشدار)
+_last_warn = defaultdict(float)
+
+
+def _is_admin(user_id: int) -> bool:
+    return user_id in getattr(config, "ADMIN_IDS", [])
+
+
+def _smart_antispam(user_id: int) -> tuple[bool, str | None]:
+    """
+    ضد اسپم هوشمند — بدون سقف ثابت پیام برای کاربر عادی.
+
+    قوانین:
+    - استفاده عادی: آزاد
+    - انفجار پیام (مثلاً ۸ تا در ۲ ثانیه): بلاک کوتاه ۵–۱۰ ثانیه
+    - اسپم شدید (۱۵ تا در ۵ ثانیه): بلاک ۳۰ ثانیه
+    - اسپم خیلی شدید (۳۰ تا در ۱۰ ثانیه): بلاک ۶۰ ثانیه
+    """
+    now = time.time()
+
+    # اگر هنوز در دوره بلاک است
+    until = _user_block_until.get(user_id, 0)
+    if now < until:
+        remain = int(until - now) + 1
+        return False, f"⏳ کمی سریع بودی. {remain} ثانیه صبر کن."
+
+    # پاک کردن تاریخچه قدیمی‌تر از ۳۰ ثانیه
+    hits = [t for t in _user_hits[user_id] if now - t < 30]
+    hits.append(now)
+    _user_hits[user_id] = hits
+
+    in_2s = sum(1 for t in hits if now - t <= 2)
+    in_5s = sum(1 for t in hits if now - t <= 5)
+    in_10s = sum(1 for t in hits if now - t <= 10)
+
+    block_sec = 0
+    if in_10s >= 30:
+        block_sec = 60
+    elif in_5s >= 15:
+        block_sec = 30
+    elif in_2s >= 8:
+        block_sec = 8
+
+    if block_sec:
+        _user_block_until[user_id] = now + block_sec
+        logger.warning(
+            f"Antispam: user {user_id} blocked {block_sec}s "
+            f"(2s={in_2s}, 5s={in_5s}, 10s={in_10s})"
+        )
+        return False, f"⏳ ارسال خیلی سریع بود. {block_sec} ثانیه صبر کن."
+
+    return True, None
+
+
+async def _maybe_warn(update: Update, text: str):
+    """هشدار را حداکثر هر ۴ ثانیه یک‌بار نشان بده"""
+    if not update.effective_user:
+        return
+    uid = update.effective_user.id
+    now = time.time()
+    if now - _last_warn[uid] < 4:
+        # برای callback فقط answer خالی
+        if update.callback_query:
+            try:
+                await update.callback_query.answer()
+            except Exception:
+                pass
+        return
+    _last_warn[uid] = now
+    try:
+        if update.message:
+            await update.message.reply_text(text)
+        elif update.callback_query:
+            await update.callback_query.answer(text, show_alert=True)
+    except Exception:
+        pass
 
 
 async def rate_limit_middleware(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
-    """
-    هر کاربر: حداکثر ۳۰۰ پیام در دقیقه
-    بعد از رسیدن به سقف: ۵ ثانیه صبر
-    """
+    """ضد اسپم هوشمند — بدون سقف ثابت پیام"""
     if not update.effective_user:
         return True
-
     user_id = update.effective_user.id
-
-    if user_id in getattr(config, "ADMIN_IDS", []):
+    if _is_admin(user_id):
         return True
 
-    now = time.time()
-    user_requests[user_id] = [t for t in user_requests[user_id] if now - t < 60]
-
-    limit = getattr(config, "RATE_LIMIT", 300)
-    if len(user_requests[user_id]) >= limit:
-        text = "⏳ به سقف ۳۰۰ پیام در دقیقه رسیدی.\nلطفاً ۵ ثانیه صبر کن و دوباره بفرست."
-        try:
-            if update.message:
-                await update.message.reply_text(text)
-            elif update.callback_query:
-                await update.callback_query.answer(text, show_alert=True)
-        except Exception:
-            pass
-        logger.warning(f"Rate limit exceeded for user {user_id} ({len(user_requests[user_id])}/{limit})")
+    ok, msg = _smart_antispam(user_id)
+    if not ok:
+        await _maybe_warn(update, msg or "⏳ کمی صبر کن.")
         return False
-
-    user_requests[user_id].append(now)
     return True
 
 
 async def start_rate_limit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
-    """حداکثر ۱۰ بار /start در دقیقه"""
+    """ضد اسپم برای /start — فقط جلوی اسپم پشت‌سرهم را می‌گیرد"""
     if not update.effective_user:
         return True
-
     user_id = update.effective_user.id
-    if user_id in getattr(config, "ADMIN_IDS", []):
+    if _is_admin(user_id):
         return True
 
-    now = time.time()
-    start_requests[user_id] = [t for t in start_requests[user_id] if now - t < 60]
-    limit = getattr(config, "START_RATE_LIMIT", 10)
-
-    if len(start_requests[user_id]) >= limit:
-        text = "⏳ بیش از ۱۰ بار /start در یک دقیقه.\nلطفاً کمی صبر کن."
-        try:
-            if update.message:
-                await update.message.reply_text(text)
-        except Exception:
-            pass
-        logger.warning(f"Start rate limit for user {user_id}")
+    ok, msg = _smart_antispam(user_id)
+    if not ok:
+        await _maybe_warn(update, msg or "⏳ کمی صبر کن.")
         return False
-
-    start_requests[user_id].append(now)
     return True
 
 
 async def check_membership(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
-    """بررسی عضویت کاربر در کانال اجباری"""
     if not update.effective_user:
         return False
     user_id = update.effective_user.id
-    if user_id in getattr(config, "ADMIN_IDS", []):
+    if _is_admin(user_id):
         return True
     try:
         member = await context.bot.get_chat_member(config.REQUIRED_CHANNEL_ID, user_id)
@@ -100,7 +145,7 @@ async def ensure_user_registered(update: Update, context: ContextTypes.DEFAULT_T
 
 
 async def check_and_rate_limit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
-    """عضویت + محدودیت ۳۰۰ پیام/دقیقه (برای همه به‌جز منطق جداگانه استارت)"""
+    """عضویت + ضد اسپم هوشمند (بدون سقف ثابت پیام)"""
     if not update.effective_user:
         return False
 
