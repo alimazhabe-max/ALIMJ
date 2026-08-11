@@ -1,8 +1,5 @@
 import httpx
-from bs4 import BeautifulSoup
 from datetime import datetime
-import re
-import asyncio
 from bot.logger import logger
 from bot.config import config
 
@@ -13,54 +10,57 @@ HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 }
 
-async def _get_price_from_profile(slug: str) -> int | None:
+_AJAX_URLS = (
+    "https://call1.tgju.org/ajax.json",
+    "https://call2.tgju.org/ajax.json",
+)
+_BULK_TTL = 90
+
+
+def _parse_price(raw):
+    if raw is None:
+        return None
+    if isinstance(raw, (int, float)):
+        return int(raw)
+    text = str(raw).replace(",", "").replace("٬", "").replace(" ", "").strip()
+    if not text:
+        return None
     try:
-        url = f"https://www.tgju.org/profile/{slug}"
-        async with httpx.AsyncClient(timeout=8.0, headers=HEADERS, follow_redirects=True) as client:
-            response = await client.get(url)
-            response.raise_for_status()
-
-        soup = BeautifulSoup(response.text, "html.parser")
-
-        # روش ۱
-        price_tag = soup.find(attrs={"data-col": "info.last_trade.PDrCotVal"})
-        if price_tag:
-            text = price_tag.get_text(strip=True).replace(",", "")
-            if text and text.replace(".", "").isdigit():
-                return int(float(text))
-
-        # روش ۲
-        price_tag = soup.find("span", class_=re.compile(r"value|price"))
-        if price_tag:
-            text = price_tag.get_text(strip=True).replace(",", "")
-            if text and text.replace(".", "").isdigit():
-                return int(float(text))
-
-        # روش ۳
-        numbers = re.findall(r"([\d,]+)", soup.get_text())
-        if numbers:
-            valid_numbers = [int(n.replace(",", "")) for n in numbers if n.replace(",", "").isdigit()]
-            if valid_numbers:
-                max_num = max(valid_numbers)
-                if max_num > 100000:
-                    return max_num
-
-        logger.warning(f"Price not found for slug: {slug}")
+        return int(float(text))
+    except Exception:
         return None
 
-    except Exception as e:
-        logger.error(f"Error fetching tgju price for {slug}: {e}")
-        return None
+
+async def _fetch_bulk() -> dict:
+    now = datetime.now().timestamp()
+    if "bulk" in _cache_data and now - _cache_time.get("bulk", 0) < _BULK_TTL:
+        return _cache_data["bulk"]
+    current = {}
+    async with httpx.AsyncClient(timeout=8.0, headers=HEADERS, follow_redirects=True) as client:
+        for url in _AJAX_URLS:
+            try:
+                r = await client.get(url)
+                if r.status_code == 200:
+                    data = r.json() or {}
+                    current = data.get("current") or {}
+                    if current:
+                        break
+            except Exception as e:
+                logger.warning(f"tgju ajax: {e}")
+    if current:
+        _cache_data["bulk"] = current
+        _cache_time["bulk"] = now
+    return current
 
 
 async def get_dollar_price() -> int | None:
     key = "dollar"
     now = datetime.now().timestamp()
-
-    if key in _cache_data and now - _cache_time.get(key, 0) < config.CACHE_TTL:
+    if key in _cache_data and now - _cache_time.get(key, 0) < _BULK_TTL:
         return _cache_data[key]
-
-    price = await _get_price_from_profile("price_dollar_rl")
+    bulk = await _fetch_bulk()
+    item = bulk.get("price_dollar_rl") or {}
+    price = _parse_price(item.get("p") if isinstance(item, dict) else item)
     if price:
         _cache_data[key] = price
         _cache_time[key] = now
@@ -70,11 +70,11 @@ async def get_dollar_price() -> int | None:
 async def get_gold18_price() -> int | None:
     key = "gold18"
     now = datetime.now().timestamp()
-
-    if key in _cache_data and now - _cache_time.get(key, 0) < config.CACHE_TTL:
+    if key in _cache_data and now - _cache_time.get(key, 0) < _BULK_TTL:
         return _cache_data[key]
-
-    price = await _get_price_from_profile("geram18")
+    bulk = await _fetch_bulk()
+    item = bulk.get("geram18") or {}
+    price = _parse_price(item.get("p") if isinstance(item, dict) else item)
     if price:
         _cache_data[key] = price
         _cache_time[key] = now
@@ -82,10 +82,11 @@ async def get_gold18_price() -> int | None:
 
 
 async def get_market_prices() -> dict:
+    import asyncio
     dollar, gold = await asyncio.gather(
         get_dollar_price(),
         get_gold18_price(),
-        return_exceptions=True
+        return_exceptions=True,
     )
     return {
         "dollar": dollar if not isinstance(dollar, Exception) else None,
