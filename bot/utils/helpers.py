@@ -283,6 +283,23 @@ def get_fun_keyboard():
     )
 
 
+def get_joke_keyboard():
+    """کیبورد دسته‌بندی جوک"""
+    return ReplyKeyboardMarkup(
+        [
+            [KeyboardButton("🎲 جوک تصادفی"), KeyboardButton("😄 عمومی")],
+            [KeyboardButton("🤣 ترکی"), KeyboardButton("😂 رشتی")],
+            [KeyboardButton("😏 قزوینی"), KeyboardButton("👨 مردان")],
+            [KeyboardButton("👩 زنان"), KeyboardButton("🤑 اصفهانی")],
+            [KeyboardButton("🔞 سکسی"), KeyboardButton("🏔️ لری")],
+            [KeyboardButton("🏛 سیاسی"), KeyboardButton("🕋 حج")],
+            [KeyboardButton("🔙 بازگشت به سرگرمی")],
+        ],
+        resize_keyboard=True,
+    )
+
+
+
 def get_profile_keyboard():
     return ReplyKeyboardMarkup(
         [
