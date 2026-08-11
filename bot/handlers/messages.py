@@ -12,7 +12,7 @@ from bot.utils.helpers import (
     get_country_keyboard, get_iran_cities_keyboard, get_iraq_cities_keyboard,
     get_language_keyboard, get_more_keyboard, get_date_tools_keyboard,
     get_religious_keyboard, get_market_keyboard, get_weather_geo_keyboard,
-    get_tools_keyboard, get_fun_keyboard, get_profile_keyboard,
+    get_tools_keyboard, get_fun_keyboard, get_profile_keyboard, get_joke_keyboard,
     get_calendar_text, get_calendar_buttons, ALL_CITIES, CITY_COUNTRY,
     get_azan_keyboard,
 )
@@ -29,7 +29,7 @@ from bot.features.date.converters import calculate_age, parse_birth_datetime
 from bot.features.religious import qibla_direction, daily_adhkar, daily_verse_hadith, religious_countdown, istikhara, istikhara_intro
 from bot.features.market.finance import full_market_prices, convert_currency, profit_loss, parse_profit, get_top_crypto, convert_crypto
 from bot.features.tools.app_tools import calculator, generate_password, count_text, world_distance
-from bot.features.fun.fun_tools import hafez_fal, joke_of_day, fact_of_day, daily_challenge
+from bot.features.fun.fun_tools import hafez_fal, joke_of_day, fact_of_day, daily_challenge, random_joke, get_joke_categories
 from bot.features.weather.weather_extra import weather_forecast, air_quality
 from bot.features.fonts import apply_font, list_fonts, get_font_preview, apply_all_fonts
 from bot.features.profile import profile_text
@@ -392,7 +392,34 @@ async def _text_handler_inner(update: Update, context: ContextTypes.DEFAULT_TYPE
         track_usage(user_id, "hafez"); await update.message.reply_text(await hafez_fal(user_id), reply_markup=get_fun_keyboard()); return
     
     if text in ("😂 جوک روز", "جوک روز"):
-        track_usage(user_id, "joke"); await update.message.reply_text(await joke_of_day(), reply_markup=get_fun_keyboard()); return
+        track_usage(user_id, "joke")
+        await update.message.reply_text(
+            "😂 دسته جوک را انتخاب کن:\n(بیش از ۵۵۰۰ جوک از farsijokes)",
+            reply_markup=get_joke_keyboard(),
+        ); return
+
+    # دسته‌های جوک
+    _joke_map = {
+        "🎲 جوک تصادفی": None,
+        "😄 عمومی": "general",
+        "🤣 ترکی": "turkish",
+        "😂 رشتی": "rashti",
+        "😏 قزوینی": "ghazvini",
+        "👨 مردان": "men",
+        "👩 زنان": "women",
+        "🤑 اصفهانی": "isfahani",
+        "🔞 سکسی": "adult",
+        "🏔️ لری": "lori",
+        "🏛 سیاسی": "political",
+        "🕋 حج": "hajj",
+    }
+    if text in _joke_map:
+        track_usage(user_id, "joke")
+        cat = _joke_map[text]
+        await update.message.reply_text(await joke_of_day(cat), reply_markup=get_joke_keyboard())
+        return
+    if text in ("🔙 بازگشت به سرگرمی",):
+        await update.message.reply_text("🎮 سرگرمی:", reply_markup=get_fun_keyboard()); return
     if text in ("🧠 دانستنی روز", "دانستنی روز"):
         track_usage(user_id, "fact"); await update.message.reply_text(await fact_of_day(), reply_markup=get_fun_keyboard()); return
     if text in ("💪 چالش امروز", "چالش امروز"):
