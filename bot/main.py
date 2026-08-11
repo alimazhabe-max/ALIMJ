@@ -14,14 +14,23 @@ from bot.handlers.commands import (
 from bot.handlers.callbacks import button_handler
 from bot.handlers.messages import text_handler
 from bot.scheduler import setup_scheduler
-from bot.db_persist import notify_admins_if_empty, send_db_to_admins
+from bot.db_persist import (
+    notify_admins_if_empty,
+    send_db_to_admins,
+    auto_backup,
+)
 import threading
+import signal
+import sys
 from flask import Flask
 import os
 from datetime import datetime
-import asyncio
 
 flask_app = Flask(__name__)
+
+# نگه داشتن رفرنس اپ برای بکاپ هنگام خاموش شدن
+_app_ref = {"app": None}
+_shutdown_backup_done = {"done": False}
 
 
 @flask_app.route("/")
@@ -78,11 +87,55 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
 
 
 async def post_init(app: Application):
-    """بعد از استارت — اگر DB خالی بود به ادمین خبر بده"""
     try:
         await notify_admins_if_empty(app.bot)
     except Exception as e:
         logger.error(f"post_init notify: {e}")
+
+
+async def pre_shutdown_backup(app: Application):
+    """
+    قبل از خاموش شدن (دیپلوی / ری‌استارت):
+    ۱) بکاپ GitHub
+    ۲) ارسال فایل برای ادمین در تلگرام
+    """
+    if _shutdown_backup_done["done"]:
+        return
+    _shutdown_backup_done["done"] = True
+    logger.info("🛑 Shutdown detected — sending backup to admin + GitHub...")
+    try:
+        ok, msg = auto_backup()
+        logger.info(f"shutdown GitHub backup: {msg}")
+    except Exception as e:
+        logger.error(f"shutdown GitHub backup failed: {e}")
+    try:
+        ok, msg = await send_db_to_admins(
+            app.bot,
+            caption=(
+                "💾 بکاپ خودکار قبل از خاموش شدن / دیپلوی\n"
+                f"👥 کاربران: {_user_count(DB_PATH)}\n"
+                f"🕐 {datetime.now().strftime('%Y-%m-%d %H:%M')}\n\n"
+                "اگر بعد از دیپلوی داده برگشت نشد، همین فایل را با کپشن /restore بفرست."
+            ),
+        )
+        logger.info(f"shutdown telegram backup: {msg}")
+    except Exception as e:
+        logger.error(f"shutdown telegram backup failed: {e}")
+
+
+async def post_shutdown(app: Application):
+    await pre_shutdown_backup(app)
+
+
+def _sync_shutdown_backup():
+    """برای سیگنال SIGTERM — اگر event loop در دسترس نبود"""
+    if _shutdown_backup_done["done"]:
+        return
+    try:
+        ok, msg = auto_backup()
+        logger.info(f"signal GitHub backup: {msg}")
+    except Exception as e:
+        logger.error(f"signal backup failed: {e}")
 
 
 def main():
@@ -99,8 +152,10 @@ def main():
         .token(config.BOT_TOKEN)
         .concurrent_updates(True)
         .post_init(post_init)
+        .post_shutdown(post_shutdown)
         .build()
     )
+    _app_ref["app"] = app
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
@@ -110,20 +165,33 @@ def main():
     app.add_handler(CommandHandler("stats", stats_command))
     app.add_handler(CommandHandler("broadcast", broadcast_command))
     app.add_handler(CommandHandler("backup", backup_command))
-    # ریستور: فایل .db با کپشن /restore
     app.add_handler(MessageHandler(filters.Document.ALL, restore_document_handler))
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
 
     app.add_error_handler(error_handler)
-
     setup_scheduler(app)
 
-    # Flask برای healthcheck
     t = threading.Thread(target=run_flask, daemon=True)
     t.start()
 
-    logger.info("✅ Bot ready (Telegram backup/restore enabled)")
+    # Render موقع دیپلوی SIGTERM می‌فرستد
+    def _on_signal(signum, frame):
+        logger.warning(f"Received signal {signum} — backup then exit")
+        _sync_shutdown_backup()
+        # اجازه بده run_polling خودش با post_shutdown تمام کند
+        try:
+            app.stop()
+        except Exception:
+            pass
+
+    try:
+        signal.signal(signal.SIGTERM, _on_signal)
+        signal.signal(signal.SIGINT, _on_signal)
+    except Exception as e:
+        logger.warning(f"signal handler setup: {e}")
+
+    logger.info("✅ Bot ready (pre-deploy backup to admin enabled)")
     app.run_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES)
 
 
