@@ -103,11 +103,11 @@ def init_db():
         "subscribed INTEGER DEFAULT 1,"
         "register_date TEXT,"
         "last_active TEXT,"
-        "notification_enabled INTEGER DEFAULT 1,"
-        "notify_fajr INTEGER DEFAULT 1,"
+        "notification_enabled INTEGER DEFAULT 0,"
+        "notify_fajr INTEGER DEFAULT 0,"
         "notify_dhuhr INTEGER DEFAULT 0,"
         "notify_asr INTEGER DEFAULT 0,"
-        "notify_maghrib INTEGER DEFAULT 1,"
+        "notify_maghrib INTEGER DEFAULT 0,"
         "notify_isha INTEGER DEFAULT 0"
         ")"
     )
@@ -121,11 +121,11 @@ def init_db():
     )
     for col, default in (
         ("last_main_msg_id", "INTEGER"),
-        ("notification_enabled", "INTEGER DEFAULT 1"),
-        ("notify_fajr", "INTEGER DEFAULT 1"),
+        ("notification_enabled", "INTEGER DEFAULT 0"),
+        ("notify_fajr", "INTEGER DEFAULT 0"),
         ("notify_dhuhr", "INTEGER DEFAULT 0"),
         ("notify_asr", "INTEGER DEFAULT 0"),
-        ("notify_maghrib", "INTEGER DEFAULT 1"),
+        ("notify_maghrib", "INTEGER DEFAULT 0"),
         ("notify_isha", "INTEGER DEFAULT 0"),
         ("birth_date", "TEXT"),
     ):
@@ -136,6 +136,27 @@ def init_db():
     conn.commit()
     conn.close()
     init_extra_tables()
+    # یک‌بار: اذان‌ها پیش‌فرض خاموش (مگر کاربر خودش روشن کرده باشد بعد از این)
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)")
+        c.execute("SELECT value FROM meta WHERE key = 'azan_off_by_default_v1'")
+        row = c.fetchone()
+        if not row:
+            c.execute(
+                "UPDATE users SET notification_enabled = 0, "
+                "notify_fajr = 0, notify_dhuhr = 0, notify_asr = 0, "
+                "notify_maghrib = 0, notify_isha = 0"
+            )
+            c.execute(
+                "INSERT INTO meta (key, value) VALUES ('azan_off_by_default_v1', '1')"
+            )
+            conn.commit()
+            logger.info("Migration: all azan notifications set to OFF by default")
+        conn.close()
+    except Exception as e:
+        logger.error(f"azan migration: {e}")
     n = _user_count(DB_PATH)
     logger.info(f"Database ready — {n} users")
 
@@ -279,10 +300,10 @@ def get_azan_settings(user_id):
     try:
         c.execute(
             """SELECT notification_enabled,
-                      COALESCE(notify_fajr, 1),
+                      COALESCE(notify_fajr, 0),
                       COALESCE(notify_dhuhr, 0),
                       COALESCE(notify_asr, 0),
-                      COALESCE(notify_maghrib, 1),
+                      COALESCE(notify_maghrib, 0),
                       COALESCE(notify_isha, 0)
                FROM users WHERE user_id = ?""",
             (user_id,),
@@ -338,15 +359,15 @@ def get_users_for_azan():
     try:
         c.execute(
             """SELECT user_id, city,
-                      COALESCE(notification_enabled, 1),
-                      COALESCE(notify_fajr, 1),
+                      COALESCE(notification_enabled, 0),
+                      COALESCE(notify_fajr, 0),
                       COALESCE(notify_dhuhr, 0),
                       COALESCE(notify_asr, 0),
-                      COALESCE(notify_maghrib, 1),
+                      COALESCE(notify_maghrib, 0),
                       COALESCE(notify_isha, 0)
                FROM users
                WHERE subscribed = 1
-                 AND COALESCE(notification_enabled, 1) = 1"""
+                 AND COALESCE(notification_enabled, 0) = 1"""
         )
         rows = c.fetchall()
     except Exception as e:
@@ -385,33 +406,88 @@ def set_last_main_msg_id(user_id, message_id):
 def init_extra_tables():
     conn = get_db_connection()
     c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS notes (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id INTEGER,
-        content TEXT,
-        created_at TEXT DEFAULT (datetime('now'))
-    )''')
-    c.execute('''CREATE TABLE IF NOT EXISTS reminders (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id INTEGER,
-        text TEXT,
-        remind_at TEXT,
-        done INTEGER DEFAULT 0,
-        created_at TEXT DEFAULT (datetime('now'))
-    )''')
-    c.execute('''CREATE TABLE IF NOT EXISTS usage_stats (
-        user_id INTEGER,
-        feature TEXT,
-        count INTEGER DEFAULT 1,
-        last_used TEXT,
-        PRIMARY KEY (user_id, feature)
-    )''')
+    c.execute(
+        "CREATE TABLE IF NOT EXISTS notes ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        "user_id INTEGER,"
+        "content TEXT,"
+        "created_at TEXT DEFAULT (datetime('now')))"
+    )
+    c.execute(
+        "CREATE TABLE IF NOT EXISTS reminders ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        "user_id INTEGER,"
+        "text TEXT,"
+        "remind_at TEXT,"
+        "done INTEGER DEFAULT 0,"
+        "created_at TEXT DEFAULT (datetime('now')))"
+    )
+    c.execute(
+        "CREATE TABLE IF NOT EXISTS usage_stats ("
+        "user_id INTEGER,"
+        "feature TEXT,"
+        "count INTEGER DEFAULT 1,"
+        "last_used TEXT,"
+        "PRIMARY KEY (user_id, feature))"
+    )
+    c.execute(
+        "CREATE TABLE IF NOT EXISTS sent_jokes ("
+        "user_id INTEGER,"
+        "joke_hash TEXT,"
+        "sent_at TEXT DEFAULT (datetime('now')),"
+        "PRIMARY KEY (user_id, joke_hash))"
+    )
     try:
         c.execute("ALTER TABLE users ADD COLUMN birth_date TEXT")
     except Exception:
         pass
     conn.commit()
     conn.close()
+
+
+
+def get_sent_joke_hashes(user_id, limit=5000):
+    conn = get_db_connection()
+    c = conn.cursor()
+    try:
+        c.execute(
+            "SELECT joke_hash FROM sent_jokes WHERE user_id = ? ORDER BY sent_at DESC LIMIT ?",
+            (user_id, limit),
+        )
+        return {row[0] for row in c.fetchall()}
+    except Exception:
+        return set()
+    finally:
+        conn.close()
+
+
+def mark_joke_sent(user_id, joke_hash):
+    conn = get_db_connection()
+    c = conn.cursor()
+    try:
+        c.execute(
+            "INSERT OR IGNORE INTO sent_jokes (user_id, joke_hash) VALUES (?, ?)",
+            (user_id, joke_hash),
+        )
+        conn.commit()
+    except Exception as e:
+        logger.error(f"mark_joke_sent: {e}")
+    finally:
+        conn.close()
+
+
+def reset_sent_jokes(user_id):
+    """اگر همه جوک‌ها دیده شد، تاریخچه را پاک کن تا از اول شروع شود"""
+    conn = get_db_connection()
+    c = conn.cursor()
+    try:
+        c.execute("DELETE FROM sent_jokes WHERE user_id = ?", (user_id,))
+        conn.commit()
+    except Exception as e:
+        logger.error(f"reset_sent_jokes: {e}")
+    finally:
+        conn.close()
+
 
 
 def add_note(user_id, content):
