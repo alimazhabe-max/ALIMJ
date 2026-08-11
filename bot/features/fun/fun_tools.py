@@ -7,51 +7,127 @@ def pn(n):
     return str(n).translate(str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹"))
 
 
-# ——— فال حافظ (API + fallback) ———
+# ——— فال حافظ (شبیه hafez.taktemp.com) ———
+HAFEZ_OPENING = (
+    "ای حافظ شیرازی! تو محرم هر رازی!\n"
+    "تو را به خدا و به شاخ نباتت قسم می‌دهم "
+    "که هر چه صلاح و مصلحت می‌بینی برایم آشکار و آرزوی مرا برآورده سازی."
+)
+
 HAFEZ_LOCAL = [
-    ("الا یا ایها الساقی ادر کاسا و ناولها", "که عشق آسان نمود اول ولی افتاد مشکل‌ها", "صبر و توکل؛ گره‌ها به تدریج باز می‌شود."),
-    ("اگر آن ترک شیرازی به دست آرد دل ما را", "به خال هندویش بخشم سمرقند و بخارا را", "عشق و دلدادگی در راه است؛ سخاوتمند باش."),
-    ("دوش وقت سحر از غصه نجاتم دادند", "واندر آن ظلمت شب آب حیاتم دادند", "گشایش نزدیک است؛ ناامید نشو."),
-    ("یوسف گم‌گشته بازآید به کنعان غم مخور", "کلبه احزان شود روزی گلستان غم مخور", "صبر کن؛ خیر در راه است."),
-    ("هر آنکه جانب اهل خدا نگه دارد", "خداش در همه حال از بلا نگه دارد", "پایبندی به خوبی‌ها محافظ توست."),
-    ("با مدعی مگویید اسرار عشق و مستی", "تا بی‌خبر بمیرد در درد خودپرستی", "اسرار دل را نگه دار."),
-    ("در این بازار اگر سودی است با درویش خرسند است", "خدایا منعمم گردان به درویشی و خرسندی", "قناعت آرامش می‌آورد."),
-    ("زاهد ظاهرپرست از حال ما آگاه نیست", "در حق ما هرچه گوید جای هیچ اکراه نیست", "به حرف دیگران وابسته نباش."),
+    (
+        "غزل شمارهٔ ۱",
+        "الا یا ایها الساقی ادر کأساً و ناولها\nکه عشق آسان نمود اول ولی افتاد مشکل‌ها\n"
+        "به بوی نافه‌ای کآخر صبا زان طره بگشاید\nز تاب جعد مشکینش چه خون افتاد در دل‌ها",
+        "صبر و توکل؛ عشق در آغاز آسان می‌نماید اما راهش پر از آزمون است. با ایمان پیش برو.",
+    ),
+    (
+        "غزل شمارهٔ ۳",
+        "اگر آن ترک شیرازی به دست آرد دل ما را\nبه خال هندویش بخشم سمرقند و بخارا را\n"
+        "بده ساقی می باقی که در جنت نخواهی یافت\nکنار آب رکن‌آباد و گلگشت مصلا را",
+        "عشق و دلدادگی در راه است. سخاوت و بخشش نیتت را به خیر می‌رساند.",
+    ),
+    (
+        "غزل شمارهٔ ۲۲",
+        "دوش وقت سحر از غصه نجاتم دادند\nواندر آن ظلمت شب آب حیاتم دادند\n"
+        "بی‌خود از شعشعه پرتو ذاتم کردند\nباده از جام تجلی صفاتم دادند",
+        "گشایش نزدیک است. از تاریکی عبور می‌کنی و نور به تو می‌رسد؛ ناامید نشو.",
+    ),
+    (
+        "غزل شمارهٔ ۲۵۷",
+        "یوسف گم‌گشته باز آید به کنعان غم مخور\nکلبهٔ احزان شود روزی گلستان غم مخور\n"
+        "ای دل غمدیده حالت به شود دلبد مکن\nوین سر شوریده باز آید به سامان غم مخور",
+        "صبر کن؛ آنچه از دست رفته بازمی‌گردد و غم جای خود را به شادی می‌دهد.",
+    ),
 ]
 
 
+def _format_verses(verses: list) -> str:
+    """چیدمان ابیات مثل سایت‌های فال حافظ (مصراع‌ها جفت‌جفت)"""
+    lines = []
+    couplet = []
+    for v in verses:
+        if not isinstance(v, dict):
+            continue
+        text = (v.get("text") or "").strip()
+        if not text:
+            continue
+        couplet.append(text)
+        # versePosition 0 = مصراع اول، 1 = مصراع دوم
+        pos = v.get("versePosition")
+        if pos == 1 or len(couplet) >= 2:
+            lines.append("\n".join(couplet))
+            couplet = []
+    if couplet:
+        lines.append("\n".join(couplet))
+    return "\n\n".join(lines)
+
+
 async def hafez_fal(user_id: int = 0) -> str:
-    """فال حافظ — تلاش از API عمومی + fallback"""
+    """
+    فال حافظ — شبیه hafez.taktemp.com
+    نیت → دعا → غزل کامل → تفسیر
+    """
     try:
-        async with httpx.AsyncClient(timeout=8.0) as c:
-            # API عمومی حافظ
+        async with httpx.AsyncClient(timeout=10.0) as c:
             r = await c.get("https://api.ganjoor.net/api/ganjoor/hafez/faal")
             if r.status_code == 200:
-                data = r.json()
-                title = data.get("title") or data.get("poem", {}).get("title") or "غزل حافظ"
-                verses = data.get("verses") or data.get("poem", {}).get("verses") or []
-                meaning = data.get("interpretation") or data.get("plainText") or ""
-                body = "\n".join(
-                    (v.get("text") if isinstance(v, dict) else str(v)) for v in verses[:8]
-                ) if verses else data.get("plainText", "")
+                data = r.json() or {}
+                title = data.get("title") or "غزل حافظ"
+                full_title = data.get("fullTitle") or title
+                verses = data.get("verses") or []
+                body = _format_verses(verses) if verses else (data.get("plainText") or "").replace("\r\n", "\n\n")
+                # تفسیر: خلاصه هوش‌مصنوعی گنجور
+                meaning = (data.get("poemSummary") or "").strip()
+                if not meaning:
+                    # از coupletSummary اولین بیت
+                    for v in verses:
+                        if isinstance(v, dict) and v.get("coupletSummary"):
+                            meaning = v["coupletSummary"]
+                            break
+                if meaning.startswith("هوش مصنوعی:"):
+                    meaning = meaning.replace("هوش مصنوعی:", "", 1).strip()
+
                 if body:
-                    return (
-                        f"📖 **فال حافظ**\n\n"
-                        f"*{title}*\n\n"
-                        f"{body}\n\n"
-                        + (f"💡 {meaning[:300]}\n\n" if meaning else "")
-                        + "🔮 نیت کنید و تأمل نمایید."
-                    )
+                    parts = [
+                        "🔮 **فال حافظ**",
+                        "",
+                        "نیت کنید…",
+                        "",
+                        f"📿 {HAFEZ_OPENING}",
+                        "",
+                        "━━━━━━━━━━━━━━━━━━━━",
+                        f"📖 **{title}**",
+                        f"_{full_title}_" if full_title != title else "",
+                        "",
+                        body.strip(),
+                        "",
+                    ]
+                    if meaning:
+                        parts.extend([
+                            "━━━━━━━━━━━━━━━━━━━━",
+                            "💡 **تفسیر فال**",
+                            "",
+                            meaning[:900],
+                            "",
+                        ])
+                    parts.append("🕯️ برای شادی روح حافظ، صلوات یا فاتحه‌ای نثار کنید.")
+                    return "\n".join(p for p in parts if p is not None)
     except Exception as e:
         logger.error(f"hafez api: {e}")
 
-    couplet, next_c, advice = random.choice(HAFEZ_LOCAL)
+    title, body, advice = random.choice(HAFEZ_LOCAL)
     return (
-        f"📖 **فال حافظ**\n\n"
-        f"{couplet}\n"
-        f"{next_c}\n\n"
-        f"💡 {advice}\n\n"
-        f"🔮 نیت کنید و تأمل نمایید."
+        f"🔮 **فال حافظ**\n\n"
+        f"نیت کنید…\n\n"
+        f"📿 {HAFEZ_OPENING}\n\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"📖 **{title}**\n\n"
+        f"{body}\n\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"💡 **تفسیر فال**\n\n"
+        f"{advice}\n\n"
+        f"🕯️ برای شادی روح حافظ، صلوات یا فاتحه‌ای نثار کنید."
     )
 
 
