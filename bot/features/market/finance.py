@@ -14,7 +14,7 @@ _cache = {}
 _cache_t = {}
 HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0"}
 
-# اسلاگ‌های TGJU
+# اسلاگ‌های TGJU (کلید داخلی → کلید ajax.json)
 TGJU_SLUGS = {
     "dollar": "price_dollar_rl",
     "euro": "price_eur",
@@ -26,13 +26,21 @@ TGJU_SLUGS = {
     "afghani": "price_afn",
     "dinar_iq": "price_iqd",
     "gold18": "geram18",
-    "silver": "silver",
-    "copper": "copper_geram",
+    "silver": "silver_999",  # نقره ۹۹۹ به ریال
+    "copper": "copper",
     "coin_emami": "sekee",
     "coin_bahar": "sekeb",
     "coin_half": "nim",
     "coin_quarter": "rob",
 }
+
+# یک درخواست برای همه قیمت‌ها
+_AJAX_URLS = (
+    "https://call1.tgju.org/ajax.json",
+    "https://call2.tgju.org/ajax.json",
+)
+_BULK_CACHE_KEY = "tgju_bulk"
+_BULK_TTL = 90  # ثانیه
 
 SYMBOL_TO_ID = {
     "btc": "bitcoin", "bitcoin": "bitcoin", "بیتکوین": "bitcoin", "بیت‌کوین": "bitcoin",
@@ -49,39 +57,81 @@ def pn(n):
     return str(n).translate(str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹"))
 
 
+def _parse_price(raw) -> int | None:
+    """تبدیل رشته قیمت TGJU به عدد صحیح (ریال)"""
+    if raw is None:
+        return None
+    if isinstance(raw, (int, float)):
+        return int(raw)
+    text = str(raw).replace(",", "").replace("٬", "").replace(" ", "").strip()
+    if not text:
+        return None
+    try:
+        return int(float(text))
+    except Exception:
+        return None
+
+
+async def _fetch_tgju_bulk() -> dict:
+    """یک درخواست JSON برای همه قیمت‌ها — خیلی سریع"""
+    now = datetime.now().timestamp()
+    if _BULK_CACHE_KEY in _cache and now - _cache_t.get(_BULK_CACHE_KEY, 0) < _BULK_TTL:
+        return _cache[_BULK_CACHE_KEY]
+
+    current = {}
+    async with httpx.AsyncClient(timeout=8.0, headers=HEADERS, follow_redirects=True) as client:
+        for url in _AJAX_URLS:
+            try:
+                r = await client.get(url)
+                if r.status_code == 200:
+                    data = r.json() or {}
+                    current = data.get("current") or {}
+                    if current:
+                        break
+            except Exception as e:
+                logger.warning(f"tgju ajax {url}: {e}")
+
+    if current:
+        _cache[_BULK_CACHE_KEY] = current
+        _cache_t[_BULK_CACHE_KEY] = now
+    return current
+
+
 async def _tgju_price(slug: str):
+    """قیمت یک اسلاگ از کش bulk (بدون اسکرپ صفحه جدا)"""
     key = f"tgju_{slug}"
     now = datetime.now().timestamp()
-    if key in _cache and now - _cache_t.get(key, 0) < getattr(config, "CACHE_TTL", 120):
+    if key in _cache and now - _cache_t.get(key, 0) < _BULK_TTL:
         return _cache[key]
+
+    bulk = await _fetch_tgju_bulk()
+    item = bulk.get(slug)
+    if isinstance(item, dict):
+        val = _parse_price(item.get("p"))
+    else:
+        val = _parse_price(item)
+
+    if val is not None:
+        _cache[key] = val
+        _cache_t[key] = now
+        return val
+
+    # fallback قدیمی: فقط برای یک اسلاگ اگر bulk نبود
     try:
         url = f"https://www.tgju.org/profile/{slug}"
-        async with httpx.AsyncClient(timeout=6.0, headers=HEADERS, follow_redirects=True) as c:
+        async with httpx.AsyncClient(timeout=5.0, headers=HEADERS, follow_redirects=True) as c:
             r = await c.get(url)
             r.raise_for_status()
         soup = BeautifulSoup(r.text, "html.parser")
         tag = soup.find(attrs={"data-col": "info.last_trade.PDrCotVal"})
         if tag:
-            text = tag.get_text(strip=True).replace(",", "").replace("٬", "")
-            if re.match(r"^[\d.]+$", text):
-                val = int(float(text))
-                _cache[key] = val
-                _cache_t[key] = now
-                return val
-        nums = re.findall(r"([\d,٬]+)", soup.get_text())
-        valid = []
-        for n in nums:
-            n2 = n.replace(",", "").replace("٬", "")
-            if n2.isdigit():
-                valid.append(int(n2))
-        if valid:
-            val = max(valid)
-            if val > 100:
+            val = _parse_price(tag.get_text(strip=True))
+            if val:
                 _cache[key] = val
                 _cache_t[key] = now
                 return val
     except Exception as e:
-        logger.error(f"tgju {slug}: {e}")
+        logger.error(f"tgju fallback {slug}: {e}")
     return None
 
 
@@ -284,15 +334,23 @@ async def convert_crypto(amount: float, symbol: str) -> str:
 
 
 async def full_market_prices() -> str:
-    """قیمت بازار بدون کریپتو — موازی و سریع"""
-    keys = list(TGJU_SLUGS.keys())
-    results = await asyncio.gather(
-        *[_tgju_price(TGJU_SLUGS[k]) for k in keys],
-        return_exceptions=True,
-    )
+    """قیمت بازار بدون کریپتو — یک درخواست JSON (سریع)"""
+    bulk = await _fetch_tgju_bulk()
     data = {}
-    for k, v in zip(keys, results):
-        data[k] = v if not isinstance(v, Exception) else None
+    for key, slug in TGJU_SLUGS.items():
+        item = bulk.get(slug)
+        if isinstance(item, dict):
+            data[key] = _parse_price(item.get("p"))
+        else:
+            data[key] = _parse_price(item)
+        # fallback نقره اگر silver_999 نبود
+        if key == "silver" and data[key] is None:
+            alt = bulk.get("silver")
+            if isinstance(alt, dict):
+                # نقره جهانی دلاری — رد کن
+                p = _parse_price(alt.get("p"))
+                if p and p > 1000:
+                    data[key] = p
 
     lines = ["💰 **قیمت بازار** (بدون کریپتو)\n"]
 
@@ -314,7 +372,7 @@ async def full_market_prices() -> str:
 
     lines.append("\n—— فلزات و سکه ——")
     for label, key in [
-        ("🥇 طلای ۱۸", "gold18"), ("🥈 نقره", "silver"), ("🟠 مس", "copper"),
+        ("🥇 طلای ۱۸", "gold18"), ("🥈 نقره ۹۹۹", "silver"), ("🟠 مس", "copper"),
         ("🪙 سکه امامی", "coin_emami"), ("🪙 سکه بهار", "coin_bahar"),
         ("🪙 نیم‌سکه", "coin_half"), ("🪙 ربع‌سکه", "coin_quarter"),
     ]:
