@@ -141,7 +141,7 @@ def init_db():
         conn = get_db_connection()
         c = conn.cursor()
         c.execute("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)")
-        c.execute("SELECT value FROM meta WHERE key = 'azan_off_by_default_v1'")
+        c.execute("SELECT value FROM meta WHERE key = 'azan_off_by_default_v2'")
         row = c.fetchone()
         if not row:
             c.execute(
@@ -150,7 +150,7 @@ def init_db():
                 "notify_maghrib = 0, notify_isha = 0"
             )
             c.execute(
-                "INSERT INTO meta (key, value) VALUES ('azan_off_by_default_v1', '1')"
+                "INSERT INTO meta (key, value) VALUES ('azan_off_by_default_v2', '1')"
             )
             conn.commit()
             logger.info("Migration: all azan notifications set to OFF by default")
@@ -213,9 +213,14 @@ def save_user(user_id, first_name, city="قم", country="Iran", language="fa"):
             last_active = datetime('now')
             WHERE user_id = ?''', (first_name, user_id))
     else:
-        c.execute('''INSERT INTO users 
-            (user_id, first_name, city, country, language, subscribed, register_date, last_active)
-            VALUES (?, ?, ?, ?, ?, 1, datetime('now'), datetime('now'))''',
+        c.execute(
+            "INSERT INTO users "
+            "(user_id, first_name, city, country, language, subscribed, "
+            "register_date, last_active, "
+            "notification_enabled, notify_fajr, notify_dhuhr, notify_asr, "
+            "notify_maghrib, notify_isha) "
+            "VALUES (?, ?, ?, ?, ?, 1, datetime('now'), datetime('now'), "
+            "0, 0, 0, 0, 0, 0)",
             (user_id, first_name, city, country, language))
     conn.commit()
     conn.close()
@@ -299,7 +304,7 @@ def get_azan_settings(user_id):
     c = conn.cursor()
     try:
         c.execute(
-            """SELECT notification_enabled,
+            """SELECT COALESCE(notification_enabled, 0),
                       COALESCE(notify_fajr, 0),
                       COALESCE(notify_dhuhr, 0),
                       COALESCE(notify_asr, 0),
@@ -315,9 +320,9 @@ def get_azan_settings(user_id):
         conn.close()
     if not row:
         return {
-            "enabled": True,
-            "fajr": True, "dhuhr": False, "asr": False,
-            "maghrib": True, "isha": False,
+            "enabled": False,
+            "fajr": False, "dhuhr": False, "asr": False,
+            "maghrib": False, "isha": False,
         }
     return {
         "enabled": bool(row[0]),
