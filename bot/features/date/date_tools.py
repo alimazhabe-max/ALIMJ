@@ -212,33 +212,111 @@ def lunar_age(y, m, d) -> str:
         return "❌ تاریخ نامعتبر.\nمثال: `1375/03/15`"
 
 
-# ── ۴. اختلاف دو تاریخ ──
+# ── ۴. اختلاف دو تاریخ (پیشرفته) ──
+def _days_in_jmonth(year, month):
+    """تعداد روز ماه شمسی (درست برای کبیسه)"""
+    days = jdatetime.j_days_in_month[month - 1]
+    if month == 12 and jdatetime.date(year, 1, 1).isleap():
+        days = 30
+    return days
+
+
+def _ymd_diff(a, b):
+    """اختلاف سال/ماه/روز بین دو jdatetime.date (a <= b)"""
+    years = b.year - a.year
+    months = b.month - a.month
+    days = b.day - a.day
+    if days < 0:
+        months -= 1
+        pm = b.month - 1 if b.month > 1 else 12
+        py = b.year if b.month > 1 else b.year - 1
+        days += _days_in_jmonth(py, pm)
+    if months < 0:
+        years -= 1
+        months += 12
+    return years, months, days
+
+
+def _g2h_safe(g):
+    try:
+        h = Gregorian(g.year, g.month, g.day).to_hijri()
+        return h.year, h.month, h.day, HIJRI_MONTHS.get(h.month, str(h.month))
+    except Exception:
+        return None, None, None, "—"
+
+
 def date_diff(y1, m1, d1, y2, m2, d2) -> str:
     try:
         a = jdatetime.date(y1, m1, d1)
         b = jdatetime.date(y2, m2, d2)
+        swapped = False
         if a > b:
             a, b = b, a
             y1, m1, d1, y2, m2, d2 = y2, m2, d2, y1, m1, d1
+            swapped = True
+
         total = (b - a).days
-        years = b.year - a.year
-        months = b.month - a.month
-        days = b.day - a.day
-        if days < 0:
-            months -= 1
-            pm = b.month - 1 if b.month > 1 else 12
-            py = b.year if b.month > 1 else b.year - 1
-            days += jdatetime.j_days_in_month(pm, jdatetime.date(py, 1, 1).isleap())
-        if months < 0:
-            years -= 1
-            months += 12
-        return (
-            f"📅 **اختلاف دو تاریخ**\n\n"
-            f"از: {pn(d1)} {PERSIAN_MONTHS[m1]} {pn(y1)}\n"
-            f"تا: {pn(d2)} {PERSIAN_MONTHS[m2]} {pn(y2)}\n\n"
-            f"🗓 {pn(years)} سال و {pn(months)} ماه و {pn(days)} روز\n"
-            f"📆 مجموع: {pn(f'{total:,}')} روز ≈ {pn(total // 7)} هفته"
-        )
+        years, months, days = _ymd_diff(a, b)
+        total_months = years * 12 + months
+        weeks = total // 7
+        rem_days = total % 7
+        hours = total * 24
+        minutes = hours * 60
+
+        ga = a.togregorian()
+        gb = b.togregorian()
+        ha = _g2h_safe(ga)
+        hb = _g2h_safe(gb)
+
+        wd_a = PERSIAN_WEEKDAYS[a.weekday()]
+        wd_b = PERSIAN_WEEKDAYS[b.weekday()]
+
+        # روزهای کاری تقریبی (۵/۷)
+        workdays = int(total * 5 / 7)
+
+        # مناسبت‌های بین دو تاریخ (نمونه محدود)
+        event_count = 0
+        try:
+            cur = a
+            while cur <= b and event_count < 50:
+                key = f"{cur.month}-{cur.day}"
+                evs = shamsi_events.get(key, [])
+                for e in evs:
+                    if "هیچ مناسبت" not in e:
+                        event_count += 1
+                cur = cur + timedelta(days=1)
+        except Exception:
+            event_count = 0
+
+        direction = ""
+        if swapped:
+            direction = "⚠️ ترتیب ورودی برعکس بود؛ از تاریخ کوچک‌تر به بزرگ‌تر محاسبه شد.\n\n"
+
+        lines = [
+            "📅 **اختلاف دو تاریخ (پیشرفته)**\n",
+            direction,
+            f"🔹 از: {wd_a} {pn(d1)} {PERSIAN_MONTHS[m1]} {pn(y1)}",
+            f"   📆 میلادی: {ga.day} {GREGORIAN_MONTHS[ga.month]} {ga.year}",
+            f"   🌙 قمری: {pn(ha[2])} {ha[3]} {pn(ha[0])}" if ha[0] else "   🌙 قمری: —",
+            "",
+            f"🔸 تا: {wd_b} {pn(d2)} {PERSIAN_MONTHS[m2]} {pn(y2)}",
+            f"   📆 میلادی: {gb.day} {GREGORIAN_MONTHS[gb.month]} {gb.year}",
+            f"   🌙 قمری: {pn(hb[2])} {hb[3]} {pn(hb[0])}" if hb[0] else "   🌙 قمری: —",
+            "",
+            "━━━━━━━━━━━━━━━━━━━━",
+            f"🗓 دقیق: **{pn(years)}** سال و **{pn(months)}** ماه و **{pn(days)}** روز",
+            f"📊 مجموع ماه‌ها: {pn(total_months)} ماه",
+            f"📆 مجموع روزها: {pn(f'{total:,}')} روز",
+            f"🗓 هفته‌ها: {pn(weeks)} هفته و {pn(rem_days)} روز",
+            f"🕐 ساعت تقریبی: {pn(f'{hours:,}')} ساعت",
+            f"⏱ دقیقه تقریبی: {pn(f'{minutes:,}')} دقیقه",
+            f"💼 روز کاری تقریبی: {pn(f'{workdays:,}')} روز",
+        ]
+        if event_count:
+            lines.append(f"📌 مناسبت‌های ثبت‌شده در این بازه: حدود {pn(event_count)}")
+        lines.append("")
+        lines.append(f"📈 میانگین: حدود {pn(round(total / 365.25, 2))} سال خورشیدی")
+        return "\n".join(lines)
     except Exception:
         return "❌ فرمت: `1375/03/15 1403/05/18`"
 
@@ -253,9 +331,95 @@ def parse_two_dates(text: str):
     return None
 
 
-# ── ۵. اختلاف سن دو نفر ──
+# ── ۵. اختلاف سن دو نفر (پیشرفته) ──
 def age_diff(y1, m1, d1, y2, m2, d2) -> str:
-    return "👥 **اختلاف سن دو نفر**\n\n" + date_diff(y1, m1, d1, y2, m2, d2).replace("اختلاف دو تاریخ", "اختلاف سن")
+    try:
+        today = jdatetime.datetime.now().date()
+        a = jdatetime.date(y1, m1, d1)  # نفر اول
+        b = jdatetime.date(y2, m2, d2)  # نفر دوم
+
+        # سن هر نفر تا امروز
+        def age_until(birth, until):
+            if birth > until:
+                return None
+            return _ymd_diff(birth, until)
+
+        age_a = age_until(a, today)
+        age_b = age_until(b, today)
+        if age_a is None or age_b is None:
+            return "❌ تاریخ تولد نمی‌تواند در آینده باشد."
+
+        # اختلاف تولدها
+        older, younger = (a, b) if a <= b else (b, a)
+        older_label = "نفر اول" if a <= b else "نفر دوم"
+        younger_label = "نفر دوم" if a <= b else "نفر اول"
+        dy, dm, dd = _ymd_diff(older, younger)
+        total_days = (younger - older).days
+
+        # سن قمری تقریبی
+        def lunar_years(birth):
+            days_alive = (today - birth).days
+            return round(days_alive / 354.367, 1)
+
+        # درصد عمر (فرض ۷۵ سال)
+        def life_pct(birth):
+            days_alive = (today - birth).days
+            return min(100, round(days_alive / (75 * 365.25) * 100, 1))
+
+        ga = a.togregorian()
+        gb = b.togregorian()
+
+        lines = [
+            "👥 **اختلاف سن دو نفر (پیشرفته)**\n",
+            f"👤 نفر اول: {pn(d1)} {PERSIAN_MONTHS[m1]} {pn(y1)}",
+            f"   سن فعلی: {pn(age_a[0])} سال و {pn(age_a[1])} ماه و {pn(age_a[2])} روز",
+            f"   سن قمری ≈ {pn(lunar_years(a))} سال | عمر ≈ {pn(life_pct(a))}٪",
+            f"   میلادی: {ga.day} {GREGORIAN_MONTHS[ga.month]} {ga.year}",
+            "",
+            f"👤 نفر دوم: {pn(d2)} {PERSIAN_MONTHS[m2]} {pn(y2)}",
+            f"   سن فعلی: {pn(age_b[0])} سال و {pn(age_b[1])} ماه و {pn(age_b[2])} روز",
+            f"   سن قمری ≈ {pn(lunar_years(b))} سال | عمر ≈ {pn(life_pct(b))}٪",
+            f"   میلادی: {gb.day} {GREGORIAN_MONTHS[gb.month]} {gb.year}",
+            "",
+            "━━━━━━━━━━━━━━━━━━━━",
+            f"🏆 بزرگ‌تر: **{older_label}**",
+            f"📏 اختلاف سن: **{pn(dy)}** سال و **{pn(dm)}** ماه و **{pn(dd)}** روز",
+            f"📆 اختلاف تولد: {pn(f'{total_days:,}')} روز ≈ {pn(total_days // 7)} هفته",
+            f"📊 اختلاف به ماه: {pn(dy * 12 + dm)} ماه",
+        ]
+
+        # کی اختلاف به عدد رند می‌رسد؟
+        # مثلاً وقتی اختلاف دقیقاً N سال کامل شود (از الان به بعد معنا ندارد چون ثابت است)
+        # به‌جای آن: چند سال دیگر نفر کوچک‌تر به سن فعلی نفر بزرگ‌تر می‌رسد
+        if a != b:
+            older_age_y = age_a[0] if a <= b else age_b[0]
+            younger_birth = younger
+            # تاریخ رسیدن کوچک‌تر به سن فعلی بزرگ‌تر
+            target_y = younger_birth.year + older_age_y
+            try:
+                target = jdatetime.date(target_y, younger_birth.month, younger_birth.day)
+                if target < today:
+                    target = jdatetime.date(target_y + 1, younger_birth.month, younger_birth.day)
+                left = (target - today).days
+                if left >= 0:
+                    lines.append(
+                        f"\n🎯 {younger_label} حدود {pn(left)} روز دیگر "
+                        f"به سن فعلی {older_label} می‌رسد "
+                        f"({pn(target.day)} {PERSIAN_MONTHS[target.month]} {pn(target.year)})"
+                    )
+            except Exception:
+                pass
+
+        # نسبت سنی
+        days_a = (today - a).days
+        days_b = (today - b).days
+        if min(days_a, days_b) > 0:
+            ratio = max(days_a, days_b) / min(days_a, days_b)
+            lines.append(f"📐 نسبت سنی: {pn(round(ratio, 2))} برابر")
+
+        return "\n".join(lines)
+    except Exception:
+        return "❌ فرمت: `1375/03/15 1380/06/20`"
 
 
 # ── ۶. تبدیل تاریخ با روز هفته ──
