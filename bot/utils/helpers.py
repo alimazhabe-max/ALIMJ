@@ -49,7 +49,10 @@ async def build_message(user_id, user_name, city):
     miladi_date = greg.strftime("%B %d, %A") + f" {greg.year}/{greg.month:02d}/{greg.day:02d}"
 
     hijri = get_hijri_date(greg)
-    hijri_date = f"{to_persian_num(hijri['day'])} {hijri['month_name']} {to_persian_num(hijri['year'])}"
+    hy = to_persian_num(hijri['year'])
+    hm = to_persian_num(f"{hijri['month']:02d}")
+    hd = to_persian_num(f"{hijri['day']:02d}")
+    hijri_date = f"{to_persian_num(hijri['day'])} {hijri['month_name']} {hy}/{hm}/{hd}"
 
     hijri_events_list = get_hijri_events(hijri['month'], hijri['day'])
     hijri_events_text = chr(10).join([f"• {e}" for e in hijri_events_list])
