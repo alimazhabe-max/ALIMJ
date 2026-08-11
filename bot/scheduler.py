@@ -1,20 +1,19 @@
 from datetime import time, datetime
 import pytz
 from bot.logger import logger
-from bot.database import get_all_users, update_stats, get_users_for_azan
+from bot.database import get_all_users, update_stats, get_users_for_azan, backup_db
 from bot.utils.helpers import build_message, get_refresh_button
 from bot.config import config
 from bot.api.prayer import get_prayer_times
+from bot.db_persist import send_db_to_admins
 import asyncio
 
-# نگاشت کلید فارسی اذان → ایندکس تنظیمات کاربر
-# get_users_for_azan: (user_id, city, enabled, fajr, dhuhr, asr, maghrib, isha)
 PRAYER_FLAGS = {
-    "اذان صبح": 3,   # fajr
-    "اذان ظهر": 4,   # dhuhr
-    "اذان عصر": 5,   # asr
-    "اذان مغرب": 6,  # maghrib
-    "اذان عشاء": 7,  # isha
+    "اذان صبح": 3,
+    "اذان ظهر": 4,
+    "اذان عصر": 5,
+    "اذان مغرب": 6,
+    "اذان عشاء": 7,
 }
 
 
@@ -38,7 +37,6 @@ async def send_daily_messages(context):
 
 
 async def check_azan_notifications(context):
-    """هر دقیقه: اذان‌هایی که کاربر فعال کرده را اطلاع بده"""
     tehran = pytz.timezone(config.TIMEZONE)
     now = datetime.now(tehran)
     users = get_users_for_azan()
@@ -48,7 +46,6 @@ async def check_azan_notifications(context):
             city = row[1] if len(row) > 1 and row[1] else "تهران"
             times = get_prayer_times(city) or {}
             for prayer_name, flag_idx in PRAYER_FLAGS.items():
-                # آیا این اذان برای کاربر روشن است؟
                 if flag_idx >= len(row) or not row[flag_idx]:
                     continue
                 tstr = times.get(prayer_name)
@@ -71,6 +68,16 @@ async def check_azan_notifications(context):
                     await asyncio.sleep(0.05)
         except Exception as e:
             logger.error(f"azan notify error: {e}")
+
+
+async def periodic_backup(context):
+    """بکاپ محلی + ارسال فایل به ادمین در تلگرام (رایگان)"""
+    try:
+        backup_db()
+        ok, msg = await send_db_to_admins(context.bot)
+        logger.info(f"Periodic telegram backup: {msg}")
+    except Exception as e:
+        logger.error(f"periodic backup error: {e}")
 
 
 def setup_scheduler(app):
@@ -97,4 +104,11 @@ def setup_scheduler(app):
         first=10,
         name="azan_timer",
     )
-    logger.info("Scheduler ready: daily + azan timer (personalized)")
+    # هر ۱۲ ساعت بکاپ به تلگرام ادمین
+    job_queue.run_repeating(
+        periodic_backup,
+        interval=12 * 3600,
+        first=300,
+        name="db_backup_telegram",
+    )
+    logger.info("Scheduler ready: daily + azan + telegram backup every 12h")

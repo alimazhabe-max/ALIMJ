@@ -1,42 +1,118 @@
 import sqlite3
 import shutil
+import os
 from datetime import datetime
 from pathlib import Path
 from bot.logger import logger
 from bot.config import config
 
 DB_PATH = config.DB_PATH
+BACKUP_DIR = Path(config.BACKUP_DIR)
+BACKUP_KEEP = getattr(config, "BACKUP_KEEP", 14)
+
+
+def _ensure_parent(path):
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+
 
 def get_db_connection():
-    return sqlite3.connect(DB_PATH, check_same_thread=False)
+    _ensure_parent(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=30)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=NORMAL")
+    conn.execute("PRAGMA busy_timeout=30000")
+    return conn
+
+
+def _user_count(db_file) -> int:
+    """تعداد کاربران یک فایل دیتابیس — اگر خراب باشد 0"""
+    try:
+        p = Path(db_file)
+        if not p.exists() or p.stat().st_size < 100:
+            return 0
+        conn = sqlite3.connect(str(p), timeout=5)
+        try:
+            c = conn.cursor()
+            c.execute("SELECT COUNT(*) FROM users")
+            return int(c.fetchone()[0] or 0)
+        finally:
+            conn.close()
+    except Exception:
+        return 0
+
+
+def restore_from_backup_if_needed():
+    """
+    اگر دیتابیس اصلی خالی/ناموجود باشد ولی بکاپ داشته باشیم،
+    آخرین بکاپ معتبر را برمی‌گرداند تا داده کاربران از بین نرود.
+    """
+    _ensure_parent(DB_PATH)
+    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+
+    current_users = _user_count(DB_PATH)
+    if current_users > 0:
+        logger.info(f"DB OK — {current_users} users at {DB_PATH}")
+        return
+
+    candidates = []
+    if BACKUP_DIR.exists():
+        candidates.extend(sorted(BACKUP_DIR.glob("bot_*.db"), reverse=True))
+    stable = Path(DB_PATH).parent / "bot_data.backup.db"
+    if stable.exists():
+        candidates.insert(0, stable)
+
+    best = None
+    best_count = 0
+    for p in candidates:
+        n = _user_count(p)
+        if n > best_count:
+            best, best_count = p, n
+
+    if best and best_count > 0:
+        try:
+            shutil.copy2(best, DB_PATH)
+            logger.warning(
+                f"Restored DB from backup {best.name} ({best_count} users) -> {DB_PATH}"
+            )
+        except Exception as e:
+            logger.error(f"Restore failed: {e}")
+    else:
+        logger.info(f"No backup to restore — fresh DB at {DB_PATH}")
+
 
 def init_db():
-    logger.info("Initializing database...")
+    logger.info(f"Initializing database at {DB_PATH} ...")
+    restore_from_backup_if_needed()
+
     conn = get_db_connection()
     c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS users (
-        user_id INTEGER PRIMARY KEY,
-        first_name TEXT,
-        city TEXT DEFAULT 'قم',
-        country TEXT DEFAULT 'Iran',
-        language TEXT DEFAULT 'fa',
-        subscribed INTEGER DEFAULT 1,
-        register_date TEXT,
-        last_active TEXT,
-        notification_enabled INTEGER DEFAULT 1,
-        notify_fajr INTEGER DEFAULT 1,
-        notify_dhuhr INTEGER DEFAULT 0,
-        notify_asr INTEGER DEFAULT 0,
-        notify_maghrib INTEGER DEFAULT 1,
-        notify_isha INTEGER DEFAULT 0
-    )''')
-    c.execute('''CREATE TABLE IF NOT EXISTS stats (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        date TEXT,
-        total_users INTEGER,
-        active_users INTEGER
-    )''')
-    # مهاجرت ستون‌های قدیمی
+    # فقط CREATE IF NOT EXISTS — هیچ‌وقت جدول users را DROP نمی‌کنیم
+    c.execute(
+        "CREATE TABLE IF NOT EXISTS users ("
+        "user_id INTEGER PRIMARY KEY,"
+        "first_name TEXT,"
+        "city TEXT DEFAULT 'قم',"
+        "country TEXT DEFAULT 'Iran',"
+        "language TEXT DEFAULT 'fa',"
+        "subscribed INTEGER DEFAULT 1,"
+        "register_date TEXT,"
+        "last_active TEXT,"
+        "notification_enabled INTEGER DEFAULT 1,"
+        "notify_fajr INTEGER DEFAULT 1,"
+        "notify_dhuhr INTEGER DEFAULT 0,"
+        "notify_asr INTEGER DEFAULT 0,"
+        "notify_maghrib INTEGER DEFAULT 1,"
+        "notify_isha INTEGER DEFAULT 0"
+        ")"
+    )
+    c.execute(
+        "CREATE TABLE IF NOT EXISTS stats ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        "date TEXT,"
+        "total_users INTEGER,"
+        "active_users INTEGER"
+        ")"
+    )
     for col, default in (
         ("last_main_msg_id", "INTEGER"),
         ("notification_enabled", "INTEGER DEFAULT 1"),
@@ -54,20 +130,43 @@ def init_db():
     conn.commit()
     conn.close()
     init_extra_tables()
-    logger.info("Database initialized successfully")
+    n = _user_count(DB_PATH)
+    logger.info(f"Database ready — {n} users")
+
 
 def backup_db():
+    """
+    بکاپ روی همان دیسک پایدار:
+    - backups/bot_YYYYMMDD_HHMMSS.db
+    - bot_data.backup.db (آخرین نسخه ثابت برای ریستور سریع)
+    """
     try:
-        backup_dir = Path("backups")
-        backup_dir.mkdir(exist_ok=True)
+        if not Path(DB_PATH).exists():
+            return
+        users = _user_count(DB_PATH)
+        if users == 0:
+            logger.info("Skip backup — DB has 0 users")
+            return
+
+        BACKUP_DIR.mkdir(parents=True, exist_ok=True)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        backup_path = backup_dir / f"bot_{timestamp}.db"
-        shutil.copy(DB_PATH, backup_path)
-        logger.info(f"Database backed up to {backup_path}")
-        for file in sorted(backup_dir.glob("bot_*.db"))[:-7]:
-            file.unlink()
+        backup_path = BACKUP_DIR / f"bot_{timestamp}.db"
+        shutil.copy2(DB_PATH, backup_path)
+
+        stable = Path(DB_PATH).parent / "bot_data.backup.db"
+        shutil.copy2(DB_PATH, stable)
+
+        old = sorted(BACKUP_DIR.glob("bot_*.db"))
+        for f in old[:-BACKUP_KEEP]:
+            try:
+                f.unlink()
+            except Exception:
+                pass
+
+        logger.info(f"DB backed up ({users} users) -> {backup_path.name}")
     except Exception as e:
         logger.error(f"Backup failed: {e}")
+
 
 def get_user(user_id):
     conn = get_db_connection()

@@ -1,40 +1,51 @@
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
+from telegram.ext import (
+    Application, CommandHandler, CallbackQueryHandler,
+    MessageHandler, filters, ContextTypes,
+)
 from telegram import Update
 from bot.config import config
 from bot.logger import logger
-from bot.database import init_db, backup_db
+from bot.database import init_db, backup_db, _user_count, DB_PATH
 from bot.handlers.commands import (
     start, help_command, city_command, language_command,
-    calendar_command, stats_command, broadcast_command
+    calendar_command, stats_command, broadcast_command,
+    backup_command, restore_document_handler,
 )
 from bot.handlers.callbacks import button_handler
 from bot.handlers.messages import text_handler
 from bot.scheduler import setup_scheduler
+from bot.db_persist import notify_admins_if_empty, send_db_to_admins
 import threading
 from flask import Flask
 import os
 from datetime import datetime
-import traceback
+import asyncio
 
 flask_app = Flask(__name__)
 
-@flask_app.route('/')
+
+@flask_app.route("/")
 def home():
     return "✅ Bot is running!"
 
-@flask_app.route('/health')
+
+@flask_app.route("/health")
 def health():
-    return {"status": "ok", "time": str(datetime.now())}
+    return {
+        "status": "ok",
+        "time": str(datetime.now()),
+        "users": _user_count(DB_PATH),
+        "db": str(DB_PATH),
+    }
+
 
 def run_flask():
     port = int(os.environ.get("PORT", 8080))
-    flask_app.run(host='0.0.0.0', port=port, use_reloader=False, threaded=True)
+    flask_app.run(host="0.0.0.0", port=port, use_reloader=False, threaded=True)
 
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """جلوگیری از کرش — خطاهای شبکه را بی‌صدا رد کن، بقیه را لاگ کن"""
     err = context.error
-    # خطاهای رایج تلگرام/شبکه — به کاربر پیام نده
     ignore_names = (
         "NetworkError", "TimedOut", "RetryAfter", "BadGateway",
         "ServiceUnavailable", "RequestTimeout", "httpx",
@@ -47,7 +58,6 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
 
     logger.error("Exception while handling an update:", exc_info=err)
 
-    # از تکرار پیام خطا برای یک کاربر در ۳۰ ثانیه جلوگیری کن
     try:
         if not update or not isinstance(update, Update) or not update.effective_user:
             return
@@ -67,9 +77,18 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
         pass
 
 
+async def post_init(app: Application):
+    """بعد از استارت — اگر DB خالی بود به ادمین خبر بده"""
+    try:
+        await notify_admins_if_empty(app.bot)
+    except Exception as e:
+        logger.error(f"post_init notify: {e}")
+
+
 def main():
     logger.info("=" * 50)
-    logger.info("🚀 Starting ALIMJ Bot v3.0 - Professional + Crypto + Weather 7d")
+    logger.info("🚀 Starting Rooze Ziba Bot")
+    logger.info(f"DB path: {DB_PATH}")
     logger.info("=" * 50)
 
     init_db()
@@ -78,7 +97,8 @@ def main():
     app = (
         Application.builder()
         .token(config.BOT_TOKEN)
-        .concurrent_updates(True)  # سرعت بالاتر
+        .concurrent_updates(True)
+        .post_init(post_init)
         .build()
     )
 
@@ -89,6 +109,9 @@ def main():
     app.add_handler(CommandHandler("calendar", calendar_command))
     app.add_handler(CommandHandler("stats", stats_command))
     app.add_handler(CommandHandler("broadcast", broadcast_command))
+    app.add_handler(CommandHandler("backup", backup_command))
+    # ریستور: فایل .db با کپشن /restore
+    app.add_handler(MessageHandler(filters.Document.ALL, restore_document_handler))
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
 
@@ -96,16 +119,13 @@ def main():
 
     setup_scheduler(app)
 
-    logger.info("✅ Bot is fully ready! (no-crash + fast mode)")
+    # Flask برای healthcheck
+    t = threading.Thread(target=run_flask, daemon=True)
+    t.start()
 
-    app.run_polling(
-        allowed_updates=["message", "callback_query"],
-        drop_pending_updates=True,
-        close_loop=False,
-    )
+    logger.info("✅ Bot ready (Telegram backup/restore enabled)")
+    app.run_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES)
 
 
 if __name__ == "__main__":
-    flask_thread = threading.Thread(target=run_flask, daemon=True)
-    flask_thread.start()
     main()
