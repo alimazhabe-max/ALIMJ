@@ -14,23 +14,15 @@ from bot.handlers.commands import (
 from bot.handlers.callbacks import button_handler
 from bot.handlers.messages import text_handler
 from bot.scheduler import setup_scheduler
-from bot.db_persist import (
-    notify_admins_if_empty,
-    send_db_to_admins,
-    auto_backup,
-)
+from bot.db_persist import notify_admins_if_empty, shutdown_backup
 import threading
 import signal
-import sys
 from flask import Flask
 import os
 from datetime import datetime
 
 flask_app = Flask(__name__)
-
-# نگه داشتن رفرنس اپ برای بکاپ هنگام خاموش شدن
-_app_ref = {"app": None}
-_shutdown_backup_done = {"done": False}
+_shutdown_done = {"done": False}
 
 
 @flask_app.route("/")
@@ -64,9 +56,7 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
     if any(x in err_name or x in err_str for x in ignore_names):
         logger.warning(f"Ignored transient error: {err_name}: {err_str[:120]}")
         return
-
     logger.error("Exception while handling an update:", exc_info=err)
-
     try:
         if not update or not isinstance(update, Update) or not update.effective_user:
             return
@@ -77,7 +67,6 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
             return
         last[uid] = now
         error_handler._last = last
-
         if update.effective_message:
             await update.effective_message.reply_text(
                 "⚠️ موقتاً مشکلی پیش آمد. چند ثانیه بعد دوباره امتحان کنید."
@@ -93,55 +82,27 @@ async def post_init(app: Application):
         logger.error(f"post_init notify: {e}")
 
 
-async def pre_shutdown_backup(app: Application):
-    """
-    قبل از خاموش شدن (دیپلوی / ری‌استارت):
-    ۱) بکاپ GitHub
-    ۲) ارسال فایل برای ادمین در تلگرام
-    """
-    if _shutdown_backup_done["done"]:
+def _do_shutdown_backup(reason: str = "shutdown"):
+    if _shutdown_done["done"]:
         return
-    _shutdown_backup_done["done"] = True
-    logger.info("🛑 Shutdown detected — sending backup to admin + GitHub...")
+    _shutdown_done["done"] = True
+    logger.info(f"🛑 {reason} — backup to admin + GitHub...")
     try:
-        ok, msg = auto_backup()
-        logger.info(f"shutdown GitHub backup: {msg}")
+        msg = shutdown_backup()
+        logger.info(f"shutdown_backup result: {msg}")
     except Exception as e:
-        logger.error(f"shutdown GitHub backup failed: {e}")
-    try:
-        ok, msg = await send_db_to_admins(
-            app.bot,
-            caption=(
-                "💾 بکاپ خودکار قبل از خاموش شدن / دیپلوی\n"
-                f"👥 کاربران: {_user_count(DB_PATH)}\n"
-                f"🕐 {datetime.now().strftime('%Y-%m-%d %H:%M')}\n\n"
-                "اگر بعد از دیپلوی داده برگشت نشد، همین فایل را با کپشن /restore بفرست."
-            ),
-        )
-        logger.info(f"shutdown telegram backup: {msg}")
-    except Exception as e:
-        logger.error(f"shutdown telegram backup failed: {e}")
+        logger.error(f"shutdown_backup failed: {e}")
 
 
 async def post_shutdown(app: Application):
-    await pre_shutdown_backup(app)
-
-
-def _sync_shutdown_backup():
-    """برای سیگنال SIGTERM — اگر event loop در دسترس نبود"""
-    if _shutdown_backup_done["done"]:
-        return
-    try:
-        ok, msg = auto_backup()
-        logger.info(f"signal GitHub backup: {msg}")
-    except Exception as e:
-        logger.error(f"signal backup failed: {e}")
+    _do_shutdown_backup("post_shutdown")
 
 
 def main():
     logger.info("=" * 50)
     logger.info("🚀 Starting Rooze Ziba Bot")
     logger.info(f"DB path: {DB_PATH}")
+    logger.info(f"ADMIN_IDS: {config.ADMIN_IDS}")
     logger.info("=" * 50)
 
     init_db()
@@ -155,7 +116,6 @@ def main():
         .post_shutdown(post_shutdown)
         .build()
     )
-    _app_ref["app"] = app
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
@@ -168,20 +128,20 @@ def main():
     app.add_handler(MessageHandler(filters.Document.ALL, restore_document_handler))
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
-
     app.add_error_handler(error_handler)
     setup_scheduler(app)
 
-    t = threading.Thread(target=run_flask, daemon=True)
-    t.start()
+    threading.Thread(target=run_flask, daemon=True).start()
 
-    # Render موقع دیپلوی SIGTERM می‌فرستد
     def _on_signal(signum, frame):
-        logger.warning(f"Received signal {signum} — backup then exit")
-        _sync_shutdown_backup()
-        # اجازه بده run_polling خودش با post_shutdown تمام کند
+        logger.warning(f"Signal {signum} received")
+        _do_shutdown_backup(f"signal:{signum}")
+        # درخواست توقف polling
         try:
-            app.stop()
+            import asyncio
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                loop.create_task(app.stop())
         except Exception:
             pass
 
@@ -189,10 +149,14 @@ def main():
         signal.signal(signal.SIGTERM, _on_signal)
         signal.signal(signal.SIGINT, _on_signal)
     except Exception as e:
-        logger.warning(f"signal handler setup: {e}")
+        logger.warning(f"signal setup: {e}")
 
-    logger.info("✅ Bot ready (pre-deploy backup to admin enabled)")
-    app.run_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES)
+    logger.info("✅ Bot ready (sync shutdown backup to admin)")
+    try:
+        app.run_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES)
+    finally:
+        # اگر بدون سیگنال هم تمام شد
+        _do_shutdown_backup("finally")
 
 
 if __name__ == "__main__":

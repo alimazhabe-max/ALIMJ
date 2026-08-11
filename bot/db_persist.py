@@ -135,6 +135,87 @@ def auto_backup():
     return False, "GitHub غیرفعال — فقط بکاپ محلی"
 
 
+
+def send_db_to_admins_sync(caption: str = None):
+    """
+    ارسال همگام فایل DB به ادمین با HTTP مستقیم.
+    برای لحظه خاموش شدن / دیپلوی قابل اعتمادتر از async است.
+    """
+    path = Path(DB_PATH)
+    if not path.exists():
+        return False, "فایل DB نیست"
+    if not config.ADMIN_IDS:
+        return False, "ADMIN_IDS خالی است"
+    if not config.BOT_TOKEN:
+        return False, "BOT_TOKEN نیست"
+
+    try:
+        backup_db()
+    except Exception:
+        pass
+
+    users = _user_count(DB_PATH)
+    size_kb = path.stat().st_size / 1024
+    cap = caption or (
+        f"💾 بکاپ خودکار (قبل از دیپلوی / خاموش شدن)\n"
+        f"👥 کاربران: {users}\n"
+        f"📦 {size_kb:.1f} KB\n"
+        f"🕐 {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+    )
+
+    url = f"https://api.telegram.org/bot{config.BOT_TOKEN}/sendDocument"
+    ok = 0
+    errors = []
+    for admin_id in config.ADMIN_IDS:
+        try:
+            with open(path, "rb") as f:
+                r = requests.post(
+                    url,
+                    data={"chat_id": admin_id, "caption": cap},
+                    files={"document": (f"bot_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.db", f)},
+                    timeout=25,
+                )
+            if r.status_code == 200 and r.json().get("ok"):
+                ok += 1
+            else:
+                errors.append(f"{admin_id}:{r.status_code} {r.text[:120]}")
+        except Exception as e:
+            errors.append(f"{admin_id}:{e}")
+            logger.error(f"sync send backup to {admin_id}: {e}")
+
+    msg = f"ارسال sync به {ok}/{len(config.ADMIN_IDS)} ادمین"
+    if errors:
+        msg += " | " + "; ".join(errors)[:200]
+    return ok > 0, msg
+
+
+def shutdown_backup():
+    """بکاپ کامل موقع خاموش شدن: GitHub + تلگرام ادمین (همگام)"""
+    results = []
+    try:
+        ok, msg = auto_backup()
+        results.append(f"GitHub: {msg}")
+        logger.info(f"shutdown_backup GitHub: {msg}")
+    except Exception as e:
+        results.append(f"GitHub error: {e}")
+        logger.error(f"shutdown_backup GitHub: {e}")
+    try:
+        ok, msg = send_db_to_admins_sync(
+            caption=(
+                "💾 بکاپ خودکار قبل از دیپلوی / خاموش شدن\n"
+                f"👥 کاربران: {_user_count(DB_PATH)}\n"
+                f"🕐 {datetime.now().strftime('%Y-%m-%d %H:%M')}\n\n"
+                "نسخه جدید در حال بالا آمدن است."
+            )
+        )
+        results.append(f"Telegram: {msg}")
+        logger.info(f"shutdown_backup Telegram: {msg}")
+    except Exception as e:
+        results.append(f"Telegram error: {e}")
+        logger.error(f"shutdown_backup Telegram: {e}")
+    return " | ".join(results)
+
+
 async def send_db_to_admins(bot, caption: str = None):
     path = Path(DB_PATH)
     if not path.exists():
