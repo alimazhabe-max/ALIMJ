@@ -19,7 +19,9 @@ from bot.utils.helpers import (
 )
 from bot.config import config
 from bot.logger import logger
+from bot.db_persist import send_db_to_admins, restore_db_from_file
 import asyncio
+from pathlib import Path
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -31,9 +33,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     save_user(user_id, first_name)
     city = get_user_city(user_id)
     message = await build_message(user_id, first_name, city)
-    # کیبورد پایین (یک‌بار ست می‌شود و می‌ماند)
     await update.message.reply_text("⬇️", reply_markup=get_main_keyboard())
-    # پیام اصلی — فقط دکمه بروزرسانی زیر آن
     msg = await update.message.reply_text(message, reply_markup=get_refresh_button())
     context.user_data["last_main_msg_id"] = msg.message_id
     set_last_main_msg_id(user_id, msg.message_id)
@@ -123,3 +123,56 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.error(f"Broadcast failed to {user[0]}: {e}")
     await update.message.reply_text(get_text(user_id, "broadcast_sent", count=count))
+
+
+# ─── بکاپ / ریستور رایگان (بدون دیسک پولی) ───────────────────
+
+async def backup_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """ادمین: /backup → فایل دیتابیس را در تلگرام می‌گیرد"""
+    user_id = update.effective_user.id
+    if user_id not in config.ADMIN_IDS:
+        await update.message.reply_text("⛔ فقط ادمین")
+        return
+    await update.message.reply_text("⏳ در حال آماده‌سازی بکاپ...")
+    ok, msg = await send_db_to_admins(context.bot)
+    await update.message.reply_text("✅ " + msg if ok else "❌ " + msg)
+
+
+async def restore_document_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    ادمین فایل .db را می‌فرستد با کپشن /restore
+    یا فقط /restore را بعد از ارسال فایل می‌زند (document در همان چت)
+    """
+    user_id = update.effective_user.id
+    if user_id not in config.ADMIN_IDS:
+        return
+
+    msg = update.message
+    if not msg or not msg.document:
+        return
+
+    caption = (msg.caption or "").strip().lower()
+    # فقط اگر کپشن restore باشد یا کاربر صریحاً خواسته
+    if "/restore" not in caption and "restore" not in caption and "ریستور" not in caption:
+        return
+
+    doc = msg.document
+    name = (doc.file_name or "").lower()
+    if not (name.endswith(".db") or name.endswith(".sqlite") or name.endswith(".sqlite3") or "backup" in name):
+        await msg.reply_text("❌ فایل باید دیتابیس باشد (.db)")
+        return
+
+    await msg.reply_text("⏳ در حال بازگردانی دیتابیس...")
+    try:
+        tg_file = await doc.get_file()
+        tmp = Path("/tmp") / f"restore_{user_id}.db"
+        await tg_file.download_to_drive(custom_path=str(tmp))
+        ok, text = await restore_db_from_file(str(tmp))
+        try:
+            tmp.unlink(missing_ok=True)
+        except Exception:
+            pass
+        await msg.reply_text(text if ok else "❌ " + text)
+    except Exception as e:
+        logger.error(f"restore error: {e}")
+        await msg.reply_text(f"❌ خطا در بازگردانی: {e}")
