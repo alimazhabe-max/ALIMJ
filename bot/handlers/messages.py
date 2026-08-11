@@ -213,10 +213,20 @@ async def _text_handler_inner(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text("🌙 تولد شمسی:\n`1375/03/15`", reply_markup=get_date_tools_keyboard()); return
     if text in ("📆 اختلاف تاریخ", "📆 اختلاف دو تاریخ", "اختلاف تاریخ"):
         context.user_data["waiting_for"] = "date_diff"; track_usage(user_id, "date_diff")
-        await update.message.reply_text("📆 دو تاریخ:\n`1375/03/15 1403/05/18`", reply_markup=get_date_tools_keyboard()); return
+        await update.message.reply_text(
+            "📆 دو تاریخ شمسی بفرست:\n"
+            "`1375/03/15 1403/05/18`\n\n"
+            "خروجی: سال/ماه/روز • هفته • ساعت • روز کاری • میلادی و قمری",
+            reply_markup=get_date_tools_keyboard(),
+        ); return
     if text in ("👥 اختلاف سن", "اختلاف سن"):
         context.user_data["waiting_for"] = "age_diff"; track_usage(user_id, "age_diff")
-        await update.message.reply_text("👥 دو تولد:\n`1375/03/15 1380/06/20`", reply_markup=get_date_tools_keyboard()); return
+        await update.message.reply_text(
+            "👥 دو تاریخ تولد شمسی بفرست:\n"
+            "`1375/03/15 1380/06/20`\n\n"
+            "خروجی: سن هر نفر • اختلاف دقیق • سن قمری • نسبت سنی",
+            reply_markup=get_date_tools_keyboard(),
+        ); return
     if text in ("📅 تقویم ماه", "تقویم ماه"):
         track_usage(user_id, "month_cal")
         await update.message.reply_text(month_calendar(), reply_markup=get_date_tools_keyboard()); return
