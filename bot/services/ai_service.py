@@ -1,124 +1,158 @@
-import os
+"""Free AI service for ALIMJ: Gemini first, Groq as automatic fallback.
+
+No OpenAI SDK is required. API keys are read only from environment variables.
+"""
+from __future__ import annotations
+
 import asyncio
-from typing import Dict, List, Optional
+from typing import Dict, List, Tuple
 
 import httpx
 
+from bot.config import config
 from bot.logger import logger
 
-DEEPSEEK_URL = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com").rstrip("/") + "/chat/completions"
-DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "").strip()
-DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-v4-flash").strip()
-AI_MAX_INPUT = int(os.getenv("AI_MAX_INPUT", "5000"))
-AI_MAX_OUTPUT = int(os.getenv("AI_MAX_OUTPUT", "1500"))
-AI_HISTORY_ITEMS = int(os.getenv("AI_HISTORY_ITEMS", "8"))
-AI_TIMEOUT = float(os.getenv("AI_TIMEOUT", "45"))
-
-SYSTEM_PROMPT = """تو دستیار هوشمند ربات تلگرام ALIMJ هستی.
-همیشه فارسی روان، محترمانه و کاربردی پاسخ بده، مگر کاربر زبان دیگری بخواهد.
-پاسخ‌ها را تا حد امکان منظم و کوتاه بده.
-اطلاعاتی مثل قیمت، آب‌وهوا، زمان و اخبار را بدون ابزار زنده قطعی فرض نکن.
-اگر مطمئن نیستی، صادقانه بگو.
-از ادعای دسترسی به اطلاعات خصوصی کاربر خودداری کن.
-"""
+SYSTEM_PROMPT = (
+    "تو دستیار هوشمند ربات ALIMJ هستی. پاسخ‌ها را دقیق، مفید و طبیعی بده. "
+    "زبان پیش‌فرض فارسی است، مگر کاربر زبان دیگری بخواهد. اگر اطلاعاتی قطعی نیست، "
+    "شفاف بگو که مطمئن نیستی و حدس را به‌عنوان واقعیت بیان نکن."
+)
 
 
-def _trim_history(history: List[dict]) -> List[dict]:
-    if AI_HISTORY_ITEMS <= 0:
+def _history(context) -> List[Dict[str, str]]:
+    items = context.user_data.get("ai_history", [])
+    if not isinstance(items, list):
         return []
-    return history[-AI_HISTORY_ITEMS:]
+    return items[-max(0, config.AI_HISTORY_ITEMS):]
 
 
-def reset_history(user_data: dict) -> None:
-    user_data.pop("deepseek_history", None)
+def clear_history(context) -> None:
+    context.user_data.pop("ai_history", None)
 
 
-def _extract_content(data: dict) -> str:
-    choices = data.get("choices") or []
-    if not choices:
-        raise RuntimeError("DeepSeek پاسخ قابل استفاده‌ای برنگرداند.")
-    message = choices[0].get("message") or {}
-    content = message.get("content")
-    if not content:
-        raise RuntimeError("پاسخ DeepSeek خالی بود.")
-    return str(content).strip()
+def _append_history(context, user_text: str, answer: str) -> None:
+    items = _history(context)
+    items.extend([
+        {"role": "user", "content": user_text},
+        {"role": "assistant", "content": answer},
+    ])
+    context.user_data["ai_history"] = items[-max(2, config.AI_HISTORY_ITEMS):]
 
 
-async def ask_deepseek(user_text: str, history: Optional[List[dict]] = None, user_name: str = "کاربر", city: str = "") -> tuple[str, List[dict]]:
-    if not DEEPSEEK_API_KEY:
-        raise RuntimeError("DEEPSEEK_API_KEY در Environment Variables تنظیم نشده است.")
+def active_providers() -> List[str]:
+    providers = []
+    if config.GEMINI_API_KEY:
+        providers.append("Gemini")
+    if config.GROQ_API_KEY:
+        providers.append("Groq")
+    return providers
 
-    text = (user_text or "").strip()
-    if not text:
-        raise ValueError("پیام خالی است.")
-    if len(text) > AI_MAX_INPUT:
-        text = text[:AI_MAX_INPUT]
 
-    history = _trim_history(history or [])
-    context = SYSTEM_PROMPT
-    if user_name:
-        context += f"\nنام نمایشی کاربر: {user_name}"
-    if city:
-        context += f"\nشهر ثبت‌شده کاربر: {city}"
+def _gemini_parts(history: List[Dict[str, str]], user_text: str) -> List[Dict]:
+    contents = []
+    for item in history:
+        role = "user" if item.get("role") == "user" else "model"
+        text = str(item.get("content", ""))[: config.AI_MAX_INPUT]
+        if text:
+            contents.append({"role": role, "parts": [{"text": text}]})
+    contents.append({"role": "user", "parts": [{"text": user_text}]})
+    return contents
 
-    messages = [{"role": "system", "content": context}] + history + [{"role": "user", "content": text}]
+
+async def _call_gemini(history: List[Dict[str, str]], user_text: str) -> str:
+    url = (
+        f"{config.GEMINI_BASE_URL.rstrip('/')}/models/"
+        f"{config.GEMINI_MODEL}:generateContent"
+        f"?key={config.GEMINI_API_KEY}"
+    )
     payload = {
-        "model": DEEPSEEK_MODEL,
+        "systemInstruction": {"parts": [{"text": SYSTEM_PROMPT}]},
+        "contents": _gemini_parts(history, user_text),
+        "generationConfig": {
+            "maxOutputTokens": config.AI_MAX_OUTPUT,
+        },
+    }
+    async with httpx.AsyncClient(timeout=config.AI_TIMEOUT) as client:
+        response = await client.post(url, json=payload)
+        if response.status_code >= 400:
+            raise RuntimeError(f"Gemini HTTP {response.status_code}: {response.text[:600]}")
+        data = response.json()
+    try:
+        return data["candidates"][0]["content"]["parts"][0]["text"].strip()
+    except (KeyError, IndexError, TypeError) as exc:
+        raise RuntimeError(f"Gemini response format invalid: {str(data)[:800]}") from exc
+
+
+async def _call_groq(history: List[Dict[str, str]], user_text: str) -> str:
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    messages.extend(history)
+    messages.append({"role": "user", "content": user_text})
+    payload = {
+        "model": config.GROQ_MODEL,
         "messages": messages,
-        "stream": False,
+        "max_tokens": config.AI_MAX_OUTPUT,
         "temperature": 0.7,
-        "max_tokens": AI_MAX_OUTPUT,
     }
     headers = {
-        "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+        "Authorization": f"Bearer {config.GROQ_API_KEY}",
         "Content-Type": "application/json",
     }
+    url = f"{config.GROQ_BASE_URL.rstrip('/')}/chat/completions"
+    async with httpx.AsyncClient(timeout=config.AI_TIMEOUT) as client:
+        response = await client.post(url, headers=headers, json=payload)
+        if response.status_code >= 400:
+            raise RuntimeError(f"Groq HTTP {response.status_code}: {response.text[:600]}")
+        data = response.json()
+    try:
+        return data["choices"][0]["message"]["content"].strip()
+    except (KeyError, IndexError, TypeError) as exc:
+        raise RuntimeError(f"Groq response format invalid: {str(data)[:800]}") from exc
 
-    last_error = None
-    for attempt in range(2):
+
+async def ask_ai(context, user_text: str) -> Tuple[str, str]:
+    """Ask Gemini first, then Groq if Gemini fails.
+
+    Returns (answer, provider_name).
+    """
+    if not user_text or not user_text.strip():
+        return "❌ لطفاً سؤال یا درخواستت را بنویس.", "none"
+    user_text = user_text.strip()[: config.AI_MAX_INPUT]
+    history = _history(context)
+
+    providers = []
+    if config.GEMINI_API_KEY:
+        providers.append(("Gemini", _call_gemini))
+    if config.GROQ_API_KEY:
+        providers.append(("Groq", _call_groq))
+
+    if not providers:
+        return (
+            "❌ هیچ سرویس AI فعال نیست.\n\n"
+            "در Render حداقل یکی از این کلیدها را اضافه کن:\n"
+            "GEMINI_API_KEY\n"
+            "یا\n"
+            "GROQ_API_KEY",
+            "none",
+        )
+
+    errors = []
+    for provider_name, fn in providers:
         try:
-            timeout = httpx.Timeout(AI_TIMEOUT, connect=15.0)
-            async with httpx.AsyncClient(timeout=timeout) as client:
-                response = await client.post(DEEPSEEK_URL, headers=headers, json=payload)
-
-            if response.status_code == 401:
-                raise RuntimeError("کلید DeepSeek نامعتبر است یا دسترسی API ندارد.")
-            if response.status_code == 402:
-                raise RuntimeError("اعتبار حساب DeepSeek کافی نیست.")
-            if response.status_code == 429:
-                last_error = RuntimeError("محدودیت موقت درخواست DeepSeek (429).")
-                if attempt == 0:
-                    await asyncio.sleep(1.5)
-                    continue
-                raise last_error
-            if response.status_code >= 500:
-                last_error = RuntimeError(f"خطای سرور DeepSeek ({response.status_code}).")
-                if attempt == 0:
-                    await asyncio.sleep(1.0)
-                    continue
-                raise last_error
-            if response.status_code >= 400:
-                detail = response.text[:400]
-                raise RuntimeError(f"خطای DeepSeek ({response.status_code}): {detail}")
-
-            data = response.json()
-            answer = _extract_content(data)
-
-            new_history = history + [
-                {"role": "user", "content": text},
-                {"role": "assistant", "content": answer},
-            ]
-            return answer, _trim_history(new_history)
-
-        except (httpx.TimeoutException, httpx.NetworkError) as exc:
-            last_error = exc
-            if attempt == 0:
-                await asyncio.sleep(1.0)
-                continue
-            break
-        except Exception as exc:
-            logger.error(f"DeepSeek request failed: {exc}")
+            answer = await fn(history, user_text)
+            if not answer:
+                raise RuntimeError("empty response")
+            _append_history(context, user_text, answer)
+            return answer, provider_name
+        except asyncio.CancelledError:
             raise
+        except Exception as exc:
+            msg = str(exc)
+            errors.append(f"{provider_name}: {msg[:220]}")
+            logger.warning("AI provider %s failed: %s", provider_name, msg[:500])
+            continue
 
-    logger.error(f"DeepSeek unavailable: {last_error}")
-    raise RuntimeError("ارتباط با DeepSeek برقرار نشد. چند لحظه بعد دوباره امتحان کن.")
+    return (
+        "❌ فعلاً هیچ‌کدام از سرویس‌های AI پاسخ ندادند.\n\n"
+        "موارد بررسی‌شده:\n- " + "\n- ".join(errors[:4]),
+        "none",
+    )
