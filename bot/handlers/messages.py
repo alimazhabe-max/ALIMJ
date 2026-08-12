@@ -180,7 +180,7 @@ async def _text_handler_inner(update: Update, context: ContextTypes.DEFAULT_TYPE
         providers = active_providers()
         status = "، ".join(providers) if providers else "هیچ‌کدام"
         await update.message.reply_text(
-            "🤖 دستیار هوشمند ALIMJ\n\n"
+            "🤖 دستیار هوشمند روز زیبا\n\n"
             "سؤالت را بنویس و ارسال کن.\n"
             "برای خروج، «🔙 بازگشت» را بزن.\n"
             "برای پاک کردن حافظه: /ai_reset\n\n"
