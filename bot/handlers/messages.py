@@ -55,6 +55,47 @@ async def _safe_reply(update, text, **kwargs):
         except Exception:
             pass
 
+async def _keep_typing(bot, chat_id, stop_event):
+    """تا وقتی پاسخ آماده نشده، مدام حالت «در حال نوشتن...» را نشان بده."""
+    import asyncio
+    from telegram.constants import ChatAction
+    while not stop_event.is_set():
+        try:
+            await bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+        except Exception:
+            pass
+        try:
+            await asyncio.wait_for(stop_event.wait(), timeout=4)
+        except Exception:
+            pass
+
+
+async def _ask_ai_with_typing(update, context, user_id, text):
+    """درخواست به AI همراه با نمایش «در حال نوشتن» در تلگرام."""
+    import asyncio
+    stop_event = asyncio.Event()
+    chat_id = update.effective_chat.id
+    notice = None
+    try:
+        notice = await update.message.reply_text("✍️ در حال نوشتن...")
+    except Exception:
+        notice = None
+    task = asyncio.create_task(_keep_typing(context.bot, chat_id, stop_event))
+    try:
+        return await ask_ai(user_id, text)
+    finally:
+        stop_event.set()
+        try:
+            await task
+        except Exception:
+            pass
+        if notice is not None:
+            try:
+                await notice.delete()
+            except Exception:
+                pass
+
+
 async def _send_main(update, context, text, user_id):
     context.user_data.pop("waiting_for", None)
     await update.message.reply_text("🏠 منوی اصلی", reply_markup=get_main_keyboard())
@@ -122,7 +163,7 @@ async def _text_handler_inner(update: Update, context: ContextTypes.DEFAULT_TYPE
                 return
         else:
             try:
-                answer, provider = await ask_ai(user_id, text)
+                answer, provider = await _ask_ai_with_typing(update, context, user_id, text)
                 await update.message.reply_text(f"🤖 {answer}")
             except Exception as exc:
                 await update.message.reply_text(
