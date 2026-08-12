@@ -174,7 +174,7 @@ def get_more_keyboard():
             [KeyboardButton("💰 بازار"), KeyboardButton("🌤 هوا و مکان")],
             [KeyboardButton("🛠 ابزارها"), KeyboardButton("🎮 سرگرمی")],
             [KeyboardButton("🎨 فونت"), KeyboardButton("👤 پروفایل")],
-            [KeyboardButton("🤖 دستیار هوشمند")],
+            [KeyboardButton("🤖 دستیار هوشمند"), KeyboardButton("🧹 پاک کردن حافظه AI")],
             [KeyboardButton("🔙 بازگشت")],
         ],
         resize_keyboard=True,
