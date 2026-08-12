@@ -1,6 +1,7 @@
-from telegram import Update
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 from bot.database import get_user, get_user_city, set_last_main_msg_id
+from bot.services.ai_service import clear_history
 from bot.utils.helpers import (
     build_message,
     get_refresh_button,
@@ -22,6 +23,28 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     data = query.data
     user_id = update.effective_user.id
+
+
+    if data == "ai_clear_memory":
+        clear_history(user_id)
+        await query.answer("حافظه AI پاک شد ✅", show_alert=False)
+        try:
+            await query.edit_message_reply_markup(
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("🧹 پاک کردن حافظه", callback_data="ai_clear_memory"),
+                ]])
+            )
+        except Exception:
+            pass
+        await query.message.reply_text("✅ حافظه کوتاه‌مدت گفت‌وگوی AI پاک شد.")
+        return
+
+    if data == "ai_exit":
+        context.user_data.pop("ai_mode", None)
+        context.user_data.pop("waiting_for", None)
+        await query.answer()
+        await query.message.reply_text("➕ منوی بیشتر:", reply_markup=get_more_keyboard())
+        return
 
     # بروزرسانی = ویرایش همان پیام
     if data == "refresh_main":
