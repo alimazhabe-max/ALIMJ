@@ -54,5 +54,13 @@ class Config:
     # تعداد بکاپ‌هایی که نگه داشته می‌شوند
     BACKUP_KEEP = int(os.getenv("BACKUP_KEEP", "14"))
 
+    # DeepSeek AI
+    DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
+    DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
+    DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-v4-flash")
+    AI_MAX_INPUT = int(os.getenv("AI_MAX_INPUT", "5000"))
+    AI_MAX_OUTPUT = int(os.getenv("AI_MAX_OUTPUT", "1500"))
+    AI_HISTORY_ITEMS = int(os.getenv("AI_HISTORY_ITEMS", "8"))
+
 
 config = Config()

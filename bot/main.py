@@ -9,7 +9,7 @@ from bot.database import init_db, backup_db, _user_count, DB_PATH
 from bot.handlers.commands import (
     start, help_command, city_command, language_command,
     calendar_command, stats_command, broadcast_command,
-    backup_command, restore_document_handler,
+    backup_command, restore_document_handler, ai_command, ai_reset_command,
 )
 from bot.handlers.callbacks import button_handler
 from bot.handlers.messages import text_handler
@@ -125,6 +125,8 @@ def main():
     app.add_handler(CommandHandler("stats", stats_command))
     app.add_handler(CommandHandler("broadcast", broadcast_command))
     app.add_handler(CommandHandler("backup", backup_command))
+    app.add_handler(CommandHandler("ai", ai_command))
+    app.add_handler(CommandHandler("ai_reset", ai_reset_command))
     app.add_handler(MessageHandler(filters.Document.ALL, restore_document_handler))
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
