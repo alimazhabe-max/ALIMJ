@@ -1,5 +1,5 @@
 """هندلر پیام‌ها — همه قابلیت‌ها"""
-from telegram import Update, KeyboardButton, ReplyKeyboardMarkup, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, KeyboardButton, ReplyKeyboardMarkup
 from telegram.ext import ContextTypes
 from bot.database import (
     update_user_field, get_user_city, set_last_main_msg_id,
@@ -104,6 +104,10 @@ async def _text_handler_inner(update: Update, context: ContextTypes.DEFAULT_TYPE
             context.user_data.pop("waiting_for", None)
             await update.message.reply_text("➕ منوی بیشتر:", reply_markup=get_more_keyboard())
             return
+        if text == "🧹 پاک کردن حافظه AI":
+            clear_history(user_id)
+            await update.message.reply_text("✅ حافظه کوتاه‌مدت گفت‌وگوی AI پاک شد.", reply_markup=get_more_keyboard())
+            return
         if text.startswith(("➕", "🏠", "📅", "🕌", "💰", "🌤", "🛠", "🎮", "🎨", "👤", "🏙", "🌍", "🔙", "🤖")):
             if text != "🤖 دستیار هوشمند":
                 context.user_data.pop("ai_mode", None)
@@ -114,10 +118,8 @@ async def _text_handler_inner(update: Update, context: ContextTypes.DEFAULT_TYPE
                 await update.message.reply_text(
                     "🤖 دستیار هوشمند روز زیبا\n\n"
                     f"سرویس‌های فعال: {', '.join(providers) if providers else 'هیچ‌کدام'}\n"
-                    "پیامت را بفرست. برای خروج «🔙 بازگشت» را بفرست.",
-                    reply_markup=InlineKeyboardMarkup([[
-                        InlineKeyboardButton("🧹 پاک کردن حافظه", callback_data="ai_clear_memory"),
-                    ]]),
+                    "پیامت را بفرست. برای خروج «بازگشت» را بفرست.",
+                    reply_markup=get_more_keyboard(),
                 )
                 return
         else:
@@ -193,12 +195,14 @@ async def _text_handler_inner(update: Update, context: ContextTypes.DEFAULT_TYPE
             "🤖 دستیار هوشمند روز زیبا\n\n"
             "پیامت را بفرست تا به هوش مصنوعی ارسال شود.\n"
             f"سرویس‌های فعال: {provider_text}\n\n"
-            "برای خروج، دکمه «🔙 بازگشت» را بزن.",
-            reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("🧹 پاک کردن حافظه", callback_data="ai_clear_memory"),
-            ]]),
+            "🔙 برای خروج، «بازگشت» را بفرست.",
+            reply_markup=get_more_keyboard(),
         )
         return
+
+    if text == "🧹 پاک کردن حافظه AI":
+        clear_history(user_id)
+        await update.message.reply_text("✅ حافظه کوتاه‌مدت AI پاک شد.", reply_markup=get_more_keyboard()); return
 
     if text == "📅 تاریخ و سن":
         await update.message.reply_text("📅 تاریخ و سن:", reply_markup=get_date_tools_keyboard()); return

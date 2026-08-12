@@ -18,7 +18,6 @@ from bot.utils.helpers import (
     get_calendar_text,
 )
 from bot.config import config
-from bot.services.ai_service import clear_history, active_providers
 from bot.logger import logger
 from bot.db_persist import send_db_to_admins, restore_db_from_file
 import asyncio
@@ -177,25 +176,3 @@ async def restore_document_handler(update: Update, context: ContextTypes.DEFAULT
     except Exception as e:
         logger.error(f"restore error: {e}")
         await msg.reply_text(f"❌ خطا در بازگردانی: {e}")
-
-
-async def ai_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await check_and_rate_limit(update, context):
-        return
-    context.user_data["waiting_for"] = "ai_chat"
-    providers = active_providers()
-    status = "، ".join(providers) if providers else "هیچ‌کدام"
-    await update.message.reply_text(
-        "🤖 دستیار هوشمند ALIMJ\n\n"
-        "سؤالت را بفرست.\n"
-        "برای خروج «🔙 بازگشت» را بزن.\n"
-        "پاک کردن حافظه: /ai_reset\n\n"
-        f"سرویس‌های فعال: {status}"
-    )
-
-
-async def ai_reset_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await check_and_rate_limit(update, context):
-        return
-    clear_history(context)
-    await update.message.reply_text("🧹 حافظه گفت‌وگوی AI پاک شد.")
