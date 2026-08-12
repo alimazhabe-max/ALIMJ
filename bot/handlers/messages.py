@@ -394,7 +394,7 @@ async def _text_handler_inner(update: Update, context: ContextTypes.DEFAULT_TYPE
     if text in ("😂 جوک روز", "جوک روز"):
         track_usage(user_id, "joke")
         await update.message.reply_text(
-            "😂 دسته جوک را انتخاب کن:\n(بیش از ۵۵۰۰ جوک از farsijokes)",
+            "😂 دسته جوک را انتخاب کن:\n(بیش از ۸۷۰۰ جوک از farsijokes)",
             reply_markup=get_joke_keyboard(),
         ); return
 
@@ -409,9 +409,8 @@ async def _text_handler_inner(update: Update, context: ContextTypes.DEFAULT_TYPE
         "👩 زنان": "women",
         "🤑 اصفهانی": "isfahani",
         "🔞 سکسی": "adult",
-        "🏔️ لری": "lori",
-        "🏛 سیاسی": "political",
-        "🕋 حج": "hajj",
+        "🎭 متفرقه": "misc",
+        "💀 زشت": "dirty",
     }
     if text in _joke_map:
         track_usage(user_id, "joke")
