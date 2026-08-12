@@ -1,5 +1,5 @@
 """هندلر پیام‌ها — همه قابلیت‌ها"""
-from telegram import Update, KeyboardButton, ReplyKeyboardMarkup
+from telegram import Update, KeyboardButton, ReplyKeyboardMarkup, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 from bot.database import (
     update_user_field, get_user_city, set_last_main_msg_id,
@@ -40,7 +40,7 @@ import re
 from datetime import datetime, timedelta
 import pytz
 from bot.config import config
-from bot.services.ai_service import ask_ai, clear_history, active_providers
+from bot.services.ai_service import ask_ai, clear_history, enabled_providers
 
 
 
@@ -97,6 +97,39 @@ async def _text_handler_inner(update: Update, context: ContextTypes.DEFAULT_TYPE
     city = get_user_city(user_id)
     waiting = context.user_data.get("waiting_for")
 
+    # AI chat mode
+    if context.user_data.get("ai_mode"):
+        if _is_back(text) or _is_back_more(text):
+            context.user_data.pop("ai_mode", None)
+            context.user_data.pop("waiting_for", None)
+            await update.message.reply_text("➕ منوی بیشتر:", reply_markup=get_more_keyboard())
+            return
+        if text.startswith(("➕", "🏠", "📅", "🕌", "💰", "🌤", "🛠", "🎮", "🎨", "👤", "🏙", "🌍", "🔙", "🤖")):
+            if text != "🤖 دستیار هوشمند":
+                context.user_data.pop("ai_mode", None)
+                # fall through to normal menu handling
+            else:
+                # repeat the AI entry prompt
+                providers = enabled_providers()
+                await update.message.reply_text(
+                    "🤖 دستیار هوشمند روز زیبا\n\n"
+                    f"سرویس‌های فعال: {', '.join(providers) if providers else 'هیچ‌کدام'}\n"
+                    "پیامت را بفرست. برای خروج «🔙 بازگشت» را بفرست.",
+                    reply_markup=InlineKeyboardMarkup([[
+                        InlineKeyboardButton("🧹 پاک کردن حافظه", callback_data="ai_clear_memory"),
+                    ]]),
+                )
+                return
+        else:
+            try:
+                answer, provider = await ask_ai(user_id, text)
+                await update.message.reply_text(f"🤖 {answer}")
+            except Exception as exc:
+                await update.message.reply_text(
+                    "❌ فعلاً هیچ‌کدام از سرویس‌های AI پاسخ ندادند.\n\n" + str(exc)[:3000]
+                )
+            return
+
     if waiting:
         if _is_back(text) or _is_back_more(text):
             context.user_data.pop("waiting_for", None)
@@ -107,7 +140,7 @@ async def _text_handler_inner(update: Update, context: ContextTypes.DEFAULT_TYPE
             "➕", "🏠", "📅", "🕌", "💰", "🌤", "🛠", "🎮", "🎨", "👤",
             "🏙", "🌍", "🔙", "💵", "💎", "🔄", "📈", "📐", "🔢", "🔐",
             "📝", "🗺", "⏰", "📒", "📖", "😂", "🧠", "💪", "💖", "🕋",
-            "📿", "🙏", "🔔", "🌫", "📍", "🇬🇧", "🇮🇷", "🌈", "📋", "🤖",
+            "📿", "🙏", "🔔", "🌫", "📍", "🇬🇧", "🇮🇷", "🌈", "📋", "🤖", "🧹",
         )
         if text.startswith(menu_starts) or text in (
             "بیشتر", "بازار", "مذهبی", "ابزارها", "سرگرمی", "فونت", "پروفایل",
@@ -116,29 +149,6 @@ async def _text_handler_inner(update: Update, context: ContextTypes.DEFAULT_TYPE
             context.user_data.pop("waiting_for", None)
             waiting = None
         else:
-            if waiting == "ai_chat":
-                if text == "/ai_reset":
-                    clear_history(context)
-                    await update.message.reply_text("🧹 حافظه گفت‌وگوی AI پاک شد.")
-                    return
-                try:
-                    msg = await update.message.reply_text("⏳ در حال پاسخ‌گویی...")
-                    answer, provider = await ask_ai(context, text)
-                    # Telegram can reject overlong messages; split safely.
-                    chunks = [answer[i:i+3900] for i in range(0, len(answer), 3900)] or ["❌ پاسخ خالی بود."]
-                    try:
-                        await msg.delete()
-                    except Exception:
-                        pass
-                    for chunk in chunks:
-                        await update.message.reply_text(chunk)
-                    return
-                except Exception as e:
-                    from bot.logger import logger
-                    logger.error(f"AI handler error: {e}", exc_info=True)
-                    await update.message.reply_text("❌ خطا در اتصال به سرویس AI. چند لحظه بعد دوباره امتحان کن.")
-                    return
-
             handlers = {
                 "date_convert": _h_date_convert, "age_calc": _h_age_calc,
                 "birthday": _h_birthday, "zodiac": _h_zodiac, "lunar": _h_lunar,
@@ -175,23 +185,19 @@ async def _text_handler_inner(update: Update, context: ContextTypes.DEFAULT_TYPE
     if text in ("➕ بیشتر", "بیشتر"):
         await update.message.reply_text("➕ بخش را انتخاب کنید:", reply_markup=get_more_keyboard()); return
 
-    if text in ("🤖 دستیار هوشمند", "دستیار هوشمند", "/ai"):
-        context.user_data["waiting_for"] = "ai_chat"
-        providers = active_providers()
-        status = "، ".join(providers) if providers else "هیچ‌کدام"
+    if text == "🤖 دستیار هوشمند":
+        providers = enabled_providers()
+        context.user_data["ai_mode"] = True
+        provider_text = "، ".join(providers) if providers else "هیچ سرویس فعالی ندارد"
         await update.message.reply_text(
             "🤖 دستیار هوشمند روز زیبا\n\n"
-            "سؤالت را بنویس و ارسال کن.\n"
-            "برای خروج، «🔙 بازگشت» را بزن.\n"
-            "برای پاک کردن حافظه: /ai_reset\n\n"
-            f"سرویس‌های فعال: {status}",
-            reply_markup=get_more_keyboard(),
+            "پیامت را بفرست تا به هوش مصنوعی ارسال شود.\n"
+            f"سرویس‌های فعال: {provider_text}\n\n"
+            "برای خروج، دکمه «🔙 بازگشت» را بزن.",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🧹 پاک کردن حافظه", callback_data="ai_clear_memory"),
+            ]]),
         )
-        return
-
-    if text == "/ai_reset":
-        clear_history(context)
-        await update.message.reply_text("🧹 حافظه گفت‌وگوی AI پاک شد.", reply_markup=get_more_keyboard())
         return
 
     if text == "📅 تاریخ و سن":
