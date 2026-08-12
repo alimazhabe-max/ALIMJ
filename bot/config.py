@@ -54,17 +54,5 @@ class Config:
     # تعداد بکاپ‌هایی که نگه داشته می‌شوند
     BACKUP_KEEP = int(os.getenv("BACKUP_KEEP", "14"))
 
-    # تنظیمات هوش مصنوعی رایگان
-    GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-    GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-lite")
-    GEMINI_BASE_URL = os.getenv("GEMINI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta")
-    GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
-    GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
-    GROQ_BASE_URL = os.getenv("GROQ_BASE_URL", "https://api.groq.com/openai/v1")
-    AI_TIMEOUT = float(os.getenv("AI_TIMEOUT", "45"))
-    AI_MAX_INPUT = int(os.getenv("AI_MAX_INPUT", "5000"))
-    AI_MAX_OUTPUT = int(os.getenv("AI_MAX_OUTPUT", "1200"))
-    AI_HISTORY_ITEMS = int(os.getenv("AI_HISTORY_ITEMS", "8"))
-
 
 config = Config()
