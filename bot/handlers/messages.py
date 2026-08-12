@@ -40,7 +40,7 @@ import re
 from datetime import datetime, timedelta
 import pytz
 from bot.config import config
-from bot.services.ai_service import ask_deepseek, reset_history
+from bot.services.ai_service import ask_ai, clear_history, active_providers
 
 
 
@@ -90,47 +90,6 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
 
 
-async def _h_ai_chat(update, context, text, user_id):
-    user = update.effective_user
-    user_name = (user.first_name or "کاربر") if user else "کاربر"
-    city = get_user_city(user_id) or ""
-
-    if text in ("/ai_reset", "🔄 پاک کردن گفت‌وگوی AI"):
-        reset_history(context.user_data)
-        await update.message.reply_text(
-            "✅ حافظه کوتاه گفت‌وگوی AI پاک شد. پیام جدیدت را بفرست.",
-        )
-        return
-
-    status = await update.message.reply_text("🤖 در حال فکر کردن...")
-    try:
-        answer, history = await ask_deepseek(
-            text,
-            context.user_data.get("deepseek_history", []),
-            user_name=user_name,
-            city=city,
-        )
-        context.user_data["deepseek_history"] = history
-        context.user_data["waiting_for"] = "deepseek_chat"
-
-        # Telegram برای هر پیام متنی محدودیت طول دارد؛ پاسخ طولانی را تکه‌تکه می‌کنیم.
-        chunks = [answer[i:i+4000] for i in range(0, len(answer), 4000)] or ["پاسخی دریافت نشد."]
-        await status.edit_text(chunks[0])
-        for chunk in chunks[1:]:
-            await update.message.reply_text(chunk)
-    except Exception as exc:
-        from bot.logger import logger
-        logger.error(f"AI handler error: {exc}", exc_info=True)
-        try:
-            await status.edit_text(
-                "❌ اتصال به DeepSeek انجام نشد.\n\n"
-                f"جزئیات: {exc}\n\n"
-                "کلید API و موجودی حساب DeepSeek را در Render بررسی کن."
-            )
-        except Exception:
-            await update.message.reply_text("❌ اتصال به DeepSeek انجام نشد. تنظیمات API را بررسی کن.")
-
-
 async def _text_handler_inner(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
     user_id = update.effective_user.id
@@ -157,6 +116,29 @@ async def _text_handler_inner(update: Update, context: ContextTypes.DEFAULT_TYPE
             context.user_data.pop("waiting_for", None)
             waiting = None
         else:
+            if waiting == "ai_chat":
+                if text == "/ai_reset":
+                    clear_history(context)
+                    await update.message.reply_text("🧹 حافظه گفت‌وگوی AI پاک شد.")
+                    return
+                try:
+                    msg = await update.message.reply_text("⏳ در حال پاسخ‌گویی...")
+                    answer, provider = await ask_ai(context, text)
+                    # Telegram can reject overlong messages; split safely.
+                    chunks = [answer[i:i+3900] for i in range(0, len(answer), 3900)] or ["❌ پاسخ خالی بود."]
+                    try:
+                        await msg.delete()
+                    except Exception:
+                        pass
+                    for chunk in chunks:
+                        await update.message.reply_text(chunk)
+                    return
+                except Exception as e:
+                    from bot.logger import logger
+                    logger.error(f"AI handler error: {e}", exc_info=True)
+                    await update.message.reply_text("❌ خطا در اتصال به سرویس AI. چند لحظه بعد دوباره امتحان کن.")
+                    return
+
             handlers = {
                 "date_convert": _h_date_convert, "age_calc": _h_age_calc,
                 "birthday": _h_birthday, "zodiac": _h_zodiac, "lunar": _h_lunar,
@@ -167,7 +149,6 @@ async def _text_handler_inner(update: Update, context: ContextTypes.DEFAULT_TYPE
                 "birth_save": _h_birth_save,
                 "count_text": _h_count_text,
                 "font_text": _h_font_text, "font_all": _h_font_all,
-                "deepseek_chat": _h_ai_chat,
             }
             fn = handlers.get(waiting)
             if fn:
@@ -193,6 +174,25 @@ async def _text_handler_inner(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text("🌍 زبان:", reply_markup=get_language_keyboard()); return
     if text in ("➕ بیشتر", "بیشتر"):
         await update.message.reply_text("➕ بخش را انتخاب کنید:", reply_markup=get_more_keyboard()); return
+
+    if text in ("🤖 دستیار هوشمند", "دستیار هوشمند", "/ai"):
+        context.user_data["waiting_for"] = "ai_chat"
+        providers = active_providers()
+        status = "، ".join(providers) if providers else "هیچ‌کدام"
+        await update.message.reply_text(
+            "🤖 دستیار هوشمند ALIMJ\n\n"
+            "سؤالت را بنویس و ارسال کن.\n"
+            "برای خروج، «🔙 بازگشت» را بزن.\n"
+            "برای پاک کردن حافظه: /ai_reset\n\n"
+            f"سرویس‌های فعال: {status}",
+            reply_markup=get_more_keyboard(),
+        )
+        return
+
+    if text == "/ai_reset":
+        clear_history(context)
+        await update.message.reply_text("🧹 حافظه گفت‌وگوی AI پاک شد.", reply_markup=get_more_keyboard())
+        return
 
     if text == "📅 تاریخ و سن":
         await update.message.reply_text("📅 تاریخ و سن:", reply_markup=get_date_tools_keyboard()); return
@@ -228,18 +228,6 @@ async def _text_handler_inner(update: Update, context: ContextTypes.DEFAULT_TYPE
         context.user_data["selected_font"] = key
         context.user_data["waiting_for"] = "font_text"
         await update.message.reply_text(f"🎨 فونت انتخاب شد.\nمتن را بفرستید:", reply_markup=get_font_keyboard()); return
-
-    if text == "🤖 دستیار هوشمند":
-        reset_history(context.user_data)
-        context.user_data["waiting_for"] = "deepseek_chat"
-        await update.message.reply_text(
-            "🤖 دستیار هوشمند ALIMJ فعال شد.\n\n"
-            "پیامت را بفرست تا با DeepSeek پاسخ بدهم.\n"
-            "برای خروج، «🔙 بازگشت» را بزن.\n"
-            "برای پاک کردن حافظه همین گفتگو: /ai_reset",
-            reply_markup=get_more_keyboard(),
-        )
-        return
 
     if text == "👤 پروفایل":
         await update.message.reply_text("👤 پروفایل:", reply_markup=get_profile_keyboard()); return

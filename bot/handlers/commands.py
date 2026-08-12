@@ -18,9 +18,9 @@ from bot.utils.helpers import (
     get_calendar_text,
 )
 from bot.config import config
+from bot.services.ai_service import clear_history, active_providers
 from bot.logger import logger
 from bot.db_persist import send_db_to_admins, restore_db_from_file
-from bot.services.ai_service import reset_history
 import asyncio
 from pathlib import Path
 
@@ -38,26 +38,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = await update.message.reply_text(message, reply_markup=get_refresh_button())
     context.user_data["last_main_msg_id"] = msg.message_id
     set_last_main_msg_id(user_id, msg.message_id)
-
-
-async def ai_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await check_and_rate_limit(update, context):
-        return
-    reset_history(context.user_data)
-    context.user_data["waiting_for"] = "deepseek_chat"
-    await update.message.reply_text(
-        "🤖 دستیار هوشمند ALIMJ فعال شد.\n\n"
-        "هر سؤالی داری بفرست.\n"
-        "برای خروج: 🔙 بازگشت\n"
-        "برای پاک کردن حافظه: /ai_reset"
-    )
-
-
-async def ai_reset_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await check_and_rate_limit(update, context):
-        return
-    reset_history(context.user_data)
-    await update.message.reply_text("✅ حافظه کوتاه گفت‌وگوی AI پاک شد.")
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -197,3 +177,25 @@ async def restore_document_handler(update: Update, context: ContextTypes.DEFAULT
     except Exception as e:
         logger.error(f"restore error: {e}")
         await msg.reply_text(f"❌ خطا در بازگردانی: {e}")
+
+
+async def ai_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await check_and_rate_limit(update, context):
+        return
+    context.user_data["waiting_for"] = "ai_chat"
+    providers = active_providers()
+    status = "، ".join(providers) if providers else "هیچ‌کدام"
+    await update.message.reply_text(
+        "🤖 دستیار هوشمند ALIMJ\n\n"
+        "سؤالت را بفرست.\n"
+        "برای خروج «🔙 بازگشت» را بزن.\n"
+        "پاک کردن حافظه: /ai_reset\n\n"
+        f"سرویس‌های فعال: {status}"
+    )
+
+
+async def ai_reset_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await check_and_rate_limit(update, context):
+        return
+    clear_history(context)
+    await update.message.reply_text("🧹 حافظه گفت‌وگوی AI پاک شد.")
