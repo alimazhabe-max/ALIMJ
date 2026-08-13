@@ -11,3 +11,4 @@ httpcore
 beautifulsoup4
 pypdf
 edge-tts
+matplotlib
