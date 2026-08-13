@@ -22,11 +22,15 @@ _ANSWER_CACHE: Dict[str, Tuple[int, str, float]] = {}
 _CACHE_TTL = 3600 * 6
 
 
+_LAST_ANSWER: Dict[int, str] = {}
+
+
 def store_answer(user_id: int, text: str) -> str:
-    """ذخیره جواب برای دکمه ویس؛ شناسه کوتاه برمی‌گرداند."""
+    """ذخیره جواب برای دکمه ویس و درخواست «ویس بفرست»."""
     aid = hashlib.md5(f"{user_id}:{time.time()}:{text[:80]}".encode()).hexdigest()[:12]
     _ANSWER_CACHE[aid] = (user_id, text, time.time() + _CACHE_TTL)
-    # پاکسازی ساده
+    if text:
+        _LAST_ANSWER[user_id] = text
     if len(_ANSWER_CACHE) > 2000:
         now = time.time()
         dead = [k for k, v in _ANSWER_CACHE.items() if v[2] < now]
@@ -43,6 +47,11 @@ def get_stored_answer(answer_id: str, user_id: int) -> Optional[str]:
     if exp < time.time() or uid != user_id:
         return None
     return text
+
+
+def get_last_answer(user_id: int) -> Optional[str]:
+    """آخرین جواب AI همین کاربر."""
+    return _LAST_ANSWER.get(user_id) or None
 
 
 # ── نمودار ──────────────────────────────────────────────────────────────────
