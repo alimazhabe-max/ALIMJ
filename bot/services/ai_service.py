@@ -1211,6 +1211,117 @@ async def speech_to_text(
     )
 
 
+
+async def analyze_voice_emotion(
+    audio_bytes: bytes,
+    *,
+    transcript: str = "",
+    filename: str = "voice.ogg",
+    mime: str = "audio/ogg",
+) -> str:
+    """
+    تشخیص احساسات و لحن از روی صدا (و در صورت وجود متن پیاده‌شده).
+    با Gemini روی خود فایل صوتی کار می‌کند.
+    """
+    if not audio_bytes:
+        raise RuntimeError("فایل صوتی خالی است.")
+
+    keys = _next_keys("gemini")
+    if not keys:
+        # بدون Gemini: تخمین ضعیف از روی متن
+        if transcript:
+            return _emotion_from_text_fallback(transcript)
+        raise RuntimeError("برای تشخیص احساس از صدا به کلید Gemini نیاز است.")
+
+    if len(audio_bytes) > 4_500_000:
+        audio_bytes = audio_bytes[:4_500_000]
+
+    model = os.getenv("GEMINI_EMOTION_MODEL", os.getenv("GEMINI_STT_MODEL", "gemini-3.1-flash-lite"))
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+
+    prompt = (
+        "تو یک تحلیل‌گر لحن و احساس صدا هستی. این فایل صوتی را گوش بده "
+        "(و اگر متن پیاده‌شده آمد از آن هم کمک بگیر) و به فارسی پاسخ بده.\n\n"
+        "ساختار پاسخ دقیقاً این باشد:\n"
+        "😊 احساس غالب: ...\n"
+        "📊 شدت (۰ تا ۱۰): ...\n"
+        "🎙 لحن/انرژی: ...\n"
+        "💬 احساسات فرعی: ...\n"
+        "📝 توضیح کوتاه: ...\n\n"
+        "احساسات ممکن: شادی، غم، عصبانیت، اضطراب، آرامش، هیجان، خستگی، "
+        "اعتمادبه‌نفس، تردید، مهربانی، بی‌حوصلگی، ترس، تعجب.\n"
+        "اگر صدا واضح نبود صادقانه بگو."
+    )
+    if transcript:
+        prompt += f"\n\nمتن پیاده‌شده از صدا:\n{transcript[:1500]}"
+
+    payload = {
+        "contents": [
+            {
+                "role": "user",
+                "parts": [
+                    {
+                        "inline_data": {
+                            "mime_type": mime or "audio/ogg",
+                            "data": base64.b64encode(audio_bytes).decode("ascii"),
+                        }
+                    },
+                    {"text": prompt},
+                ],
+            }
+        ],
+        "generationConfig": {"maxOutputTokens": 800},
+    }
+
+    errors = []
+    for key in keys:
+        try:
+            status, data = await _post_json(url, params={"key": key}, json=payload)
+            if status >= 400:
+                if _is_quota_error(status, data):
+                    _mark_key_cooldown("gemini", key, daily=True)
+                    errors.append(f"HTTP {status}")
+                    continue
+                raise RuntimeError(f"Gemini emotion HTTP {status}: {str(data)[:400]}")
+            parts = data["candidates"][0]["content"]["parts"]
+            text = "".join(x.get("text", "") for x in parts).strip()
+            if text:
+                _advance_rr("gemini")
+                return text
+            errors.append("empty")
+        except Exception as e:
+            errors.append(str(e)[:200])
+            continue
+
+    if transcript:
+        return _emotion_from_text_fallback(transcript)
+    raise RuntimeError("تشخیص احساس ناموفق: " + " | ".join(errors[:4]))
+
+
+def _emotion_from_text_fallback(transcript: str) -> str:
+    """تخمین خیلی ساده فقط از روی واژه‌ها (وقتی Gemini نباشد)."""
+    t = (transcript or "").lower()
+    rules = [
+        (["عصبانی", "خفه", "لعنت", "حالم بده از", "کیفم کوک نیست"], "عصبانیت"),
+        (["میترسم", "نگران", "استرس", "دلهره"], "اضطراب/نگرانی"),
+        (["خوشحالم", "عالی", "محشر", "عاشق", "خنده‌ام"], "شادی"),
+        (["غمگین", "گریه", "دلتنگ", "تنها", "سخت"], "غم"),
+        (["خسته‌ام", "حالم نیست", "بی‌حال"], "خستگی"),
+        (["آروم", "خوبه", "ممنون", "مرسی"], "آرامش"),
+    ]
+    found = []
+    for words, label in rules:
+        if any(w in t for w in words):
+            found.append(label)
+    if not found:
+        found = ["خنثی / نامشخص از روی متن"]
+    return (
+        "😊 احساس غالب (تخمین از متن، نه صدا): "
+        + "، ".join(found)
+        + "\n📝 برای تشخیص دقیق از لحن صدا، کلید Gemini لازم است."
+    )
+
+
 async def text_to_speech(text: str, *, voice: str | None = None) -> bytes:
     """
     متن → فایل صوتی ogg/mp3 (edge-tts، بدون نیاز به API Key).
