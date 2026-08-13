@@ -34,9 +34,12 @@ def to_persian_num(num):
 
 
 async def build_message(user_id, user_name, city):
+    """ساخت پیام اصلی — هر بخش جداگانه در try تا یک API خراب کل پیام را نیندازد."""
     now = datetime.now(pytz.timezone(config.TIMEZONE))
     today = get_today_tehran()
     nl = chr(10)
+    city = city or "قم"
+    user_name = user_name or "کاربر"
 
     weekday = PERSIAN_WEEKDAYS[today.weekday()]
     month_name = PERSIAN_MONTHS[today.month]
@@ -48,75 +51,114 @@ async def build_message(user_id, user_name, city):
     greg = today.togregorian()
     miladi_date = greg.strftime("%B %d, %A") + f" {greg.year}/{greg.month:02d}/{greg.day:02d}"
 
-    hijri = get_hijri_date(greg)
-    hy = to_persian_num(hijri['year'])
-    hm = to_persian_num(f"{hijri['month']:02d}")
-    hd = to_persian_num(f"{hijri['day']:02d}")
-    hijri_date = f"{to_persian_num(hijri['day'])} {hijri['month_name']} {hy}/{hm}/{hd}"
+    try:
+        hijri = get_hijri_date(greg)
+        hy = to_persian_num(hijri.get("year", 0))
+        hm = to_persian_num(f"{hijri.get('month', 0):02d}")
+        hd = to_persian_num(f"{hijri.get('day', 0):02d}")
+        hijri_date = f"{to_persian_num(hijri.get('day', 0))} {hijri.get('month_name', '—')} {hy}/{hm}/{hd}"
+        hijri_events_list = get_hijri_events(hijri.get("month", 0), hijri.get("day", 0))
+        hijri_events_text = chr(10).join([f"• {e}" for e in hijri_events_list])
+    except Exception:
+        hijri_date = "—"
+        hijri_events_text = "• —"
 
-    hijri_events_list = get_hijri_events(hijri['month'], hijri['day'])
-    hijri_events_text = chr(10).join([f"• {e}" for e in hijri_events_list])
+    try:
+        tomorrow = today + jdatetime.timedelta(days=1)
+        hijri_tomorrow = get_hijri_date(tomorrow.togregorian())
+        hijri_tomorrow_events = get_hijri_events(
+            hijri_tomorrow.get("month", 0), hijri_tomorrow.get("day", 0)
+        )
+        hijri_tomorrow_text = chr(10).join([f"• {e}" for e in hijri_tomorrow_events])
+        shamsi_tomorrow = get_shamsi_events(tomorrow.year, tomorrow.month, tomorrow.day)
+        shamsi_tomorrow_text = chr(10).join([f"• {e}" for e in shamsi_tomorrow])
+    except Exception:
+        hijri_tomorrow_text = "• —"
+        shamsi_tomorrow_text = "• —"
 
-    tomorrow = today + jdatetime.timedelta(days=1)
-    hijri_tomorrow = get_hijri_date(tomorrow.togregorian())
-    hijri_tomorrow_events = get_hijri_events(hijri_tomorrow['month'], hijri_tomorrow['day'])
-    hijri_tomorrow_text = chr(10).join([f"• {e}" for e in hijri_tomorrow_events])
+    try:
+        shamsi_events_list = get_shamsi_events(today.year, today.month, today.day)
+        shamsi_text = chr(10).join([f"• {e}" for e in shamsi_events_list])
+    except Exception:
+        shamsi_text = "• —"
 
-    shamsi_events_list = get_shamsi_events(today.year, today.month, today.day)
-    shamsi_text = chr(10).join([f"• {e}" for e in shamsi_events_list])
-    shamsi_tomorrow = get_shamsi_events(tomorrow.year, tomorrow.month, tomorrow.day)
-    shamsi_tomorrow_text = chr(10).join([f"• {e}" for e in shamsi_tomorrow])
-
-    country = get_user_country(user_id)
-    prayer_times = get_prayer_times(city, country=country)
+    country = get_user_country(user_id) or "Iran"
+    try:
+        prayer_times = get_prayer_times(city, country=country)
+    except Exception:
+        prayer_times = None
     if prayer_times:
         prayer_text = nl.join([f"🕌 {k}: {v}" for k, v in prayer_times.items()])
     else:
-        prayer_text = "⚠️ " + get_text(user_id, "no_events")
+        prayer_text = "⚠️ اوقات شرعی در دسترس نیست."
 
     next_prayer_text = ""
     if prayer_times:
-        result = get_next_prayer_time(prayer_times, now)
-        if result and result[0]:
-            name, delta = result
-            hours = delta.seconds // 3600
-            minutes = (delta.seconds % 3600) // 60
-            next_prayer_text = nl + f"⏳ تا {name}: {to_persian_num(hours)} ساعت و {to_persian_num(minutes)} دقیقه" + nl
+        try:
+            result = get_next_prayer_time(prayer_times, now)
+            if result and result[0]:
+                name, delta = result
+                total_sec = int(delta.total_seconds()) if hasattr(delta, "total_seconds") else int(delta.seconds)
+                hours = total_sec // 3600
+                minutes = (total_sec % 3600) // 60
+                next_prayer_text = (
+                    nl
+                    + f"⏳ تا {name}: {to_persian_num(hours)} ساعت و {to_persian_num(minutes)} دقیقه"
+                    + nl
+                )
+        except Exception:
+            next_prayer_text = ""
 
-    weather = get_weather(city)
+    try:
+        weather = get_weather(city)
+    except Exception:
+        weather = None
     if weather:
-        weather_text = f"🌡️ دما: {weather['temp']}°C" + nl + f"🌤️ وضعیت: {weather['condition']}" + nl + f"💧 رطوبت: {weather['humidity']}%"
+        weather_text = (
+            f"🌡️ دما: {weather.get('temp', '—')}°C"
+            + nl
+            + f"🌤️ وضعیت: {weather.get('condition', '—')}"
+            + nl
+            + f"💧 رطوبت: {weather.get('humidity', '—')}%"
+        )
     else:
-        weather_text = "⚠️ " + get_text(user_id, "no_events")
+        weather_text = "⚠️ آب و هوا در دسترس نیست."
 
-    market = await get_market_prices()
-    dollar = market.get("dollar")
-    gold18 = market.get("gold18")
-    market_text = ""
-    if dollar:
-        market_text += f"💵 دلار: {to_persian_num(f'{dollar:,}')} ریال" + nl
-    if gold18:
-        market_text += f"🥇 طلای ۱۸ عیار: {to_persian_num(f'{gold18:,}')} ریال" + nl
-    if not market_text:
-        market_text = "⚠️ قیمت بازار در دسترس نیست." + nl
+    market_text = "⚠️ قیمت بازار در دسترس نیست." + nl
+    try:
+        market = await get_market_prices()
+        dollar = market.get("dollar") if isinstance(market, dict) else None
+        gold18 = market.get("gold18") if isinstance(market, dict) else None
+        parts = []
+        if isinstance(dollar, (int, float)):
+            parts.append(f"💵 دلار: {to_persian_num(f'{int(dollar):,}')} ریال")
+        if isinstance(gold18, (int, float)):
+            parts.append(f"🥇 طلای ۱۸ عیار: {to_persian_num(f'{int(gold18):,}')} ریال")
+        if parts:
+            market_text = nl.join(parts) + nl
+    except Exception:
+        pass
 
-    motivation = get_motivation()
+    try:
+        motivation = get_motivation()
+    except Exception:
+        motivation = "—"
 
     message = (
-        get_text(user_id, "welcome", name=user_name) + nl + nl +
-        f"📅 امروز (شمسی): {persian_date}" + nl +
-        f"📅 امروز (میلادی): {miladi_date}" + nl +
-        f"🌙 امروز (قمری): {hijri_date}" + nl + nl +
-        f"📌 مناسبت‌های قمری امروز:" + nl + hijri_events_text + nl + nl +
-        f"📌 مناسبت‌های قمری فردا:" + nl + hijri_tomorrow_text + nl + nl +
-        f"📌 مناسبت‌های شمسی امروز:" + nl + shamsi_text + nl + nl +
-        f"🔮 مناسبت‌های شمسی فردا:" + nl + shamsi_tomorrow_text + nl + nl +
-        get_text(user_id, "prayer", city=city) + nl + prayer_text +
-        next_prayer_text + nl +
-        get_text(user_id, "weather", city=city) + nl + weather_text + nl + nl +
-        "📊 قیمت بازار:" + nl + market_text + nl +
-        get_text(user_id, "motivation") + nl + motivation + nl + nl +
-        get_text(user_id, "change_city")
+        get_text(user_id, "welcome", name=user_name) + nl + nl
+        + f"📅 امروز (شمسی): {persian_date}" + nl
+        + f"📅 امروز (میلادی): {miladi_date}" + nl
+        + f"🌙 امروز (قمری): {hijri_date}" + nl + nl
+        + f"📌 مناسبت‌های قمری امروز:" + nl + hijri_events_text + nl + nl
+        + f"📌 مناسبت‌های قمری فردا:" + nl + hijri_tomorrow_text + nl + nl
+        + f"📌 مناسبت‌های شمسی امروز:" + nl + shamsi_text + nl + nl
+        + f"🔮 مناسبت‌های شمسی فردا:" + nl + shamsi_tomorrow_text + nl + nl
+        + get_text(user_id, "prayer", city=city) + nl + prayer_text
+        + next_prayer_text + nl
+        + get_text(user_id, "weather", city=city) + nl + weather_text + nl + nl
+        + "📊 قیمت بازار:" + nl + market_text + nl
+        + get_text(user_id, "motivation") + nl + motivation + nl + nl
+        + get_text(user_id, "change_city")
     )
     return message
 
