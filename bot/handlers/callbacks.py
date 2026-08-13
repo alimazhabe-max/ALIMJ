@@ -76,6 +76,64 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_text("➕ منوی بیشتر:", reply_markup=get_more_keyboard())
         return
 
+    
+    if data.startswith("ai_tts:"):
+        from bot.services.ai_extras import get_stored_answer
+        from bot.services.ai_service import text_to_speech
+        from io import BytesIO
+        aid = data.split(":", 1)[1]
+        text = get_stored_answer(aid, user_id)
+        if not text:
+            await query.answer("این جواب منقضی شده. دوباره بپرس.", show_alert=True)
+            return
+        await query.answer("در حال ویس دادن...")
+        try:
+            notice = await query.message.reply_text("🔊 در حال ویس دادن...")
+            audio = await text_to_speech(text)
+            bio = BytesIO(audio)
+            bio.name = "answer.mp3"
+            await query.message.reply_audio(audio=bio, caption="🔊")
+            try:
+                await notice.delete()
+            except Exception:
+                pass
+        except Exception as e:
+            await query.message.reply_text(f"⚠️ ویس ساخته نشد: {e}")
+        return
+
+    if data.startswith("ai_quick:"):
+        kind = data.split(":", 1)[1]
+        await query.answer()
+        try:
+            from bot.database import get_user_city
+            city = get_user_city(user_id) or "تهران"
+            if kind == "weather":
+                from bot.api.weather import get_weather
+                w = get_weather(city)
+                if w:
+                    txt = f"🌤 هوای {city}:\nدما {w.get('temp')}°C\n{w.get('condition')}\nرطوبت {w.get('humidity')}%"
+                else:
+                    txt = "هوا در دسترس نیست."
+            elif kind == "price":
+                from bot.features.market.finance import full_market_prices
+                txt = await full_market_prices()
+            elif kind == "istikhara":
+                from bot.features.religious.istikhara import istikhara
+                txt = await istikhara(user_id)
+            elif kind == "prayer":
+                from bot.api.prayer import get_prayer_times
+                pt = get_prayer_times(city)
+                if pt:
+                    txt = f"🕌 اوقات شرعی {city}:\n" + "\n".join(f"{k}: {v}" for k, v in pt.items())
+                else:
+                    txt = "اوقات شرعی در دسترس نیست."
+            else:
+                txt = "دکمه نامعتبر."
+            await query.message.reply_text(txt)
+        except Exception as e:
+            await query.message.reply_text(f"⚠️ {e}")
+        return
+
     # بروزرسانی = ویرایش همان پیام
     if data == "refresh_main":
         first_name = get_user(user_id)[1] if get_user(user_id) else "کاربر"

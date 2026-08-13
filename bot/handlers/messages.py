@@ -40,6 +40,10 @@ import re
 from datetime import datetime, timedelta
 import pytz
 from bot.config import config
+from bot.services.ai_extras import (
+    store_answer, get_ai_result_keyboard, parse_chart_request, make_chart_image,
+    web_search, parse_natural_reminder, enhance_ocr_prompt,
+)
 from bot.services.ai_service import (
     ask_ai, ask_ai_media, clear_history, enabled_providers,
     _extract_text_from_bytes, generate_or_edit_image,
@@ -47,6 +51,7 @@ from bot.services.ai_service import (
     text_to_speech, wants_voice_reply, strip_voice_prefix, speech_to_text,
     analyze_voice_emotion, wants_emotion_analysis, should_auto_voice_reply,
     wants_voice_chat_mode, wants_end_voice_chat,
+    generate_music, analyze_video, translate_voice,
 )
 
 
@@ -95,6 +100,110 @@ def _apply_voice_chat_flags(context, text: str) -> str | None:
             "برای خاموش کردن بگو: «قطع ویس» یا «فقط متن»."
         )
     return None
+
+
+
+
+async def _handle_special_ai_intents(update, context, user_id, text: str) -> bool:
+    """نمودار، جستجو، یادآوری، موسیقی — True اگر کامل هندل شد."""
+    import re
+    from io import BytesIO
+    from bot.database import add_reminder
+
+    # یادآوری
+    rem = parse_natural_reminder(text)
+    if rem:
+        body, when = rem
+        add_reminder(user_id, body, when.isoformat())
+        await update.message.reply_text(
+            f"⏰ یادآوری ثبت شد.\nموضوع: {body}\nزمان: {when.strftime('%Y-%m-%d %H:%M')}",
+            reply_markup=get_ai_keyboard(user_id),
+        )
+        return True
+
+    # جستجوی وب
+    m = re.match(r"^(جستجو|سرچ|search)\s*[:：]?\s*(.+)$", text, re.I | re.S)
+    if m or re.search(r"\b(در\s*اینترنت|تو\s*وب)\s*جستجو", text, re.I):
+        q = m.group(2).strip() if m else re.sub(r".*جستجو\s*[:：]?", "", text, flags=re.I).strip()
+        notice = await update.message.reply_text("🔎 در حال جستجو...")
+        try:
+            result = await web_search(q)
+            await update.message.reply_text(result, reply_markup=get_ai_keyboard(user_id))
+        finally:
+            try:
+                await notice.delete()
+            except Exception:
+                pass
+        return True
+
+    # نمودار
+    chart = parse_chart_request(text)
+    if chart:
+        title, labels, values, ctype = chart
+        notice = await update.message.reply_text("📊 در حال رسم نمودار...")
+        try:
+            png = make_chart_image(title, labels, values, ctype)
+            bio = BytesIO(png)
+            bio.name = "chart.png"
+            await update.message.reply_photo(
+                photo=bio, caption=title, reply_markup=get_ai_keyboard(user_id)
+            )
+        except Exception as e:
+            await update.message.reply_text(f"⚠️ نمودار: {e}")
+        finally:
+            try:
+                await notice.delete()
+            except Exception:
+                pass
+        return True
+
+    # موسیقی
+    if re.search(r"(موسیقی|آهنگ|music)\s*بساز|(بساز|تولید)\s*(موسیقی|آهنگ|افکت)", text, re.I):
+        notice = await update.message.reply_text("🎵 در حال ساخت موسیقی...")
+        try:
+            audio = await generate_music(text)
+            bio = BytesIO(audio)
+            bio.name = "music.mp3"
+            await update.message.reply_audio(
+                audio=bio, caption="🎵", reply_markup=get_ai_keyboard(user_id)
+            )
+        except Exception as e:
+            await update.message.reply_text(
+                f"⚠️ ساخت موسیقی در دسترس نبود:\n{e}",
+                reply_markup=get_ai_keyboard(user_id),
+            )
+        finally:
+            try:
+                await notice.delete()
+            except Exception:
+                pass
+        return True
+
+    return False
+
+
+async def _send_ai_answer(update, user_id, answer: str, *, stream: bool = True):
+    """ارسال جواب AI با دکمه‌های اینلاین + امکان استریم."""
+    from telegram import Message
+    msg = update.message
+    aid = store_answer(user_id, answer)
+    kb = get_ai_result_keyboard(user_id, aid)
+
+    # استریم: تکه تکه ادیت (برای حس تدریجی)
+    if stream and len(answer) > 120:
+        chunk = 80
+        sent = await msg.reply_text("🤖 " + answer[:chunk], reply_markup=kb)
+        shown = chunk
+        while shown < len(answer):
+            shown = min(len(answer), shown + chunk)
+            try:
+                await sent.edit_text("🤖 " + answer[:shown], reply_markup=kb)
+            except Exception:
+                break
+            import asyncio
+            await asyncio.sleep(0.08)
+        return sent
+    return await msg.reply_text(f"🤖 {answer}", reply_markup=kb)
 
 
 async def _send_ai_voice(update_or_msg, text: str, user_id: int, reply_markup=None):
@@ -262,10 +371,16 @@ async def _text_handler_inner(update: Update, context: ContextTypes.DEFAULT_TYPE
                     except Exception:
                         pass
                     return
+                # قابلیت‌های ویژه قبل از AI عمومی
+                handled = await _handle_special_ai_intents(
+                    update, context, user_id, ask_text
+                )
+                if handled:
+                    return
                 answer, provider = await _ask_ai_with_typing(
                     update, context, user_id, ask_text
                 )
-                await update.message.reply_text(f"🤖 {answer}")
+                await _send_ai_answer(update, user_id, answer)
                 explicit = wants_voice_reply(text)
                 if should_auto_voice_reply(
                     ask_text,
@@ -866,6 +981,24 @@ async def media_ai_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     filename = ""
 
     try:
+        # ویدیو کوتاه
+        if msg.video or msg.video_note:
+            notice = await msg.reply_text("🎬 در حال تحلیل ویدیو...")
+            try:
+                v = msg.video or msg.video_note
+                tg_file = await v.get_file()
+                data = bytes(await tg_file.download_as_bytearray())
+                mime = getattr(msg.video, "mime_type", None) or "video/mp4"
+                result = await analyze_video(data, prompt, mime=mime)
+                await _send_ai_answer(update, user_id, result)
+            except Exception as e:
+                await msg.reply_text(f"⚠️ ویدیو: {e}", reply_markup=get_ai_keyboard(user_id))
+            finally:
+                try:
+                    await notice.delete()
+                except Exception:
+                    pass
+            return
         # عکس
         if msg.photo:
             photo = msg.photo[-1]  # بالاترین کیفیت
@@ -925,6 +1058,7 @@ async def media_ai_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         notice = await msg.reply_text("✍️ در حال تحلیل...")
         try:
+            prompt = enhance_ocr_prompt(prompt, bool(images))
             answer, provider = await ask_ai_media(
                 user_id,
                 prompt,
@@ -1060,13 +1194,45 @@ async def voice_ai_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await msg.reply_text(f"⚠️ {ve}")
             return
 
+        # ترجمه زنده ویس
+        import re as _re
+        tr = _re.search(
+            r"ترجمه\s*(به)?\s*(انگلیسی|فارسی|عربی|ترکی|آلمانی|فرانسوی|en|fa|ar|tr|de|fr)?",
+            (caption or "") + " " + (transcript or ""),
+            _re.I,
+        )
+        if tr or _re.search(r"\btranslate\b", (caption or ""), _re.I):
+            lang_map = {
+                "انگلیسی": "en", "en": "en", "فارسی": "fa", "fa": "fa",
+                "عربی": "ar", "ar": "ar", "ترکی": "tr", "tr": "tr",
+                "آلمانی": "de", "de": "de", "فرانسوی": "fr", "fr": "fr",
+            }
+            target = "en"
+            if tr and tr.group(2):
+                target = lang_map.get(tr.group(2).lower(), "en")
+            notice = await msg.reply_text("🌐 در حال ترجمه ویس...")
+            try:
+                src, dst, audio = await translate_voice(
+                    data, target_lang=target, filename=filename, mime=mime
+                )
+                await msg.reply_text(f"📝 اصلی:\n{src}\n\n🌐 ترجمه:\n{dst}")
+                from io import BytesIO
+                bio = BytesIO(audio)
+                bio.name = "tr.mp3"
+                await msg.reply_audio(audio=bio, caption="🔊 ترجمه صوتی")
+            except Exception as e:
+                await msg.reply_text(f"⚠️ ترجمه: {e}")
+            finally:
+                try:
+                    await notice.delete()
+                except Exception:
+                    pass
+            return
+
         answer, provider = await _ask_ai_with_typing(
             update, context, user_id, user_text
         )
-        await msg.reply_text(
-            f"🤖 {answer}",
-            reply_markup=get_ai_keyboard(user_id),
-        )
+        await _send_ai_answer(update, user_id, answer)
         if should_auto_voice_reply(
             user_text,
             answer,
