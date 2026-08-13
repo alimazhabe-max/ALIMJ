@@ -88,6 +88,21 @@ TEXTS = {
 
 def get_text(user_id, key, **kwargs):
     from bot.database import get_user_language
-    lang = get_user_language(user_id)
+    try:
+        lang = get_user_language(user_id) or "fa"
+    except Exception:
+        lang = "fa"
     text = TEXTS.get(lang, TEXTS["fa"]).get(key, key)
-    return text.format(**kwargs) if kwargs else text
+    if not kwargs:
+        return text
+    # جلوگیری از کرش وقتی نام کاربر شامل { } باشد
+    safe_kwargs = {}
+    for k, v in kwargs.items():
+        if isinstance(v, str):
+            safe_kwargs[k] = v.replace("{", "(").replace("}", ")")
+        else:
+            safe_kwargs[k] = v
+    try:
+        return text.format(**safe_kwargs)
+    except Exception:
+        return text
