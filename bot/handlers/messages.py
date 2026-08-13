@@ -270,11 +270,9 @@ async def _ask_ai_with_typing(update, context, user_id, text):
     import asyncio
     stop_event = asyncio.Event()
     chat_id = update.effective_chat.id
-    notice = None
-    try:
-        notice = await update.message.reply_text("✍️ در حال نوشتن...")
-    except Exception:
-        pass
+    # فقط _ask_ai_stream_and_send یک پیام «✍️ در حال نوشتن...» می‌فرستد.
+    # اینجا فقط ChatAction.TYPING برای وضعیت تایپ تلگرام فعال می‌شود تا
+    # پیام وضعیت دوبار روی صفحه ایجاد نشود.
     task = asyncio.create_task(_keep_typing(context.bot, chat_id, stop_event))
     try:
         try:
@@ -292,11 +290,6 @@ async def _ask_ai_with_typing(update, context, user_id, text):
             await task
         except Exception:
             pass
-        if notice is not None:
-            try:
-                await notice.delete()
-            except Exception:
-                pass
 
 
 async def _send_main(update, context, text, user_id):
