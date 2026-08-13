@@ -183,27 +183,52 @@ async def _handle_special_ai_intents(update, context, user_id, text: str) -> boo
 
 
 async def _send_ai_answer(update, user_id, answer: str, *, stream: bool = True):
-    """ارسال جواب AI با دکمه‌های اینلاین + امکان استریم."""
-    from telegram import Message
+    """ارسال جواب AI با دکمه‌های اینلاین."""
     msg = update.message
     aid = store_answer(user_id, answer)
     kb = get_ai_result_keyboard(user_id, aid)
-
-    # استریم: تکه تکه ادیت (برای حس تدریجی)
-    if stream and len(answer) > 120:
-        chunk = 80
-        sent = await msg.reply_text("🤖 " + answer[:chunk], reply_markup=kb)
-        shown = chunk
-        while shown < len(answer):
-            shown = min(len(answer), shown + chunk)
-            try:
-                await sent.edit_text("🤖 " + answer[:shown], reply_markup=kb)
-            except Exception:
-                break
-            import asyncio
-            await asyncio.sleep(0.08)
-        return sent
     return await msg.reply_text(f"🤖 {answer}", reply_markup=kb)
+
+
+async def _ask_ai_stream_and_send(update, context, user_id, text: str):
+    """استریم واقعی از API و ادیت تدریجی پیام در تلگرام."""
+    import asyncio
+    from bot.services.ai_service import ask_ai_stream
+
+    msg = update.message
+    sent = await msg.reply_text("🤖 …")
+    buf = []
+    provider_label = ""
+    last_edit = 0.0
+    async for piece, label in ask_ai_stream(user_id, text):
+        if label:
+            provider_label = label
+            continue
+        if piece:
+            buf.append(piece)
+            now = asyncio.get_event_loop().time()
+            if now - last_edit >= 0.35:
+                shown = "".join(buf)
+                if len(shown) > 3500:
+                    shown = shown[:3500] + "…"
+                try:
+                    await sent.edit_text("🤖 " + shown)
+                except Exception:
+                    pass
+                last_edit = now
+    answer = "".join(buf).strip()
+    if not answer:
+        raise RuntimeError("جواب خالی")
+    aid = store_answer(user_id, answer)
+    kb = get_ai_result_keyboard(user_id, aid)
+    final = "🤖 " + answer
+    if len(final) > 4000:
+        final = final[:3990] + "…"
+    try:
+        await sent.edit_text(final, reply_markup=kb)
+    except Exception:
+        await msg.reply_text(final, reply_markup=kb)
+    return answer, provider_label or "ai"
 
 
 async def _send_ai_voice(update_or_msg, text: str, user_id: int, reply_markup=None):
@@ -237,6 +262,17 @@ async def _ask_ai_with_typing(update, context, user_id, text):
         notice = None
     task = asyncio.create_task(_keep_typing(context.bot, chat_id, stop_event))
     try:
+        # تلاش برای استریم واقعی (پیام از قبل در چت ارسال می‌شود)
+        try:
+            result = await _ask_ai_stream_and_send(update, context, user_id, text)
+            if context.user_data is not None:
+                context.user_data["_ai_already_sent"] = True
+            return result
+        except Exception as _se:
+            from bot.logger import logger as _lg
+            _lg.warning("stream failed, fallback: %s", _se)
+            if context.user_data is not None:
+                context.user_data["_ai_already_sent"] = False
         return await ask_ai(user_id, text)
     finally:
         stop_event.set()
@@ -380,7 +416,10 @@ async def _text_handler_inner(update: Update, context: ContextTypes.DEFAULT_TYPE
                 answer, provider = await _ask_ai_with_typing(
                     update, context, user_id, ask_text
                 )
-                await _send_ai_answer(update, user_id, answer)
+                if not (context.user_data or {}).get("_ai_already_sent"):
+                    await _send_ai_answer(update, user_id, answer)
+                if context.user_data is not None:
+                    context.user_data.pop("_ai_already_sent", None)
                 explicit = wants_voice_reply(text)
                 if should_auto_voice_reply(
                     ask_text,
@@ -1232,7 +1271,10 @@ async def voice_ai_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         answer, provider = await _ask_ai_with_typing(
             update, context, user_id, user_text
         )
-        await _send_ai_answer(update, user_id, answer)
+        if not (context.user_data or {}).get("_ai_already_sent"):
+            await _send_ai_answer(update, user_id, answer)
+        if context.user_data is not None:
+            context.user_data.pop("_ai_already_sent", None)
         if should_auto_voice_reply(
             user_text,
             answer,

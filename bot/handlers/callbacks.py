@@ -66,7 +66,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         except Exception:
             pass
-        await query.message.reply_text("✅ حافظه کوتاه‌مدت گفت‌وگوی AI پاک شد.")
+        await query.message.reply_text("✅ حافظه گفت‌وگو و خلاصه پاک شد. (حافظه بلندمدت با «پاک کردن همه حافظه» حذف می‌شود)")
         return
 
     if data == "ai_exit":
