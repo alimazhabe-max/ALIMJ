@@ -158,7 +158,6 @@ def get_main_keyboard():
     """کیبورد پایین — انتخاب شهر، تقویم، زبان، بیشتر"""
     return ReplyKeyboardMarkup(
         [
-            [KeyboardButton("🤖 دستیار هوشمند")],
             [KeyboardButton("🏙 انتخاب شهر"), KeyboardButton("📅 تقویم")],
             [KeyboardButton("🌍 زبان"), KeyboardButton("➕ بیشتر")],
         ],
