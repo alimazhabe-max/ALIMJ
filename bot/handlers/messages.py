@@ -40,7 +40,12 @@ import re
 from datetime import datetime, timedelta
 import pytz
 from bot.config import config
-from bot.services.ai_service import ask_ai, clear_history, enabled_providers
+from bot.services.ai_service import (
+    ask_ai, ask_ai_media, clear_history, enabled_providers,
+    _extract_text_from_bytes, generate_or_edit_image,
+    looks_like_image_request, looks_like_image_edit,
+    text_to_speech, wants_voice_reply, strip_voice_prefix, speech_to_text,
+)
 
 
 
@@ -156,14 +161,76 @@ async def _text_handler_inner(update: Update, context: ContextTypes.DEFAULT_TYPE
                     "🤖 دستیار هوشمند روز زیبا\n\n"
                     f"سرویس‌های فعال: {', '.join(providers) if providers else 'هیچ‌کدام'}\n"
                     "مدل دلخواهت را از دکمه «🎛 انتخاب مدل» انتخاب کن.\n"
-                    "پیامت را بفرست.",
+                    "متن، عکس یا فایل بفرست.\n"
+                    "«تصویر بساز …» → ساخت تصویر\n"
+                    "عکس + کپشن ویرایش → ویرایش تصویر\n"
+                    "«با ویس ...» → جواب متنی + صوتی\n«بخون: متن» → فقط ویس\nبرای خروج «🔙 بازگشت» را بزن.",
                     reply_markup=get_ai_keyboard(user_id),
                 )
                 return
         else:
             try:
-                answer, provider = await _ask_ai_with_typing(update, context, user_id, text)
+                # فقط خواندن متن با ویس (بدون AI)
+                import re as _re
+                m_read = _re.match(r"^(بخون|بخوان)\s*[:：]?\s*(.+)$", text, _re.I | _re.S)
+                if m_read:
+                    to_read = m_read.group(2).strip()
+                    notice = await update.message.reply_text("🔊 در حال ساخت ویس...")
+                    try:
+                        audio = await text_to_speech(to_read)
+                        from io import BytesIO
+                        bio = BytesIO(audio)
+                        bio.name = "read.mp3"
+                        await update.message.reply_audio(
+                            audio=bio,
+                            caption="🔊",
+                            reply_markup=get_ai_keyboard(user_id),
+                        )
+                    finally:
+                        try:
+                            await notice.delete()
+                        except Exception:
+                            pass
+                    return
+                if looks_like_image_request(text):
+                    notice = await update.message.reply_text("🎨 در حال ساخت تصویر...")
+                    try:
+                        img_bytes, mime = await generate_or_edit_image(text)
+                        from io import BytesIO
+                        bio = BytesIO(img_bytes)
+                        bio.name = "ai_image.png" if "png" in mime else "ai_image.jpg"
+                        await update.message.reply_photo(
+                            photo=bio,
+                            caption="🎨 تصویر ساخته شد",
+                            reply_markup=get_ai_keyboard(user_id),
+                        )
+                    finally:
+                        try:
+                            await notice.delete()
+                        except Exception:
+                            pass
+                    return
+                voice_mode = wants_voice_reply(text)
+                ask_text = strip_voice_prefix(text) if voice_mode else text
+                answer, provider = await _ask_ai_with_typing(
+                    update, context, user_id, ask_text
+                )
                 await update.message.reply_text(f"🤖 {answer}")
+                if voice_mode:
+                    try:
+                        audio = await text_to_speech(answer)
+                        from io import BytesIO
+                        bio = BytesIO(audio)
+                        bio.name = "reply.mp3"
+                        await update.message.reply_audio(
+                            audio=bio,
+                            caption="🔊 نسخه صوتی",
+                            reply_markup=get_ai_keyboard(user_id),
+                        )
+                    except Exception as ve:
+                        await update.message.reply_text(
+                            f"⚠️ متن آماده شد ولی ویس ساخته نشد: {ve}"
+                        )
             except Exception as exc:
                 await update.message.reply_text(
                     "❌ فعلاً هیچ‌کدام از سرویس‌های AI پاسخ ندادند.\n\n" + str(exc)[:3000]
@@ -725,3 +792,189 @@ async def _show_azan_settings(update, user_id, city, note: str = None):
         "\n".join(lines),
         reply_markup=get_azan_keyboard(settings),
     )
+
+
+async def media_ai_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """تحلیل عکس و فایل در حالت دستیار هوشمند."""
+    if not update.message:
+        return
+    if not await check_and_rate_limit(update, context):
+        return
+
+    # فقط در حالت AI
+    if not context.user_data.get("ai_mode"):
+        return
+
+    user_id = update.effective_user.id
+    msg = update.message
+    caption = (msg.caption or "").strip()
+    prompt = caption or ""
+
+    images: list[tuple[bytes, str]] = []
+    file_text = None
+    filename = ""
+
+    try:
+        # عکس
+        if msg.photo:
+            photo = msg.photo[-1]  # بالاترین کیفیت
+            tg_file = await photo.get_file()
+            data = bytes(await tg_file.download_as_bytearray())
+            images.append((data, "image/jpeg"))
+        # فایل / سند
+        elif msg.document:
+            doc = msg.document
+            filename = doc.file_name or "file"
+            mime = doc.mime_type or ""
+            # محدودیت حجم ۱۰ مگ
+            if doc.file_size and doc.file_size > 10 * 1024 * 1024:
+                await msg.reply_text("❌ حجم فایل بیشتر از ۱۰ مگابایت است.")
+                return
+            tg_file = await doc.get_file()
+            data = bytes(await tg_file.download_as_bytearray())
+
+            if mime.startswith("image/") or filename.lower().endswith(
+                (".jpg", ".jpeg", ".png", ".webp", ".gif")
+            ):
+                images.append((data, mime or "image/jpeg"))
+            else:
+                file_text = _extract_text_from_bytes(data, filename, mime)
+                if not file_text.strip():
+                    await msg.reply_text(
+                        "❌ نتوانستم متن این فایل را بخوانم.\n"
+                        "فرمت‌های پشتیبانی‌شده: txt, md, csv, json, pdf, docx و عکس."
+                    )
+                    return
+        else:
+            return
+
+        # ویرایش تصویر: عکس + دستور ویرایش
+        if images and prompt and looks_like_image_edit(prompt):
+            notice = await msg.reply_text("🎨 در حال ویرایش تصویر...")
+            try:
+                img_bytes, mime = await generate_or_edit_image(
+                    prompt,
+                    source_image=images[0][0],
+                    source_mime=images[0][1],
+                )
+                from io import BytesIO
+                bio = BytesIO(img_bytes)
+                bio.name = "edited.png" if "png" in mime else "edited.jpg"
+                await msg.reply_photo(
+                    photo=bio,
+                    caption="🎨 تصویر ویرایش شد",
+                    reply_markup=get_ai_keyboard(user_id),
+                )
+            finally:
+                try:
+                    await notice.delete()
+                except Exception:
+                    pass
+            return
+
+        notice = await msg.reply_text("✍️ در حال تحلیل...")
+        try:
+            answer, provider = await ask_ai_media(
+                user_id,
+                prompt,
+                images=images or None,
+                file_text=file_text,
+                filename=filename,
+            )
+            await msg.reply_text(
+                f"🤖 {answer}",
+                reply_markup=get_ai_keyboard(user_id),
+            )
+        finally:
+            try:
+                await notice.delete()
+            except Exception:
+                pass
+    except Exception as exc:
+        await msg.reply_text(
+            "❌ تحلیل ممکن نشد.\n\n" + str(exc)[:2500],
+            reply_markup=get_ai_keyboard(user_id),
+        )
+
+
+async def voice_ai_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """ویس/صوت ورودی کاربر → متن → جواب AI (و در صورت تمایل ویس خروجی)."""
+    if not update.message:
+        return
+    if not await check_and_rate_limit(update, context):
+        return
+    if not context.user_data.get("ai_mode"):
+        return
+
+    user_id = update.effective_user.id
+    msg = update.message
+    caption = (msg.caption or "").strip()
+
+    try:
+        if msg.voice:
+            tg_file = await msg.voice.get_file()
+            data = bytes(await tg_file.download_as_bytearray())
+            filename, mime = "voice.ogg", "audio/ogg"
+        elif msg.audio:
+            tg_file = await msg.audio.get_file()
+            data = bytes(await tg_file.download_as_bytearray())
+            filename = msg.audio.file_name or "audio.mp3"
+            mime = msg.audio.mime_type or "audio/mpeg"
+        elif msg.video_note:
+            # دایره ویدیویی — فقط صدا را نداریم؛ رد می‌کنیم یا download full
+            await msg.reply_text("لطفاً ویس معمولی بفرست (نه ویدیو نوت).")
+            return
+        else:
+            return
+
+        if len(data) > 15 * 1024 * 1024:
+            await msg.reply_text("❌ حجم ویس خیلی زیاد است.")
+            return
+
+        notice = await msg.reply_text("🎧 در حال پیاده‌سازی ویس...")
+        try:
+            transcript = await speech_to_text(data, filename=filename, mime=mime)
+        finally:
+            try:
+                await notice.delete()
+            except Exception:
+                pass
+
+        if not transcript:
+            await msg.reply_text("❌ چیزی از ویس متوجه نشدم. دوباره واضح‌تر بفرست.")
+            return
+
+        # اگر کپشن داشت به متن اضافه کن
+        user_text = transcript
+        if caption:
+            user_text = caption + "\n\n(متن ویس): " + transcript
+
+        await msg.reply_text("📝 شنیدم:\n" + transcript)
+
+        voice_out = wants_voice_reply(caption) if caption else False
+        answer, provider = await _ask_ai_with_typing(
+            update, context, user_id, user_text
+        )
+        await msg.reply_text(
+            f"🤖 {answer}",
+            reply_markup=get_ai_keyboard(user_id),
+        )
+        if voice_out or context.user_data.get("ai_always_voice"):
+            try:
+                audio = await text_to_speech(answer)
+                from io import BytesIO
+                bio = BytesIO(audio)
+                bio.name = "reply.mp3"
+                await msg.reply_audio(
+                    audio=bio,
+                    caption="🔊 نسخه صوتی",
+                    reply_markup=get_ai_keyboard(user_id),
+                )
+            except Exception as ve:
+                await msg.reply_text(f"⚠️ ویس خروجی ساخته نشد: {ve}")
+    except Exception as exc:
+        await msg.reply_text(
+            "❌ پردازش ویس ممکن نشد.\n\n" + str(exc)[:2500],
+            reply_markup=get_ai_keyboard(user_id),
+        )
+
