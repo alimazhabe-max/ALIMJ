@@ -305,21 +305,7 @@ def enhance_ocr_prompt(user_prompt: str, has_image: bool) -> str:
 # ── کیبورد اینلاین زیر جواب AI ───────────────────────────────────────────────
 
 def get_ai_result_keyboard(user_id: int, answer_id: str):
-    """فقط: ویس این جواب | حذف حافظه | انتخاب مدل AI"""
-    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-
-    return InlineKeyboardMarkup(
-        [
-            [
-                InlineKeyboardButton(
-                    "🔊 ویس این جواب", callback_data=f"ai_tts:{answer_id}"
-                ),
-            ],
-            [
-                InlineKeyboardButton("🧹 حذف حافظه", callback_data="ai_clear_memory"),
-                InlineKeyboardButton("🎛 انتخاب مدل AI", callback_data="ai_models"),
-            ],
-        ]
-    )
+    """زیر جواب AI و ویس هیچ دکمه‌ای نباشد."""
+    return None
 
 
