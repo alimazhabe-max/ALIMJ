@@ -24,20 +24,22 @@ SYSTEM_PROMPT = os.getenv(
 )
 
 MAX_INPUT = int(os.getenv("AI_MAX_INPUT", "5000"))
-MAX_OUTPUT = int(os.getenv("AI_MAX_OUTPUT", "1200"))
-HISTORY_ITEMS = max(2, int(os.getenv("AI_HISTORY_ITEMS", "8")))
-TIMEOUT = float(os.getenv("AI_TIMEOUT", "35"))
+MAX_OUTPUT = int(os.getenv("AI_MAX_OUTPUT", "1000"))
+HISTORY_ITEMS = max(2, int(os.getenv("AI_HISTORY_ITEMS", "6")))
+# timeout کوتاه‌تر برای پاسخ سریع‌تر (مدل‌های سریع معمولاً زیر ۱۰ثانیه جواب می‌دن)
+TIMEOUT = float(os.getenv("AI_TIMEOUT", "22"))
 
 # مدت خاموشی کلید بعد از محدودیت روزانه (ثانیه) — پیش‌فرض ۱۲ ساعت
 KEY_COOLDOWN_SEC = int(os.getenv("AI_KEY_COOLDOWN_SEC", str(12 * 3600)))
 # خاموشی کوتاه برای rate-limit لحظه‌ای (ثانیه)
-KEY_SHORT_COOLDOWN_SEC = int(os.getenv("AI_KEY_SHORT_COOLDOWN_SEC", "120"))
+KEY_SHORT_COOLDOWN_SEC = int(os.getenv("AI_KEY_SHORT_COOLDOWN_SEC", "90"))
 
 _DEFAULT_ORDER = [
     x.strip().lower()
     for x in os.getenv(
         "AI_DEFAULT_ORDER",
-        "gemini,groq,cerebras,cloudflare,openrouter",
+        # groq اول چون مدل‌های instant خیلی سریع‌اند
+        "groq,gemini,cerebras,cloudflare,openrouter",
     ).split(",")
     if x.strip()
 ]
@@ -46,7 +48,22 @@ _HISTORY: Dict[int, Deque[Tuple[str, str]]] = defaultdict(
     lambda: deque(maxlen=HISTORY_ITEMS)
 )
 _LOCKS: Dict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
+# (provider, model) — model="*" یعنی همه مدل‌های اون ارائه‌دهنده
 _USER_SELECTION: Dict[int, Tuple[str, str]] = {}
+
+# کلاینت HTTP مشترک برای اتصال مجدد و سرعت بیشتر
+_HTTP: Optional[httpx.AsyncClient] = None
+
+
+def _get_http() -> httpx.AsyncClient:
+    global _HTTP
+    if _HTTP is None or _HTTP.is_closed:
+        _HTTP = httpx.AsyncClient(
+            timeout=httpx.Timeout(TIMEOUT, connect=5.0),
+            limits=httpx.Limits(max_keepalive_connections=20, max_connections=40),
+            http2=False,
+        )
+    return _HTTP
 
 # ── Key Pool: چند کلید + چرخش وقتی یکی تمام شد ─────────────────────────────
 # key_id -> cooldown_until (unix timestamp)
@@ -198,10 +215,12 @@ def _env_models(env_name: str, default: List[str]) -> List[str]:
 
 
 def available_model_options() -> List[Tuple[str, str, str]]:
+    """همه مدل‌ها به ترتیب ارائه‌دهنده و سرعت (سریع‌ترین اول)."""
     raw: Dict[str, List[Tuple[str, str, str]]] = {}
 
     if _provider_keys("gemini"):
         items = []
+        # flash-lite اول = سریع‌تر
         for model in _env_models(
             "GEMINI_MODELS",
             ["gemini-3.1-flash-lite", "gemini-3.5-flash"],
@@ -212,12 +231,13 @@ def available_model_options() -> List[Tuple[str, str, str]]:
 
     if _provider_keys("groq"):
         items = []
+        # instant اول = خیلی سریع
         for model in _env_models(
             "GROQ_MODELS",
             [
                 "llama-3.1-8b-instant",
-                "llama-3.3-70b-versatile",
                 "openai/gpt-oss-20b",
+                "llama-3.3-70b-versatile",
                 "openai/gpt-oss-120b",
             ],
         ):
@@ -263,31 +283,65 @@ def available_model_options() -> List[Tuple[str, str, str]]:
     return ordered
 
 
+_PROVIDER_PRETTY = {
+    "gemini": "Gemini",
+    "groq": "Groq",
+    "cerebras": "Cerebras",
+    "cloudflare": "Cloudflare",
+    "openrouter": "OpenRouter",
+}
+
+
+def available_providers() -> List[Tuple[str, str]]:
+    """
+    لیست ارائه‌دهنده‌های فعال برای دکمهٔ انتخاب.
+    هر آیتم: (provider_id, label)
+    با انتخاب یک ارائه‌دهنده، همه مدل‌هایش به‌صورت خودکار امتحان می‌شوند.
+    """
+    options = available_model_options()
+    by_provider: Dict[str, int] = {}
+    for provider, _label, _model in options:
+        by_provider[provider] = by_provider.get(provider, 0) + 1
+
+    result: List[Tuple[str, str]] = []
+    seen = set()
+    for p in _DEFAULT_ORDER:
+        if p in by_provider and p not in seen:
+            pretty = _PROVIDER_PRETTY.get(p, p)
+            n = by_provider[p]
+            keys = len(_provider_keys(p))
+            suffix = f" ({n} مدل)" if n > 1 else ""
+            if keys > 1:
+                suffix += f" ×{keys} کلید"
+            result.append((p, f"{pretty}{suffix}"))
+            seen.add(p)
+    for p, n in by_provider.items():
+        if p not in seen:
+            pretty = _PROVIDER_PRETTY.get(p, p)
+            suffix = f" ({n} مدل)" if n > 1 else ""
+            result.append((p, f"{pretty}{suffix}"))
+    return result
+
+
+def models_for_provider(provider: str) -> List[str]:
+    """مدل‌های یک ارائه‌دهنده به ترتیب سرعت (اول = سریع‌تر)."""
+    return [m for p, _l, m in available_model_options() if p == provider]
+
+
 def enabled_providers() -> List[str]:
-    seen = []
-    pretty_map = {
-        "gemini": "Gemini",
-        "groq": "Groq",
-        "cerebras": "Cerebras",
-        "cloudflare": "Cloudflare",
-        "openrouter": "OpenRouter",
-    }
-    for provider, _label, _model in available_model_options():
-        pretty = pretty_map.get(provider, provider)
-        if pretty not in seen:
-            n = len(_provider_keys(provider))
-            if n > 1:
-                pretty = f"{pretty}×{n}"
-            seen.append(pretty)
-    return seen
+    return [label for _p, label in available_providers()]
 
 
 def default_model_info() -> str:
-    options = available_model_options()
-    if not options:
+    providers = available_providers()
+    if not providers:
         return "هیچ"
-    _p, label, _m = options[0]
-    return label
+    return providers[0][1]
+
+
+def set_selected_provider(user_id: int, provider: str) -> None:
+    """انتخاب ارائه‌دهنده — همه مدل‌هایش شامل می‌شوند (model='*')."""
+    set_selected_model(user_id, provider, "*")
 
 
 def key_pool_status() -> str:
@@ -317,13 +371,13 @@ def _save_turn(user_id: int, prompt: str, answer: str) -> None:
 
 
 async def _post_json(url: str, *, headers=None, json=None, params=None) -> tuple[int, dict]:
-    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
-        response = await client.post(url, headers=headers, json=json, params=params)
-        try:
-            data = response.json()
-        except Exception:
-            data = {"raw": response.text[:1200]}
-        return response.status_code, data
+    client = _get_http()
+    response = await client.post(url, headers=headers, json=json, params=params)
+    try:
+        data = response.json()
+    except Exception:
+        data = {"raw": response.text[:1200]}
+    return response.status_code, data
 
 
 def _extract_openai(data: dict) -> str:
@@ -551,13 +605,6 @@ async def _call_provider(provider: str, user_id: int, prompt: str, model: str) -
     raise RuntimeError(f"Unknown AI provider: {provider}")
 
 
-def _options_by_key() -> Dict[str, Tuple[str, str]]:
-    return {
-        f"{provider}:{model}": (provider, model)
-        for provider, _label, model in available_model_options()
-    }
-
-
 async def ask_ai(user_id: int, prompt: str) -> tuple[str, str]:
     prompt = (prompt or "").strip()
     if not prompt:
@@ -571,30 +618,34 @@ async def ask_ai(user_id: int, prompt: str) -> tuple[str, str]:
             "هیچ سرویس AI تنظیم نشده است. حداقل یک API Key در Render قرار بده."
         )
 
+    # ساخت لیست (provider, model) برای امتحان — سریع‌ترین‌ها اول
+    def _models_of(provider: str) -> List[Tuple[str, str]]:
+        return [(provider, m) for m in models_for_provider(provider)]
+
     async with _LOCKS[user_id]:
         selected = get_selected_model(user_id)
+        ordered: List[Tuple[str, str]] = []
+        tried: set = set()
+        errors: List[str] = []
 
+        # ۱) اگر کاربر ارائه‌دهنده انتخاب کرده → همه مدل‌های همان ارائه‌دهنده
         if selected:
             provider, model = selected
-            if f"{provider}:{model}" in _options_by_key():
-                try:
-                    answer = await _call_provider(provider, user_id, prompt, model)
-                    _save_turn(user_id, prompt, answer)
-                    return answer, f"{provider} / {model}"
-                except Exception as exc:
-                    logger.warning("Selected AI model failed: %s", exc)
+            if model == "*" or model is None:
+                ordered.extend(_models_of(provider))
+            else:
+                # مدل خاص انتخاب شده بود — اول همون، بعد بقیه مدل‌های همون provider
+                ordered.append((provider, model))
+                for item in _models_of(provider):
+                    if item not in ordered:
+                        ordered.append(item)
 
-        tried = set()
-        ordered: List[Tuple[str, str]] = []
-        if selected:
-            ordered.append(selected)
-
+        # ۲) بقیه ارائه‌دهنده‌ها (fallback) به ترتیب پیش‌فرض
         for provider, _label, model in options:
             item = (provider, model)
             if item not in ordered:
                 ordered.append(item)
 
-        errors = []
         for provider, model in ordered:
             key = (provider, model)
             if key in tried:
@@ -603,13 +654,16 @@ async def ask_ai(user_id: int, prompt: str) -> tuple[str, str]:
             try:
                 answer = await _call_provider(provider, user_id, prompt, model)
                 _save_turn(user_id, prompt, answer)
-                set_selected_model(user_id, provider, model)
+                # اگر هنوز provider انتخاب نشده، همین را ذخیره کن (با *)
+                if not selected:
+                    set_selected_model(user_id, provider, "*")
                 return answer, f"{provider} / {model}"
             except Exception as exc:
                 msg = str(exc).replace("\n", " ")[:500]
                 errors.append(f"{provider}/{model}: {msg}")
                 logger.warning("AI provider/model failed: %s", msg)
-                await asyncio.sleep(0.1)
+                # تأخیر خیلی کم بین تلاش‌ها برای سرعت بیشتر
+                await asyncio.sleep(0.05)
 
     raise RuntimeError(
         "فعلاً هیچ‌کدام از مدل‌های AI پاسخ ندادند.\n\n" + "\n".join(errors[:8])
