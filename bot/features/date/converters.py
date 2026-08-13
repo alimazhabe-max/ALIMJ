@@ -159,9 +159,8 @@ def convert_date(kind: str, year: int, month: int, day: int) -> str:
 
 def _gregorian_to_hijri(g: date) -> dict:
     try:
-        # هک یک‌روزه برای تطبیق رایج در ایران
-        adjusted = g - timedelta(days=1)
-        h = Gregorian(adjusted.year, adjusted.month, adjusted.day).to_hijri()
+        # بدون هک یک‌روزه — مطابق استاندارد و اکثر تقویم‌ها
+        h = Gregorian(g.year, g.month, g.day).to_hijri()
         return {
             "day": h.day,
             "month": h.month,

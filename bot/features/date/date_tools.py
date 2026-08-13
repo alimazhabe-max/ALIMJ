@@ -118,8 +118,8 @@ def parse_any_date(text: str):
 
 def _g2h(g: date) -> dict:
     try:
-        adj = g - timedelta(days=1)
-        h = Gregorian(adj.year, adj.month, adj.day).to_hijri()
+        # بدون هک یک‌روزه
+        h = Gregorian(g.year, g.month, g.day).to_hijri()
         return {"day": h.day, "month": h.month, "month_name": HIJRI_MONTHS.get(h.month, str(h.month)), "year": h.year}
     except Exception:
         return {"day": 0, "month": 0, "month_name": "—", "year": 0}
