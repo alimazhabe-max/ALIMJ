@@ -208,10 +208,11 @@ async def _ask_ai_stream_and_send(update, context, user_id: int, text: str):
     from bot.services.ai_service import ask_ai_stream
 
     msg = update.message
-    sent = await msg.reply_text("🤖 …")
+    # هنگام تولید پاسخ فقط وضعیت «در حال نوشتن» نمایش داده شود؛
+    # آیکن ربات تا آماده شدن پاسخ نهایی نمایش داده نمی‌شود.
+    sent = await msg.reply_text("✍️ در حال نوشتن...")
     buf = []
     provider_label = ""
-    last_edit = 0.0
 
     try:
         async for piece, label in ask_ai_stream(user_id, text):
@@ -219,17 +220,9 @@ async def _ask_ai_stream_and_send(update, context, user_id: int, text: str):
                 provider_label = label
                 continue
             if piece:
+                # پاسخ تا پایان تولید نمایش داده نمی‌شود؛ در این مدت فقط
+                # پیام «✍️ در حال نوشتن...» روی صفحه باقی می‌ماند.
                 buf.append(piece)
-                now = asyncio.get_event_loop().time()
-                if now - last_edit >= 0.35:
-                    shown = "".join(buf)
-                    if len(shown) > 3500:
-                        shown = shown[:3500] + "…"
-                    try:
-                        await sent.edit_text("🤖 " + shown)
-                    except Exception:
-                        pass
-                    last_edit = now
 
         answer = "".join(buf).strip()
         if not answer:
