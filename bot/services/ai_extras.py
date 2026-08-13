@@ -162,14 +162,14 @@ async def web_search(query: str, max_results: int = 5) -> str:
 
 # ── یادآوری زبان طبیعی ─────────────────────────────────────────────────────
 
-def parse_natural_reminder(text: str) -> Optional[Tuple[str, datetime]]:
+def parse_natural_reminder(text: str) -> Optional[Tuple[str, datetime, str, int]]:
     """
     استخراج یادآوری از جملات فارسی.
-    خروجی: (متن یادآوری, زمان datetime timezone-aware تهران)
+    خروجی: (متن, زمان, repeat_type, repeat_every)
+    repeat_type: once | daily | weekly | monthly | every_minutes | every_hours
     """
     t = (text or "").strip()
-    if not re.search(r"یادآوری|یادم\s*بیار|ریمایندر|یادآوری\s*کن|آلارم", t, re.I):
-        # الگوهای زمانی هم قبول
+    if not re.search(r"یادآوری|یادم\s*بیار|ریمایندر|یادآوری\s*کن|آلارم|هر\s*روز|هر\s*هفته", t, re.I):
         if not re.search(r"فردا|پس‌فردا|ساعت\s*\d|دقیقه\s*دیگه|ساعت\s*دیگه", t, re.I):
             return None
         if not re.search(r"یاد|بگو|خبرم|پیام\s*بده", t, re.I):
@@ -177,19 +177,40 @@ def parse_natural_reminder(text: str) -> Optional[Tuple[str, datetime]]:
 
     now = datetime.now(TEHRAN)
     when = None
+    repeat_type = "once"
+    repeat_every = 0
+
+    # تکرار
+    if re.search(r"هر\s*روز|روزانه|daily", t, re.I):
+        repeat_type = "daily"
+        repeat_every = 1
+    elif re.search(r"هر\s*هفته|هفتگی|weekly", t, re.I):
+        repeat_type = "weekly"
+        repeat_every = 1
+    elif re.search(r"هر\s*ماه|ماهانه|monthly", t, re.I):
+        repeat_type = "monthly"
+        repeat_every = 1
+    else:
+        m = re.search(r"هر\s*(\d+)\s*دقیقه", t)
+        if m:
+            repeat_type = "every_minutes"
+            repeat_every = int(m.group(1))
+        else:
+            m = re.search(r"هر\s*(\d+)\s*ساعت", t)
+            if m:
+                repeat_type = "every_hours"
+                repeat_every = int(m.group(1))
 
     # N دقیقه دیگر
     m = re.search(r"(\d+)\s*دقیقه\s*(ی\s*)?(دیگر|دیگه)", t)
     if m:
         when = now + timedelta(minutes=int(m.group(1)))
 
-    # N ساعت دیگر
     if when is None:
         m = re.search(r"(\d+)\s*ساعت\s*(ی\s*)?(دیگر|دیگه)", t)
         if m:
             when = now + timedelta(hours=int(m.group(1)))
 
-    # فردا ساعت H
     if when is None:
         m = re.search(r"فردا(?:\s*ساعت)?\s*(\d{1,2})(?:[:：](\d{2}))?", t)
         if m:
@@ -199,7 +220,6 @@ def parse_natural_reminder(text: str) -> Optional[Tuple[str, datetime]]:
                 hour=min(h, 23), minute=mi, second=0, microsecond=0
             )
 
-    # پس‌فردا
     if when is None and re.search(r"پس\s*فردا", t):
         m = re.search(r"ساعت\s*(\d{1,2})(?:[:：](\d{2}))?", t)
         h = int(m.group(1)) if m else 9
@@ -208,7 +228,6 @@ def parse_natural_reminder(text: str) -> Optional[Tuple[str, datetime]]:
             hour=min(h, 23), minute=mi, second=0, microsecond=0
         )
 
-    # امروز ساعت H
     if when is None:
         m = re.search(r"(?:امروز\s*)?ساعت\s*(\d{1,2})(?:[:：](\d{2}))?", t)
         if m:
@@ -218,15 +237,32 @@ def parse_natural_reminder(text: str) -> Optional[Tuple[str, datetime]]:
             if when <= now:
                 when = when + timedelta(days=1)
 
+    # فقط تکرار بدون زمان مشخص → امروز/الان+۱ دقیقه در همان ساعت رایج
+    if when is None and repeat_type != "once":
+        m = re.search(r"ساعت\s*(\d{1,2})(?:[:：](\d{2}))?", t)
+        if m:
+            h = int(m.group(1))
+            mi = int(m.group(2) or 0)
+            when = now.replace(hour=min(h, 23), minute=mi, second=0, microsecond=0)
+            if when <= now:
+                when = when + timedelta(days=1)
+        elif repeat_type == "every_minutes":
+            when = now + timedelta(minutes=max(1, repeat_every))
+        elif repeat_type == "every_hours":
+            when = now + timedelta(hours=max(1, repeat_every))
+        else:
+            when = now + timedelta(minutes=1)
+
     if when is None:
         return None
 
-    # متن یادآوری: حذف بخش زمانی
     body = t
     body = re.sub(r"یادآوری(\s*کن)?|یادم\s*بیار|ریمایندر|آلارم", "", body, flags=re.I)
     body = re.sub(
         r"(\d+\s*دقیقه\s*(ی\s*)?(دیگر|دیگه)|\d+\s*ساعت\s*(ی\s*)?(دیگر|دیگه)|"
-        r"فردا|پس\s*فردا|امروز|ساعت\s*\d{1,2}(?:[:：]\d{2})?)",
+        r"فردا|پس\s*فردا|امروز|ساعت\s*\d{1,2}(?:[:：]\d{2})?|"
+        r"هر\s*روز|روزانه|هر\s*هفته|هفتگی|هر\s*ماه|ماهانه|هر\s*\d+\s*دقیقه|هر\s*\d+\s*ساعت|"
+        r"daily|weekly|monthly)",
         "",
         body,
         flags=re.I,
@@ -234,7 +270,7 @@ def parse_natural_reminder(text: str) -> Optional[Tuple[str, datetime]]:
     body = re.sub(r"\s+", " ", body).strip(" :、-")
     if not body:
         body = "یادآوری"
-    return body[:200], when
+    return body[:200], when, repeat_type, int(repeat_every or 0)
 
 
 # ── OCR فیش (پرامپت تقویت‌شده) ─────────────────────────────────────────────
@@ -269,6 +305,7 @@ def enhance_ocr_prompt(user_prompt: str, has_image: bool) -> str:
 # ── کیبورد اینلاین زیر جواب AI ───────────────────────────────────────────────
 
 def get_ai_result_keyboard(user_id: int, answer_id: str):
+    """فقط: ویس این جواب | حذف حافظه | انتخاب مدل AI"""
     from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
     return InlineKeyboardMarkup(
@@ -279,18 +316,8 @@ def get_ai_result_keyboard(user_id: int, answer_id: str):
                 ),
             ],
             [
-                InlineKeyboardButton("🌤 هوا", callback_data="ai_quick:weather"),
-                InlineKeyboardButton("💰 قیمت", callback_data="ai_quick:price"),
-                InlineKeyboardButton("🙏 استخاره", callback_data="ai_quick:istikhara"),
-            ],
-            [
-                InlineKeyboardButton("🕌 اوقات شرعی", callback_data="ai_quick:prayer"),
-                InlineKeyboardButton("🧹 حافظه", callback_data="ai_clear_memory"),
-            ],
-            [
-                InlineKeyboardButton(
-                    "🎛 انتخاب هوش مصنوعی", callback_data="ai_models"
-                ),
+                InlineKeyboardButton("🧹 حذف حافظه", callback_data="ai_clear_memory"),
+                InlineKeyboardButton("🎛 انتخاب مدل AI", callback_data="ai_models"),
             ],
         ]
     )

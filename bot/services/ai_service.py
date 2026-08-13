@@ -176,8 +176,15 @@ def _advance_rr(provider: str) -> None:
 
 # ── User selection ──────────────────────────────────────────────────────────
 
-def clear_history(user_id: int) -> None:
+def clear_history(user_id: int, *, clear_long_term: bool = False) -> None:
     _HISTORY.pop(user_id, None)
+    try:
+        from bot.database import clear_ai_history_summary, delete_ai_memory
+        clear_ai_history_summary(user_id)
+        if clear_long_term:
+            delete_ai_memory(user_id)
+    except Exception:
+        pass
 
 
 def get_selected_model(user_id: int) -> Tuple[str, str] | None:
@@ -360,8 +367,114 @@ def key_pool_status() -> str:
     return "\n".join(lines) if lines else "هیچ کلیدی تنظیم نشده"
 
 
+def _memory_block(user_id: int) -> str:
+    """بلوک حافظه بلندمدت + خلاصه تاریخچه برای تزریق به سیستم."""
+    parts = []
+    try:
+        from bot.database import get_ai_memory, get_ai_history_summary
+        mem = get_ai_memory(user_id, limit=30)
+        if mem:
+            lines = [f"- {k}: {v}" for k, v in mem]
+            parts.append("حافظه بلندمدت درباره این کاربر:\n" + "\n".join(lines))
+        summary = get_ai_history_summary(user_id)
+        if summary:
+            parts.append("خلاصه گفتگوهای قبلی:\n" + summary)
+    except Exception as e:
+        logger.warning("memory_block: %s", e)
+    return "\n\n".join(parts)
+
+
+def _extract_and_store_memory(user_id: int, prompt: str) -> None:
+    """اگر کاربر گفت چیزی را به خاطر بسپار، ذخیره کن."""
+    import re
+    t = (prompt or "").strip()
+    m = re.search(
+        r"(?:یادت\s*باشه|به\s*خاطر\s*بسپار|یادت\s*باشه\s*که|من\s*(?:اسمم|نامم)\s*)[:：]?\s*(.+)$",
+        t,
+        re.I | re.S,
+    )
+    if not m:
+        m2 = re.search(r"اسمم\s+([^\n.،,]{2,40})", t)
+        if m2:
+            try:
+                from bot.database import set_ai_memory
+                set_ai_memory(user_id, "name", m2.group(1).strip())
+            except Exception:
+                pass
+        return
+    fact = m.group(1).strip()[:500]
+    if not fact:
+        return
+    key = "note"
+    if re.search(r"اسم|نام", t):
+        key = "name"
+    elif re.search(r"شهر|زندگی", t):
+        key = "city"
+    elif re.search(r"علاقه|دوست\s*دارم", t):
+        key = "interest"
+    try:
+        from bot.database import set_ai_memory
+        set_ai_memory(user_id, key, fact)
+    except Exception as e:
+        logger.warning("store memory: %s", e)
+
+
+async def _maybe_summarize_history(user_id: int) -> None:
+    """وقتی تاریخچه پر شد، خلاصه خودکار بساز و قدیمی‌ها را سبک کن."""
+    history = _HISTORY[user_id]
+    if len(history) < HISTORY_ITEMS:
+        return
+    # ساخت متن خلاصه از کل تاریخچه فعلی
+    lines = []
+    for role, content in list(history):
+        tag = "کاربر" if role == "user" else "دستیار"
+        lines.append(f"{tag}: {content[:400]}")
+    blob = "\n".join(lines)[:3500]
+    summary_prompt = (
+        "این گفتگو را در حداکثر ۸ خط فارسی خلاصه کن. "
+        "حقایق مهم درباره کاربر، تصمیم‌ها و موضوعات اصلی را نگه دار:\n\n" + blob
+    )
+    try:
+        # از یک مدل سریع بدون ابزار
+        summary = None
+        for provider, _label, model in available_model_options()[:3]:
+            try:
+                # مستقیم بدون تاریخچه کاربر
+                if provider == "groq":
+                    summary = await _openai_compatible(
+                        "Groq", "groq", 0, summary_prompt,
+                        url=os.getenv("GROQ_BASE_URL", "https://api.groq.com/openai/v1").rstrip("/")
+                        + "/chat/completions",
+                        model=model,
+                        use_tools=False,
+                    )
+                elif provider == "gemini":
+                    summary = await _gemini(0, summary_prompt, model)
+                else:
+                    continue
+                if summary:
+                    break
+            except Exception:
+                continue
+        if summary:
+            from bot.database import get_ai_history_summary, set_ai_history_summary
+            prev = get_ai_history_summary(user_id) or ""
+            merged = (prev + "\n" + summary).strip() if prev else summary
+            set_ai_history_summary(user_id, merged[-3500:])
+            # نصف تاریخچه را خالی کن (قدیمی‌ها)
+            keep = max(2, HISTORY_ITEMS // 2)
+            while len(history) > keep:
+                history.popleft()
+    except Exception as e:
+        logger.warning("auto summarize failed: %s", e)
+
+
 def _messages(user_id: int, prompt: str) -> List[dict]:
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    system = SYSTEM_PROMPT
+    mem = _memory_block(user_id)
+    if mem:
+        system = system + "\n\n" + mem
+    messages = [{"role": "system", "content": system}]
     for role, content in _HISTORY[user_id]:
         messages.append({"role": role, "content": content})
     messages.append({"role": "user", "content": prompt})
@@ -372,6 +485,14 @@ def _save_turn(user_id: int, prompt: str, answer: str) -> None:
     history = _HISTORY[user_id]
     history.append(("user", prompt))
     history.append(("assistant", answer))
+    # خلاصه‌سازی در پس‌زمینه وقتی پر شد
+    if len(history) >= HISTORY_ITEMS:
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                asyncio.create_task(_maybe_summarize_history(user_id))
+        except Exception:
+            pass
 
 
 async def _post_json(url: str, *, headers=None, json=None, params=None) -> tuple[int, dict]:
@@ -1521,7 +1642,11 @@ def should_auto_voice_reply(
 # ── موسیقی / افکت صوتی (Gemini Lyria در صورت پشتیبانی کلید) ────────────────
 
 async def generate_music(prompt: str) -> bytes:
-    """تلاش برای ساخت کلیپ صوتی با مدل‌های موسیقی Gemini."""
+    """
+    ساخت کلیپ صوتی.
+    اولویت: مدل‌های Lyria / پاسخ AUDIO در Gemini.
+    اگر API موسیقی ندهد، خطای واضح برمی‌گرداند.
+    """
     prompt = (prompt or "").strip()
     if not prompt:
         raise RuntimeError("توضیح موسیقی خالی است.")
@@ -1530,33 +1655,55 @@ async def generate_music(prompt: str) -> bytes:
         raise RuntimeError("برای ساخت موسیقی به کلید Gemini نیاز است.")
 
     models = [
-        os.getenv("GEMINI_MUSIC_MODEL", "lyria-3-clip-preview"),
+        os.getenv("GEMINI_MUSIC_MODEL", "").strip(),
+        "lyria-3-clip-preview",
         "lyria-realtime-preview",
+        "gemini-2.5-flash-preview-tts",
     ]
+    models = [m for m in models if m]
+    # حذف تکراری با حفظ ترتیب
+    seen = set()
+    models = [m for m in models if not (m in seen or seen.add(m))]
+
     errors = []
     for model in models:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
-        payload = {
-            "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-            "generationConfig": {"responseModalities": ["AUDIO"]},
-        }
+        payloads = [
+            {
+                "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+                "generationConfig": {"responseModalities": ["AUDIO"]},
+            },
+            {
+                "contents": [{"role": "user", "parts": [{"text": "Generate a short instrumental music clip: " + prompt}]}],
+                "generationConfig": {"responseModalities": ["AUDIO"]},
+            },
+        ]
         for key in keys:
-            try:
-                status, data = await _post_json(url, params={"key": key}, json=payload)
-                if status >= 400:
-                    errors.append(f"{model} HTTP {status}")
-                    continue
-                parts = (data.get("candidates") or [{}])[0].get("content", {}).get("parts") or []
-                for part in parts:
-                    inline = part.get("inlineData") or part.get("inline_data")
-                    if inline and inline.get("data"):
-                        return base64.b64decode(inline["data"])
-                errors.append(f"{model}: no audio part")
-            except Exception as e:
-                errors.append(str(e)[:120])
+            for payload in payloads:
+                try:
+                    status, data = await _post_json(url, params={"key": key}, json=payload)
+                    if status >= 400:
+                        errors.append(f"{model} HTTP {status}")
+                        if _is_quota_error(status, data):
+                            _mark_key_cooldown("gemini", key, daily=True)
+                        continue
+                    parts = (data.get("candidates") or [{}])[0].get("content", {}).get("parts") or []
+                    for part in parts:
+                        inline = part.get("inlineData") or part.get("inline_data")
+                        if inline and inline.get("data"):
+                            raw = base64.b64decode(inline["data"])
+                            if raw:
+                                _advance_rr("gemini")
+                                return raw
+                    errors.append(f"{model}: no audio part")
+                except Exception as e:
+                    errors.append(str(e)[:120])
     raise RuntimeError(
-        "ساخت موسیقی روی این کلید/مدل در دسترس نبود.\n" + " | ".join(errors[:4])
+        "ساخت موسیقی روی این کلید/مدل در دسترس نبود. "
+        "مدل Lyria باید روی پروژه Google AI Studio فعال باشد.\n"
+        + " | ".join(errors[:5])
     )
+
 
 
 async def analyze_video(
@@ -1684,8 +1831,11 @@ async def ask_ai(user_id: int, prompt: str) -> tuple[str, str]:
         )
 
     original_prompt = prompt
+    try:
+        _extract_and_store_memory(user_id, original_prompt)
+    except Exception:
+        pass
     # داده زنده از قابلیت‌های ربات را به پرامپت اضافه کن
-    # (برای همه مدل‌ها؛ مدل‌هایی که tool دارند علاوه بر این خودشان هم ابزار صدا می‌زنند)
     try:
         from bot.services.ai_tools import gather_context_for_prompt
         extra = await gather_context_for_prompt(user_id, prompt)
@@ -1746,3 +1896,231 @@ async def ask_ai(user_id: int, prompt: str) -> tuple[str, str]:
     raise RuntimeError(
         "فعلاً هیچ‌کدام از مدل‌های AI پاسخ ندادند.\n\n" + "\n".join(errors[:8])
     )
+
+
+# ── استریم واقعی از API (SSE) ───────────────────────────────────────────────
+
+async def _stream_openai_compatible(
+    provider: str,
+    user_id: int,
+    prompt: str,
+    *,
+    url: str,
+    model: str,
+    extra_headers=None,
+):
+    """ییلد تکه‌های متن از chat/completions با stream=true."""
+    import json as _json
+
+    keys = _next_keys(provider)
+    if not keys:
+        raise RuntimeError(f"no keys for {provider}")
+
+    last_err = None
+    for key in keys:
+        headers = {
+            "Authorization": f"Bearer {key}",
+            "Content-Type": "application/json",
+        }
+        if extra_headers:
+            headers.update(extra_headers)
+        payload = {
+            "model": model,
+            "messages": _messages(user_id, prompt),
+            "max_tokens": MAX_OUTPUT,
+            "temperature": 0.6,
+            "stream": True,
+        }
+        client = _get_http()
+        try:
+            async with client.stream("POST", url, headers=headers, json=payload) as resp:
+                if resp.status_code >= 400:
+                    body = (await resp.aread())[:500]
+                    if _is_quota_error(resp.status_code, body):
+                        _mark_key_cooldown(provider, key, daily=True)
+                        last_err = f"HTTP {resp.status_code}"
+                        continue
+                    raise RuntimeError(f"stream HTTP {resp.status_code}: {body!r}")
+                async for line in resp.aiter_lines():
+                    if not line:
+                        continue
+                    if line.startswith("data:"):
+                        data = line[5:].strip()
+                    else:
+                        continue
+                    if data == "[DONE]":
+                        break
+                    try:
+                        obj = _json.loads(data)
+                    except Exception:
+                        continue
+                    choices = obj.get("choices") or []
+                    if not choices:
+                        continue
+                    delta = choices[0].get("delta") or {}
+                    piece = delta.get("content") or ""
+                    if piece:
+                        yield piece
+            _advance_rr(provider)
+            return
+        except Exception as e:
+            last_err = str(e)
+            continue
+    raise RuntimeError(last_err or "stream failed")
+
+
+async def _stream_gemini(user_id: int, prompt: str, model: str):
+    """استریم Gemini با streamGenerateContent?alt=sse."""
+    import json as _json
+
+    keys = _next_keys("gemini")
+    if not keys:
+        raise RuntimeError("no gemini keys")
+
+    contents = []
+    mem = _memory_block(user_id)
+    system = SYSTEM_PROMPT + ("\n\n" + mem if mem else "")
+    for role, content in _HISTORY[user_id]:
+        contents.append(
+            {
+                "role": "model" if role == "assistant" else "user",
+                "parts": [{"text": content}],
+            }
+        )
+    contents.append({"role": "user", "parts": [{"text": prompt}]})
+    payload = {
+        "systemInstruction": {"parts": [{"text": system}]},
+        "contents": contents,
+        "generationConfig": {"maxOutputTokens": MAX_OUTPUT},
+    }
+    last_err = None
+    for key in keys:
+        url = (
+            f"https://generativelanguage.googleapis.com/v1beta/models/{model}"
+            f":streamGenerateContent"
+        )
+        client = _get_http()
+        try:
+            async with client.stream(
+                "POST", url, params={"key": key, "alt": "sse"}, json=payload
+            ) as resp:
+                if resp.status_code >= 400:
+                    body = (await resp.aread())[:400]
+                    if _is_quota_error(resp.status_code, body):
+                        _mark_key_cooldown("gemini", key, daily=True)
+                        last_err = f"HTTP {resp.status_code}"
+                        continue
+                    raise RuntimeError(f"gemini stream HTTP {resp.status_code}")
+                async for line in resp.aiter_lines():
+                    if not line or not line.startswith("data:"):
+                        continue
+                    data = line[5:].strip()
+                    if not data or data == "[DONE]":
+                        continue
+                    try:
+                        obj = _json.loads(data)
+                        parts = obj["candidates"][0]["content"]["parts"]
+                        for p in parts:
+                            t = p.get("text") or ""
+                            if t:
+                                yield t
+                    except Exception:
+                        continue
+            _advance_rr("gemini")
+            return
+        except Exception as e:
+            last_err = str(e)
+            continue
+    raise RuntimeError(last_err or "gemini stream failed")
+
+
+async def ask_ai_stream(user_id: int, prompt: str):
+    """
+    Async generator: ییلد (chunk:str | None, provider_label:str | None)
+    در پایان یک بار (None, "provider / model") می‌فرستد.
+    اگر استریم ممکن نبود، کل جواب را یک‌جا ییلد می‌کند.
+    """
+    prompt = (prompt or "").strip()
+    if not prompt:
+        raise RuntimeError("پیام خالی است")
+    if len(prompt) > MAX_INPUT:
+        prompt = prompt[:MAX_INPUT]
+
+    original = prompt
+    try:
+        _extract_and_store_memory(user_id, original)
+    except Exception:
+        pass
+    try:
+        from bot.services.ai_tools import gather_context_for_prompt
+        extra = await gather_context_for_prompt(user_id, prompt)
+        if extra:
+            prompt = (prompt + extra)[:MAX_INPUT]
+    except Exception:
+        pass
+
+    options = available_model_options()
+    if not options:
+        raise RuntimeError("هیچ سرویس AI تنظیم نشده")
+
+    async with _LOCKS[user_id]:
+        selected = get_selected_model(user_id)
+        ordered: List[Tuple[str, str]] = []
+        if selected:
+            provider, model = selected
+            if model == "*" or model is None:
+                ordered.extend((provider, m) for m in models_for_provider(provider))
+            else:
+                ordered.append((provider, model))
+                for m in models_for_provider(provider):
+                    if (provider, m) not in ordered:
+                        ordered.append((provider, m))
+        for provider, _label, model in options:
+            if (provider, model) not in ordered:
+                ordered.append((provider, model))
+
+        errors = []
+        for provider, model in ordered:
+            full = []
+            try:
+                if provider in ("groq", "cerebras", "openrouter"):
+                    if provider == "groq":
+                        url = os.getenv("GROQ_BASE_URL", "https://api.groq.com/openai/v1").rstrip("/") + "/chat/completions"
+                        extra_h = None
+                    elif provider == "cerebras":
+                        url = "https://api.cerebras.ai/v1/chat/completions"
+                        extra_h = None
+                    else:
+                        url = "https://openrouter.ai/api/v1/chat/completions"
+                        extra_h = {"HTTP-Referer": "https://t.me", "X-Title": "RoozeZiba"}
+                    async for piece in _stream_openai_compatible(
+                        provider, user_id, prompt, url=url, model=model, extra_headers=extra_h
+                    ):
+                        full.append(piece)
+                        yield piece, None
+                elif provider == "gemini":
+                    async for piece in _stream_gemini(user_id, prompt, model):
+                        full.append(piece)
+                        yield piece, None
+                else:
+                    # fallback غیر استریم
+                    answer = await _call_provider(provider, user_id, prompt, model)
+                    full.append(answer)
+                    yield answer, None
+
+                answer = "".join(full).strip()
+                if not answer:
+                    raise RuntimeError("empty stream")
+                _save_turn(user_id, original, answer)
+                if not selected:
+                    set_selected_model(user_id, provider, "*")
+                yield None, f"{provider} / {model}"
+                return
+            except Exception as e:
+                errors.append(f"{provider}/{model}: {str(e)[:200]}")
+                logger.warning("stream failed: %s", e)
+                await asyncio.sleep(0.05)
+                continue
+
+    raise RuntimeError("استریم ناموفق:\n" + "\n".join(errors[:6]))
+
