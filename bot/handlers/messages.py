@@ -44,7 +44,8 @@ from bot.services.ai_service import (
     ask_ai, ask_ai_media, clear_history, enabled_providers,
     _extract_text_from_bytes, generate_or_edit_image,
     looks_like_image_request, looks_like_image_edit,
-    text_to_speech, wants_voice_reply, strip_voice_prefix, speech_to_text, analyze_voice_emotion,
+    text_to_speech, wants_voice_reply, strip_voice_prefix, speech_to_text,
+    analyze_voice_emotion, wants_emotion_analysis, should_auto_voice_reply,
 )
 
 
@@ -74,6 +75,26 @@ async def _keep_typing(bot, chat_id, stop_event):
         except Exception:
             pass
 
+
+
+async def _send_ai_voice(update_or_msg, text: str, user_id: int, reply_markup=None):
+    """ارسال ویس با پیام وضعیت «در حال ویس دادن»."""
+    msg = getattr(update_or_msg, "message", None) or update_or_msg
+    notice = await msg.reply_text("🔊 در حال ویس دادن...")
+    try:
+        audio = await text_to_speech(text)
+        from io import BytesIO
+        bio = BytesIO(audio)
+        bio.name = "reply.mp3"
+        kwargs = {"audio": bio, "caption": "🔊"}
+        if reply_markup is not None:
+            kwargs["reply_markup"] = reply_markup
+        await msg.reply_audio(**kwargs)
+    finally:
+        try:
+            await notice.delete()
+        except Exception:
+            pass
 
 async def _ask_ai_with_typing(update, context, user_id, text):
     """درخواست به AI همراه با نمایش «در حال نوشتن» در تلگرام."""
@@ -164,7 +185,7 @@ async def _text_handler_inner(update: Update, context: ContextTypes.DEFAULT_TYPE
                     "متن، عکس یا فایل بفرست.\n"
                     "«تصویر بساز …» → ساخت تصویر\n"
                     "عکس + کپشن ویرایش → ویرایش تصویر\n"
-                    "«با ویس ...» → جواب متنی + صوتی\n«بخون: متن» → فقط ویس\nبرای خروج «🔙 بازگشت» را بزن.",
+                    "ویس بفرست → جواب هوشمند (گاهی با صدا)\n«با ویس ...» یا جواب کوتاه محاوره‌ای → ویس\nکپشن ویس: «تشخیص احساس» → تحلیل احساس\n«بخون: متن» → فقط ویس\nبرای خروج «🔙 بازگشت» را بزن.",
                     reply_markup=get_ai_keyboard(user_id),
                 )
                 return
@@ -175,22 +196,12 @@ async def _text_handler_inner(update: Update, context: ContextTypes.DEFAULT_TYPE
                 m_read = _re.match(r"^(بخون|بخوان)\s*[:：]?\s*(.+)$", text, _re.I | _re.S)
                 if m_read:
                     to_read = m_read.group(2).strip()
-                    notice = await update.message.reply_text("🔊 در حال ساخت ویس...")
                     try:
-                        audio = await text_to_speech(to_read)
-                        from io import BytesIO
-                        bio = BytesIO(audio)
-                        bio.name = "read.mp3"
-                        await update.message.reply_audio(
-                            audio=bio,
-                            caption="🔊",
-                            reply_markup=get_ai_keyboard(user_id),
+                        await _send_ai_voice(
+                            update, to_read, user_id, reply_markup=get_ai_keyboard(user_id)
                         )
-                    finally:
-                        try:
-                            await notice.delete()
-                        except Exception:
-                            pass
+                    except Exception as ve:
+                        await update.message.reply_text(f"⚠️ ویس ساخته نشد: {ve}")
                     return
                 if looks_like_image_request(text):
                     notice = await update.message.reply_text("🎨 در حال ساخت تصویر...")
@@ -216,16 +227,13 @@ async def _text_handler_inner(update: Update, context: ContextTypes.DEFAULT_TYPE
                     update, context, user_id, ask_text
                 )
                 await update.message.reply_text(f"🤖 {answer}")
-                if voice_mode:
+                explicit = voice_mode
+                if should_auto_voice_reply(
+                    ask_text, answer, input_was_voice=False, explicit_voice=explicit
+                ):
                     try:
-                        audio = await text_to_speech(answer)
-                        from io import BytesIO
-                        bio = BytesIO(audio)
-                        bio.name = "reply.mp3"
-                        await update.message.reply_audio(
-                            audio=bio,
-                            caption="🔊 نسخه صوتی",
-                            reply_markup=get_ai_keyboard(user_id),
+                        await _send_ai_voice(
+                            update, answer, user_id, reply_markup=get_ai_keyboard(user_id)
                         )
                     except Exception as ve:
                         await update.message.reply_text(
@@ -951,32 +959,33 @@ async def voice_ai_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await msg.reply_text("📝 شنیدم:\n" + transcript)
 
-        # تشخیص احساسات از صدا
-        try:
-            emo_notice = await msg.reply_text("💗 در حال تشخیص احساس از صدا...")
-            emotion = await analyze_voice_emotion(
-                data, transcript=transcript, filename=filename, mime=mime
-            )
+        # تشخیص احساس فقط اگر کاربر خواسته باشد
+        want_emo = wants_emotion_analysis(caption) or wants_emotion_analysis(transcript)
+        if want_emo:
             try:
-                await emo_notice.delete()
-            except Exception:
-                pass
-            await msg.reply_text("🎭 تحلیل احساس صدا:\n" + emotion)
-            user_text = (
-                user_text
-                + "\n\n[تحلیل احساس صدای کاربر]\n"
-                + emotion
-            )
-        except Exception as ee:
-            try:
-                await emo_notice.delete()
-            except Exception:
-                pass
-            # غیرمسدودکننده
-            from bot.logger import logger
-            logger.warning("emotion detect failed: %s", ee)
+                emo_notice = await msg.reply_text("💗 در حال تشخیص احساس از صدا...")
+                emotion = await analyze_voice_emotion(
+                    data, transcript=transcript, filename=filename, mime=mime
+                )
+                try:
+                    await emo_notice.delete()
+                except Exception:
+                    pass
+                await msg.reply_text("🎭 تحلیل احساس صدا:\n" + emotion)
+                user_text = (
+                    user_text
+                    + "\n\n[تحلیل احساس صدای کاربر]\n"
+                    + emotion
+                )
+            except Exception as ee:
+                try:
+                    await emo_notice.delete()
+                except Exception:
+                    pass
+                from bot.logger import logger
+                logger.warning("emotion detect failed: %s", ee)
 
-        voice_out = wants_voice_reply(caption) if caption else False
+        explicit_voice = wants_voice_reply(caption) if caption else False
         answer, provider = await _ask_ai_with_typing(
             update, context, user_id, user_text
         )
@@ -984,16 +993,15 @@ async def voice_ai_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"🤖 {answer}",
             reply_markup=get_ai_keyboard(user_id),
         )
-        if voice_out or context.user_data.get("ai_always_voice"):
+        if should_auto_voice_reply(
+            user_text,
+            answer,
+            input_was_voice=True,
+            explicit_voice=explicit_voice or context.user_data.get("ai_always_voice"),
+        ):
             try:
-                audio = await text_to_speech(answer)
-                from io import BytesIO
-                bio = BytesIO(audio)
-                bio.name = "reply.mp3"
-                await msg.reply_audio(
-                    audio=bio,
-                    caption="🔊 نسخه صوتی",
-                    reply_markup=get_ai_keyboard(user_id),
+                await _send_ai_voice(
+                    msg, answer, user_id, reply_markup=get_ai_keyboard(user_id)
                 )
             except Exception as ve:
                 await msg.reply_text(f"⚠️ ویس خروجی ساخته نشد: {ve}")
