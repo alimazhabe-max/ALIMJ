@@ -14,7 +14,7 @@ from bot.utils.helpers import (
     get_religious_keyboard, get_market_keyboard, get_weather_geo_keyboard,
     get_tools_keyboard, get_fun_keyboard, get_profile_keyboard, get_joke_keyboard,
     get_calendar_text, get_calendar_buttons, ALL_CITIES, CITY_COUNTRY,
-    get_azan_keyboard,
+    get_azan_keyboard, get_ai_keyboard, get_ai_model_keyboard,
 )
 from bot.api.calendar import get_today_tehran
 from bot.handlers.middleware import check_and_rate_limit
@@ -155,10 +155,9 @@ async def _text_handler_inner(update: Update, context: ContextTypes.DEFAULT_TYPE
                 await update.message.reply_text(
                     "🤖 دستیار هوشمند روز زیبا\n\n"
                     f"سرویس‌های فعال: {', '.join(providers) if providers else 'هیچ‌کدام'}\n"
-                    "پیامت را بفرست. برای خروج «🔙 بازگشت» را بفرست.",
-                    reply_markup=InlineKeyboardMarkup([[
-                        InlineKeyboardButton("🧹 پاک کردن حافظه", callback_data="ai_clear_memory"),
-                    ]]),
+                    "مدل دلخواهت را از دکمه «🎛 انتخاب مدل» انتخاب کن.\n"
+                    "پیامت را بفرست. برای خروج «🔙 بازگشت» را از کیبورد پایین بزن.",
+                    reply_markup=get_ai_keyboard(user_id),
                 )
                 return
         else:
@@ -234,10 +233,9 @@ async def _text_handler_inner(update: Update, context: ContextTypes.DEFAULT_TYPE
             "🤖 دستیار هوشمند روز زیبا\n\n"
             "پیامت را بفرست تا به هوش مصنوعی ارسال شود.\n"
             f"سرویس‌های فعال: {provider_text}\n\n"
-            "برای خروج، دکمه «🔙 بازگشت» را بزن.",
-            reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("🧹 پاک کردن حافظه", callback_data="ai_clear_memory"),
-            ]]),
+            "مدل دلخواهت را از «🎛 انتخاب مدل» انتخاب کن.\n"
+            "برای خروج، دکمه «🔙 بازگشت» را از کیبورد پایین بزن.",
+            reply_markup=get_ai_keyboard(user_id),
         )
         return
 

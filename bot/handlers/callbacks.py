@@ -1,11 +1,11 @@
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 from bot.database import get_user, get_user_city, set_last_main_msg_id
-from bot.services.ai_service import clear_history
+from bot.services.ai_service import clear_history, available_model_options, set_selected_model, get_selected_model
 from bot.utils.helpers import (
     build_message,
     get_refresh_button,
-    get_main_keyboard,
+    get_main_keyboard, get_ai_keyboard, get_ai_model_keyboard,
     get_calendar_buttons,
     get_calendar_text,
 )
@@ -25,14 +25,37 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
 
 
+    if data == "ai_models":
+        await query.edit_message_reply_markup(reply_markup=get_ai_model_keyboard(user_id))
+        return
+
+    if data == "ai_models_back":
+        await query.edit_message_reply_markup(reply_markup=get_ai_keyboard(user_id))
+        return
+
+    if data == "ai_noop":
+        await query.answer("هیچ مدل فعالی تنظیم نشده است.", show_alert=True)
+        return
+
+    if data.startswith("ai_model:"):
+        try:
+            index = int(data.split(":", 1)[1])
+            options = available_model_options()
+            provider, _label, model = options[index]
+        except (ValueError, IndexError):
+            await query.answer("❌ این مدل دیگر در دسترس نیست.", show_alert=True)
+            return
+        set_selected_model(user_id, provider, model)
+        await query.answer(f"مدل انتخاب شد: {model}", show_alert=False)
+        await query.edit_message_reply_markup(reply_markup=get_ai_keyboard(user_id))
+        return
+
     if data == "ai_clear_memory":
         clear_history(user_id)
         await query.answer("حافظه AI پاک شد ✅", show_alert=False)
         try:
             await query.edit_message_reply_markup(
-                reply_markup=InlineKeyboardMarkup([[
-                    InlineKeyboardButton("🧹 پاک کردن حافظه", callback_data="ai_clear_memory"),
-                ]])
+                reply_markup=get_ai_keyboard(user_id)
             )
         except Exception:
             pass
