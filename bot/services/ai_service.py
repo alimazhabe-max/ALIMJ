@@ -14,21 +14,21 @@ from bot.logger import logger
 # ── System Prompt ───────────────────────────────────────────────────────────
 SYSTEM_PROMPT = os.getenv(
     "AI_SYSTEM_PROMPT",
-    "تو دستیار هوشمند ربات «روز زیبا» هستی. "
+    "تو دستیار هوشمند ربات «روز زیبا» هستی و به قابلیت‌های واقعی همین ربات دسترسی داری. "
     "با لحنی گرم، طبیعی، محترمانه و کمی شوخ‌طبع (فقط وقتی فضا مناسب است) فارسی روان صحبت کن. "
     "اگر کاربر به زبان دیگری پیام داد، دقیقاً به همان زبان پاسخ بده. "
     "پاسخ‌هایت باید کامل، مفصل و جامع باشد. هرگز جواب را خلاصه نکن مگر اینکه کاربر صریحاً بگوید «خلاصه بگو» یا «کوتاه». "
-    "جزئیات مهم، مثال‌ها، مراحل و نکات کاربردی را بنویس تا کاربر واقعاً متوجه شود و نیاز به پرسش دوباره نداشته باشد. "
-    "از حاشیه‌روی بی‌ربط و جملات کلیشه‌ای پرهیز کن، اما کوتاه‌کردن عمدی محتوا ممنوع است. "
-    "هرگز اطلاعات زنده، لحظه‌ای یا به‌روز (مثل قیمت ارز/طلا، خبر، وضعیت آب‌وهوا، نتیجه مسابقه و ...) را بدون ابزار ادعا نکن. "
-    "اگر مطمئن نیستی یا نیاز به دادهٔ تازه داری، صادقانه بگو. "
-    "هدف تو این است که کاربر حس کند با یک دستیار باهوش، قابل‌اعتماد و مفید حرف می‌زند که جواب کامل می‌دهد.",
+    "وقتی کاربر درباره آب‌وهوا، اوقات شرعی، قیمت ارز/طلا/کریپتو، تبدیل تاریخ، سن، قبله، اذکار، آیه و حدیث، "
+    "ساعت جهانی یا فاصله شهرها می‌پرسد، از ابزارهای ربات استفاده کن یا از «دادهٔ زنده» که در پیام آمده استفاده کن؛ "
+    "هرگز عدد و قیمت ساختگی نگو. "
+    "اگر داده زنده در اختیار داری، همان را مبنا قرار بده و واضح جواب بده. "
+    "از حاشیه‌روی بی‌ربط پرهیز کن. هدف تو این است که کاربر حس کند دستیار ربات واقعاً به همه قابلیت‌های ربات وصل است.",
 )
 
 MAX_INPUT = int(os.getenv("AI_MAX_INPUT", "6000"))
 # سقف خروجی بالاتر تا جواب‌ها کامل و مفصل باشند
 MAX_OUTPUT = int(os.getenv("AI_MAX_OUTPUT", "2800"))
-HISTORY_ITEMS = max(2, int(os.getenv("AI_HISTORY_ITEMS", "20")))
+HISTORY_ITEMS = max(2, int(os.getenv("AI_HISTORY_ITEMS", "8")))
 # timeout کمی بالاتر چون جواب‌های کامل‌تر زمان بیشتری می‌گیرند
 TIMEOUT = float(os.getenv("AI_TIMEOUT", "40"))
 
@@ -473,7 +473,14 @@ async def _openai_compatible(
     url: str,
     model: str,
     extra_headers=None,
+    use_tools: bool = True,
 ) -> str:
+    from bot.services.ai_tools import (
+        get_tool_definitions,
+        execute_tool,
+        parse_tool_arguments,
+    )
+
     keys = _next_keys(provider)
     if not keys:
         raise RuntimeError(f"هیچ کلید {name} تنظیم نشده")
@@ -487,26 +494,87 @@ async def _openai_compatible(
         if extra_headers:
             headers.update(extra_headers)
 
-        payload = {
-            "model": model,
-            "messages": _messages(user_id, prompt),
-            "max_tokens": MAX_OUTPUT,
-            "temperature": 0.6,
-        }
+        messages = _messages(user_id, prompt)
+        # حداکثر ۲ دور tool calling تا گیر نکند
+        max_tool_rounds = 2 if use_tools else 0
 
         try:
-            status, data = await _post_json(url, headers=headers, json=payload)
-            if status >= 400:
-                if _is_quota_error(status, data):
-                    daily = "daily" in str(data).lower() or "quota" in str(data).lower() or status == 403
-                    _mark_key_cooldown(provider, key, daily=daily or status == 429)
-                    errors.append(f"{_key_id(provider, key)} HTTP {status}")
-                    continue
-                raise RuntimeError(f"{name} HTTP {status}: {str(data)[:900]}")
+            for _round in range(max_tool_rounds + 1):
+                payload = {
+                    "model": model,
+                    "messages": messages,
+                    "max_tokens": MAX_OUTPUT,
+                    "temperature": 0.6,
+                }
+                if use_tools and _round < max_tool_rounds:
+                    tools = get_tool_definitions()
+                    if tools:
+                        payload["tools"] = tools
+                        payload["tool_choice"] = "auto"
 
-            text = _extract_openai(data)
-            _advance_rr(provider)
-            return text
+                status, data = await _post_json(url, headers=headers, json=payload)
+                if status >= 400:
+                    # بعضی مدل‌ها tools را پشتیبانی نمی‌کنند → بدون tool دوباره امتحان
+                    err_text = str(data).lower()
+                    if use_tools and (
+                        "tool" in err_text
+                        or "function" in err_text
+                        or status in (400, 422)
+                    ):
+                        use_tools = False
+                        payload.pop("tools", None)
+                        payload.pop("tool_choice", None)
+                        status, data = await _post_json(
+                            url, headers=headers, json=payload
+                        )
+                    if status >= 400:
+                        if _is_quota_error(status, data):
+                            daily = (
+                                "daily" in str(data).lower()
+                                or "quota" in str(data).lower()
+                                or status == 403
+                            )
+                            _mark_key_cooldown(
+                                provider, key, daily=daily or status == 429
+                            )
+                            errors.append(f"{_key_id(provider, key)} HTTP {status}")
+                            break
+                        raise RuntimeError(
+                            f"{name} HTTP {status}: {str(data)[:900]}"
+                        )
+
+                choices = data.get("choices") or []
+                if not choices:
+                    raise RuntimeError(str(data)[:900])
+
+                message = choices[0].get("message") or {}
+                tool_calls = message.get("tool_calls") or []
+
+                if tool_calls and use_tools:
+                    # پاسخ assistant با tool_calls را به تاریخچه اضافه کن
+                    messages.append(message)
+                    for tc in tool_calls:
+                        fn = tc.get("function") or {}
+                        fname = fn.get("name") or ""
+                        fargs = parse_tool_arguments(fn.get("arguments"))
+                        result = await execute_tool(
+                            fname, fargs, user_id=user_id
+                        )
+                        messages.append(
+                            {
+                                "role": "tool",
+                                "tool_call_id": tc.get("id") or fname,
+                                "content": result,
+                            }
+                        )
+                    continue  # دور بعد با نتایج tool
+
+                text = _extract_openai(data)
+                _advance_rr(provider)
+                return text
+
+            # اگر از حلقه key بیرون آمدیم بدون return
+            continue
         except RuntimeError as exc:
             msg = str(exc)
             if _is_quota_error(0, msg) or "429" in msg or "403" in msg:
@@ -621,6 +689,19 @@ async def ask_ai(user_id: int, prompt: str) -> tuple[str, str]:
             "هیچ سرویس AI تنظیم نشده است. حداقل یک API Key در Render قرار بده."
         )
 
+    original_prompt = prompt
+    # داده زنده از قابلیت‌های ربات را به پرامپت اضافه کن
+    # (برای همه مدل‌ها؛ مدل‌هایی که tool دارند علاوه بر این خودشان هم ابزار صدا می‌زنند)
+    try:
+        from bot.services.ai_tools import gather_context_for_prompt
+        extra = await gather_context_for_prompt(user_id, prompt)
+        if extra:
+            prompt = prompt + extra
+            if len(prompt) > MAX_INPUT:
+                prompt = prompt[:MAX_INPUT]
+    except Exception as e:
+        logger.warning("gather_context_for_prompt failed: %s", e)
+
     # ساخت لیست (provider, model) برای امتحان — سریع‌ترین‌ها اول
     def _models_of(provider: str) -> List[Tuple[str, str]]:
         return [(provider, m) for m in models_for_provider(provider)]
@@ -656,7 +737,7 @@ async def ask_ai(user_id: int, prompt: str) -> tuple[str, str]:
             tried.add(key)
             try:
                 answer = await _call_provider(provider, user_id, prompt, model)
-                _save_turn(user_id, prompt, answer)
+                _save_turn(user_id, original_prompt, answer)
                 # اگر هنوز provider انتخاب نشده، همین را ذخیره کن (با *)
                 if not selected:
                     set_selected_model(user_id, provider, "*")
