@@ -128,7 +128,7 @@ def main():
     app.add_handler(MessageHandler(filters.Document.ALL, restore_document_handler))
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(
-        MessageHandler(filters.PHOTO | filters.Document.ALL, media_ai_handler),
+        MessageHandler(filters.PHOTO | filters.VIDEO | filters.VIDEO_NOTE | filters.Document.ALL, media_ai_handler),
     )
     app.add_handler(
         MessageHandler(filters.VOICE | filters.AUDIO, voice_ai_handler)
