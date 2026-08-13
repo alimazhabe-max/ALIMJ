@@ -41,7 +41,7 @@ from datetime import datetime, timedelta
 import pytz
 from bot.config import config
 from bot.services.ai_extras import (
-    store_answer, get_ai_result_keyboard, parse_chart_request, make_chart_image,
+    store_answer, get_last_answer, get_ai_result_keyboard, parse_chart_request, make_chart_image,
     web_search, parse_natural_reminder, enhance_ocr_prompt,
 )
 from bot.services.ai_service import (
@@ -50,7 +50,7 @@ from bot.services.ai_service import (
     looks_like_image_request, looks_like_image_edit,
     text_to_speech, wants_voice_reply, strip_voice_prefix, speech_to_text,
     analyze_voice_emotion, wants_emotion_analysis, should_auto_voice_reply,
-    wants_voice_chat_mode, wants_end_voice_chat,
+    wants_voice_chat_mode, wants_end_voice_chat, is_voice_only_request,
     generate_music, analyze_video, translate_voice,
 )
 
@@ -186,6 +186,8 @@ async def _send_ai_answer(update, user_id, answer: str, *, stream: bool = True):
     """ارسال جواب AI — بدون دکمه زیر پیام."""
     msg = update.message
     store_answer(user_id, answer)
+    if context := None:
+        pass
     return await msg.reply_text(f"🤖 {answer}")
 
 
@@ -386,6 +388,19 @@ async def _text_handler_inner(update: Update, context: ContextTypes.DEFAULT_TYPE
                     await update.message.reply_text(
                         mode_msg, reply_markup=get_ai_keyboard(user_id)
                     )
+                # «ویس بفرست» بدون سؤال → آخرین جواب را با ویس بفرست
+                if is_voice_only_request(text):
+                    last = get_last_answer(user_id) or (context.user_data or {}).get("last_ai_answer")
+                    if last:
+                        try:
+                            await _send_ai_voice(update, last, user_id)
+                        except Exception as ve:
+                            await update.message.reply_text(f"⚠️ ویس ساخته نشد: {ve}")
+                    else:
+                        await update.message.reply_text(
+                            "هنوز جوابی برای خواندن ندارم. اول یک سؤال بپرس، بعد بگو «ویس بفرست»."
+                        )
+                    return
                 voice_mode = wants_voice_reply(text) or bool(
                     context.user_data.get("ai_voice_chat")
                 )
@@ -410,6 +425,8 @@ async def _text_handler_inner(update: Update, context: ContextTypes.DEFAULT_TYPE
                 answer, provider = await _ask_ai_with_typing(
                     update, context, user_id, ask_text
                 )
+                if context.user_data is not None:
+                    context.user_data["last_ai_answer"] = answer
                 if not (context.user_data or {}).get("_ai_already_sent"):
                     await _send_ai_answer(update, user_id, answer)
                 if context.user_data is not None:
