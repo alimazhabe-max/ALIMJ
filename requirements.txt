@@ -9,3 +9,5 @@ python-dotenv
 httpx[http2]
 httpcore
 beautifulsoup4
+pypdf
+edge-tts
