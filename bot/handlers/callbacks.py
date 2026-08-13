@@ -2,10 +2,15 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 from bot.database import get_user, get_user_city, set_last_main_msg_id
 from bot.services.ai_service import clear_history
+from bot.services.ai_models import (
+    models_keyboard, assistant_keyboard, assistant_intro,
+    current_model_title, set_user_model_id, find_model, AUTO_ID,
+)
 from bot.utils.helpers import (
     build_message,
     get_refresh_button,
     get_main_keyboard,
+    get_more_keyboard,
     get_calendar_buttons,
     get_calendar_text,
 )
@@ -25,25 +30,68 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
 
 
-    if data == "ai_clear_memory":
-        clear_history(user_id)
-        await query.answer("حافظه AI پاک شد ✅", show_alert=False)
+    if data == "ai_models":
         try:
-            await query.edit_message_reply_markup(
-                reply_markup=InlineKeyboardMarkup([[
-                    InlineKeyboardButton("🧹 پاک کردن حافظه", callback_data="ai_clear_memory"),
-                ]])
+            await query.edit_message_text(
+                "🎛 <b>انتخاب مدل هوش مصنوعی</b>\n\n"
+                f"مدل فعلی: <b>{current_model_title(user_id)}</b>\n"
+                "مدل‌های 🔒 نیاز به تنظیم کلید دارند.",
+                parse_mode="HTML",
+                reply_markup=models_keyboard(user_id),
+            )
+        except Exception:
+            await query.message.reply_text(
+                "🎛 انتخاب مدل هوش مصنوعی:",
+                reply_markup=models_keyboard(user_id),
+            )
+        return
+
+    if data == "ai_locked":
+        await query.answer("🔒 برای این مدل کلید API تنظیم نشده است.", show_alert=True)
+        return
+
+    if data.startswith("ai_set:"):
+        model_id = data.split(":", 1)[1]
+        set_user_model_id(user_id, model_id)
+        context.user_data["ai_mode"] = True
+        model = find_model(model_id)
+        await query.answer(
+            "✅ " + ("خودکار" if model_id == AUTO_ID else model["name"] if model else "انتخاب شد"),
+        )
+        try:
+            await query.edit_message_text(
+                "🎛 <b>انتخاب مدل هوش مصنوعی</b>\n\n"
+                f"مدل فعلی: <b>{current_model_title(user_id)}</b>\n"
+                "حالا پیامت را بفرست 👇",
+                parse_mode="HTML",
+                reply_markup=models_keyboard(user_id),
             )
         except Exception:
             pass
-        await query.message.reply_text("✅ حافظه کوتاه‌مدت گفت‌وگوی AI پاک شد.")
+        return
+
+    if data == "ai_start":
+        context.user_data["ai_mode"] = True
+        await query.message.reply_text(
+            assistant_intro(user_id),
+            parse_mode="HTML",
+            reply_markup=assistant_keyboard(user_id),
+        )
+        return
+
+    if data == "ai_clear_memory":
+        clear_history(user_id)
+        await query.answer("حافظه AI پاک شد ✅", show_alert=False)
+        await query.message.reply_text(
+            "🧹 حافظه کوتاه‌مدت گفت‌وگو پاک شد. از نو شروع کن!",
+            reply_markup=assistant_keyboard(user_id),
+        )
         return
 
     if data == "ai_exit":
         context.user_data.pop("ai_mode", None)
         context.user_data.pop("waiting_for", None)
-        await query.answer()
-        await query.message.reply_text("➕ منوی بیشتر:", reply_markup=get_more_keyboard())
+        await query.message.reply_text("🏠 منوی اصلی", reply_markup=get_main_keyboard())
         return
 
     # بروزرسانی = ویرایش همان پیام

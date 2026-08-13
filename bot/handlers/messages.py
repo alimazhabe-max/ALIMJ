@@ -41,6 +41,9 @@ from datetime import datetime, timedelta
 import pytz
 from bot.config import config
 from bot.services.ai_service import ask_ai, clear_history, enabled_providers
+from bot.services.ai_models import (
+    assistant_intro, assistant_keyboard, models_keyboard, current_model_title,
+)
 
 
 
@@ -94,6 +97,17 @@ async def _ask_ai_with_typing(update, context, user_id, text):
                 await notice.delete()
             except Exception:
                 pass
+
+
+async def _send_ai_answer(update, user_id, answer, provider):
+    """ارسال پاسخ AI به‌همراه کیبورد شیشه‌ای دستیار (با تکه‌تکه کردن متن بلند)."""
+    body = f"🤖 {answer}\n\n— {provider}"
+    chunks = [body[i:i + 3900] for i in range(0, len(body), 3900)] or [body]
+    for idx, chunk in enumerate(chunks):
+        await update.message.reply_text(
+            chunk,
+            reply_markup=assistant_keyboard(user_id) if idx == len(chunks) - 1 else None,
+        )
 
 
 async def _send_main(update, context, text, user_id):
@@ -151,23 +165,20 @@ async def _text_handler_inner(update: Update, context: ContextTypes.DEFAULT_TYPE
                 # fall through to normal menu handling
             else:
                 # repeat the AI entry prompt
-                providers = enabled_providers()
                 await update.message.reply_text(
-                    "🤖 دستیار هوشمند روز زیبا\n\n"
-                    f"سرویس‌های فعال: {', '.join(providers) if providers else 'هیچ‌کدام'}\n"
-                    "پیامت را بفرست. برای خروج «🔙 بازگشت» را بفرست.",
-                    reply_markup=InlineKeyboardMarkup([[
-                        InlineKeyboardButton("🧹 پاک کردن حافظه", callback_data="ai_clear_memory"),
-                    ]]),
+                    assistant_intro(user_id),
+                    parse_mode="HTML",
+                    reply_markup=assistant_keyboard(user_id),
                 )
                 return
         else:
             try:
                 answer, provider = await _ask_ai_with_typing(update, context, user_id, text)
-                await update.message.reply_text(f"🤖 {answer}")
+                await _send_ai_answer(update, user_id, answer, provider)
             except Exception as exc:
                 await update.message.reply_text(
-                    "❌ فعلاً هیچ‌کدام از سرویس‌های AI پاسخ ندادند.\n\n" + str(exc)[:3000]
+                    "❌ فعلاً هیچ‌کدام از سرویس‌های AI پاسخ ندادند.\n\n" + str(exc)[:3000],
+                    reply_markup=assistant_keyboard(user_id),
                 )
             return
 
@@ -226,18 +237,24 @@ async def _text_handler_inner(update: Update, context: ContextTypes.DEFAULT_TYPE
     if text in ("➕ بیشتر", "بیشتر"):
         await update.message.reply_text("➕ بخش را انتخاب کنید:", reply_markup=get_more_keyboard()); return
 
-    if text == "🤖 دستیار هوشمند":
-        providers = enabled_providers()
+    if text in ("🤖 دستیار هوشمند", "دستیار هوشمند"):
         context.user_data["ai_mode"] = True
-        provider_text = "، ".join(providers) if providers else "هیچ سرویس فعالی ندارد"
+        context.user_data.pop("waiting_for", None)
         await update.message.reply_text(
-            "🤖 دستیار هوشمند روز زیبا\n\n"
-            "پیامت را بفرست تا به هوش مصنوعی ارسال شود.\n"
-            f"سرویس‌های فعال: {provider_text}\n\n"
-            "برای خروج، دکمه «🔙 بازگشت» را بزن.",
-            reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("🧹 پاک کردن حافظه", callback_data="ai_clear_memory"),
-            ]]),
+            assistant_intro(user_id),
+            parse_mode="HTML",
+            reply_markup=assistant_keyboard(user_id),
+        )
+        return
+
+    if text in ("🎛 انتخاب مدل", "انتخاب مدل", "🎛 مدل هوش مصنوعی"):
+        context.user_data["ai_mode"] = True
+        await update.message.reply_text(
+            "🎛 <b>انتخاب مدل هوش مصنوعی</b>\n\n"
+            f"مدل فعلی: <b>{current_model_title(user_id)}</b>\n"
+            "مدل‌های 🔒 نیاز به تنظیم کلید دارند.",
+            parse_mode="HTML",
+            reply_markup=models_keyboard(user_id),
         )
         return
 
