@@ -420,6 +420,17 @@ def _profile_summary(user_id: int = 0) -> str:
 
 # ── ثبت پیش‌فرض ─────────────────────────────────────────────────────────────
 
+
+async def _tool_web_search(query: str = "") -> str:
+    from bot.services.ai_extras import web_search
+    return await web_search(query)
+
+
+def _tool_reminder(text: str = "", remind_at: str = "", user_id: int = 0) -> str:
+    from bot.database import add_reminder
+    add_reminder(user_id, text, remind_at)
+    return f"یادآوری ثبت شد: {text} در {remind_at}"
+
 def _register_builtin_tools() -> None:
     if _REGISTRY:
         return
@@ -735,6 +746,31 @@ def _register_builtin_tools() -> None:
         description="شهر ثبت‌شده کاربر.",
         parameters={"type": "object", "properties": {}},
         handler=_get_user_city,
+    )
+    
+    register_tool(
+        name="web_search",
+        description="جستجو در اینترنت برای اطلاعات به‌روز.",
+        parameters={
+            "type": "object",
+            "properties": {"query": {"type": "string"}},
+            "required": ["query"],
+        },
+        handler=_tool_web_search,
+        keywords=[r"جستجو\s*کن|در\s*اینترنت"],
+    )
+    register_tool(
+        name="create_reminder",
+        description="ثبت یادآوری برای کاربر. remind_at باید ISO زمان تهران باشد.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "text": {"type": "string"},
+                "remind_at": {"type": "string", "description": "ISO datetime"},
+            },
+            "required": ["text", "remind_at"],
+        },
+        handler=_tool_reminder,
     )
     register_tool(
         name="profile_summary",
