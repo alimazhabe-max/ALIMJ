@@ -12,7 +12,7 @@ from bot.handlers.commands import (
     backup_command, restore_document_handler,
 )
 from bot.handlers.callbacks import button_handler
-from bot.handlers.messages import text_handler
+from bot.handlers.messages import text_handler, media_ai_handler
 from bot.scheduler import setup_scheduler
 from bot.db_persist import notify_admins_if_empty, shutdown_backup
 import threading
@@ -127,6 +127,9 @@ def main():
     app.add_handler(CommandHandler("backup", backup_command))
     app.add_handler(MessageHandler(filters.Document.ALL, restore_document_handler))
     app.add_handler(CallbackQueryHandler(button_handler))
+    app.add_handler(
+        MessageHandler(filters.PHOTO | filters.Document.ALL, media_ai_handler)
+    )
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
     app.add_error_handler(error_handler)
     setup_scheduler(app)
