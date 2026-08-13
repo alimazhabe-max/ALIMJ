@@ -442,6 +442,13 @@ def init_extra_tables():
         "sent_at TEXT DEFAULT (datetime('now')),"
         "PRIMARY KEY (user_id, joke_hash))"
     )
+    c.execute(
+        "CREATE TABLE IF NOT EXISTS ai_preferences ("
+        "user_id INTEGER PRIMARY KEY,"
+        "provider TEXT NOT NULL,"
+        "model TEXT DEFAULT '*',"
+        "updated_at TEXT DEFAULT (datetime('now')))"
+    )
     try:
         c.execute("ALTER TABLE users ADD COLUMN birth_date TEXT")
     except Exception:
@@ -585,5 +592,53 @@ def get_birth_date(user_id):
         return row[0] if row else None
     except Exception:
         return None
+    finally:
+        conn.close()
+
+
+# ── AI provider preference (per user) ──────────────────────────────────────
+
+def get_ai_preference(user_id):
+    """Returns (provider, model) or None. model='*' means all models of provider."""
+    conn = get_db_connection()
+    c = conn.cursor()
+    try:
+        c.execute(
+            "SELECT provider, model FROM ai_preferences WHERE user_id = ?",
+            (user_id,),
+        )
+        row = c.fetchone()
+        if row:
+            return (row[0], row[1] or "*")
+        return None
+    except Exception:
+        return None
+    finally:
+        conn.close()
+
+
+def set_ai_preference(user_id, provider, model="*"):
+    conn = get_db_connection()
+    c = conn.cursor()
+    try:
+        c.execute(
+            "INSERT INTO ai_preferences (user_id, provider, model, updated_at) "
+            "VALUES (?, ?, ?, datetime('now')) "
+            "ON CONFLICT(user_id) DO UPDATE SET "
+            "provider = excluded.provider, model = excluded.model, "
+            "updated_at = datetime('now')",
+            (user_id, provider, model or "*"),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def clear_ai_preference(user_id):
+    conn = get_db_connection()
+    c = conn.cursor()
+    try:
+        c.execute("DELETE FROM ai_preferences WHERE user_id = ?", (user_id,))
+        conn.commit()
     finally:
         conn.close()
