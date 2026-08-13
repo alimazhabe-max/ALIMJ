@@ -234,7 +234,7 @@ async def _text_handler_inner(update: Update, context: ContextTypes.DEFAULT_TYPE
             "پیامت را بفرست تا به هوش مصنوعی ارسال شود.\n"
             f"سرویس‌های فعال: {provider_text}\n\n"
             "مدل دلخواهت را از «🎛 انتخاب مدل» انتخاب کن.\n"
-            "برای خروج، دکمه «🔙 بازگشت» را از کیبورد پایین بزن.",
+            " ",
             reply_markup=get_ai_keyboard(user_id),
         )
         return
