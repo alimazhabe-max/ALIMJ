@@ -1361,6 +1361,7 @@ async def text_to_speech(text: str, *, voice: str | None = None) -> bytes:
 
 
 
+
 def wants_emotion_analysis(text: str) -> bool:
     """آیا کاربر صریحاً تشخیص احساس از صدا خواسته؟"""
     t = (text or "").strip()
@@ -1374,60 +1375,68 @@ def wants_emotion_analysis(text: str) -> bool:
         r"از\s*صدا(م)?\s*(بگو|تحلیل|تشخیص)",
         r"حالم\s*از\s*صدا",
         r"emotion",
-        r"sentiment\s*from\s*(voice|audio)",
         r"تحلیل\s*احساس",
         r"چه\s*احساسی",
     )
     return any(re.search(p, t, re.I) for p in patterns)
 
 
-def should_auto_voice_reply(
-    user_text: str,
-    answer: str,
-    *,
-    input_was_voice: bool = False,
-    explicit_voice: bool = False,
-) -> bool:
-    """
-    تصمیم هوشمند: آیا جواب را با ویس هم بفرستیم؟
-    - اگر کاربر صریحاً خواسته → بله
-    - اگر ورودی ویس بوده و جواب کوتاه/محاوره‌ای است → بله
-    - جواب خیلی بلند یا خیلی فنی → خیر (مگر درخواست صریح)
-    """
-    if explicit_voice:
-        return True
-    ans = (answer or "").strip()
-    if not ans:
+def wants_voice_chat_mode(text: str) -> bool:
+    """درخواست شروع مکالمه ویسی پایدار (نه فقط یک‌بار)."""
+    t = (text or "").strip()
+    if not t:
         return False
-    # جواب خیلی بلند را ویس نکن
-    if len(ans) > 700:
-        return False
-    # کد یا لیست خیلی ساختاری
-    if ans.count("```") >= 2 or ans.count("\n- ") + ans.count("\n• ") > 8:
-        return False
-
-    ut = (user_text or "").strip()
     import re
-    # ورودی ویس + جواب کوتاه‌تر → معمولاً مکالمه صوتی
-    if input_was_voice and len(ans) <= 500:
-        return True
-
-    # لحن محاوره‌ای / احساسی / احوال‌پرسی
-    casual = (
-        r"سلام|خوبی|چطوری|احوال|دوستت|خسته‌|غمگین|خوشحال|"
-        r"قصه|تعریف کن|برام بگو|محکم|دلداری|نصیحت|"
-        r"جوک|بخند|آرامم"
+    patterns = (
+        r"ویس\s*حرف\s*بزن",
+        r"با\s*ویس\s*حرف",
+        r"حرف\s*بزنیم\s*(با\s*)?ویس",
+        r"صحبت\s*(صوتی|ویسی|با\s*صدا)",
+        r"چت\s*صوتی",
+        r"مکالمه\s*(ی\s*)?(صوتی|ویسی)",
+        r"از\s*این\s*به\s*بعد\s*(با\s*)?(ویس|صدا)",
+        r"فقط\s*ویس",
+        r"voice\s*chat",
+        r"let'?s\s*talk\s*(by\s*)?voice",
+        r"با\s*صدا\s*حرف",
+        r"صدا\s*حرف\s*بزن",
+        r"بیا\s*ویس",
+        r"ویس\s*باش",
+        r"حالت\s*ویس",
+        r"حالت\s*صوتی",
     )
-    if re.search(casual, ut, re.I) and len(ans) <= 550:
-        return True
+    return any(re.search(p, t, re.I) for p in patterns)
 
-    return False
+
+def wants_end_voice_chat(text: str) -> bool:
+    """پایان حالت مکالمه ویسی."""
+    t = (text or "").strip()
+    if not t:
+        return False
+    import re
+    patterns = (
+        r"قطع\s*ویس",
+        r"بدون\s*ویس",
+        r"دیگه\s*ویس\s*ن",
+        r"متن(ی)?\s*حرف\s*بزن",
+        r"حالت\s*متنی",
+        r"ویس\s*رو\s*خاموش",
+        r"خاموش\s*کردن\s*ویس",
+        r"end\s*voice",
+        r"stop\s*voice",
+        r"فقط\s*متن",
+    )
+    return any(re.search(p, t, re.I) for p in patterns)
 
 
 def wants_voice_reply(text: str) -> bool:
-    """آیا کاربر خواسته جواب با ویس باشد؟"""
+    """درخواست صریح ویس برای همین پیام."""
     t = (text or "").strip()
+    if not t:
+        return False
     import re
+    if wants_voice_chat_mode(t):
+        return True
     patterns = (
         r"^با\s*ویس\b",
         r"^با\s*صدا\b",
@@ -1435,7 +1444,9 @@ def wants_voice_reply(text: str) -> bool:
         r"^صدا\s*[:：]",
         r"\bبا\s*ویس\s*بگو\b",
         r"\bبا\s*صدا\s*بگو\b",
-        r"\bبخون\b",
+        r"\bجواب(تو)?\s*(رو\s*)?با\s*ویس\b",
+        r"\bجواب(تو)?\s*(رو\s*)?با\s*صدا\b",
+        r"\bبرام\s*بخون\b",
         r"\bspeak\b",
         r"\bvoice\s*reply\b",
         r"\btts\b",
@@ -1454,6 +1465,56 @@ def strip_voice_prefix(text: str) -> str:
     )
     t = re.sub(r"\b(با\s*ویس\s*بگو|با\s*صدا\s*بگو)\b", "", t, flags=re.I)
     return t.strip() or text.strip()
+
+
+def should_auto_voice_reply(
+    user_text: str,
+    answer: str,
+    *,
+    input_was_voice: bool = False,
+    explicit_voice: bool = False,
+    voice_chat_mode: bool = False,
+) -> bool:
+    """
+    تصمیم هوشمند برای ارسال ویس.
+    اولویت: حالت مکالمه ویسی > درخواست صریح > ورودی ویس > لحن محاوره.
+    """
+    ans = (answer or "").strip()
+    if not ans:
+        return False
+
+    if explicit_voice or voice_chat_mode:
+        # در حالت مکالمه ویسی حتی جواب‌های بلندتر را هم بخوان (کمی کوتاه‌شده در TTS)
+        if len(ans) > 1500 and not explicit_voice:
+            return True  # هنوز ویس بده؛ text_to_speech خودش کوتاه می‌کند
+        return True
+
+    # جواب خیلی بلند یا خیلی فنی → ویس نده (مگر حالت ویس/صریح)
+    if len(ans) > 900:
+        return False
+    if ans.count("```") >= 2:
+        return False
+    if ans.count("\n- ") + ans.count("\n• ") > 12:
+        return False
+
+    ut = (user_text or "").strip()
+    import re
+
+    # کاربر ویس فرستاده → تقریباً همیشه ویس جواب بده (مگر جواب خیلی بلند)
+    if input_was_voice and len(ans) <= 900:
+        return True
+
+    # محاوره / احوال / احساسات
+    casual = (
+        r"سلام|خوبی|چطوری|احوال|دوستت|خسته‌|غمگین|خوشحال|"
+        r"قصه|تعریف کن|برام بگو|محکم|دلداری|نصیحت|"
+        r"جوک|بخند|آرامم|حرف بزن|گپ بزن|چت کنیم"
+    )
+    if re.search(casual, ut, re.I) and len(ans) <= 600:
+        return True
+
+    return False
+
 
 
 async def ask_ai(user_id: int, prompt: str) -> tuple[str, str]:
