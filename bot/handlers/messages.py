@@ -295,7 +295,10 @@ async def _ask_ai_with_typing(update, context, user_id, text):
             _lg.warning("stream failed, fallback: %s", _se)
             if context.user_data is not None:
                 context.user_data["_ai_already_sent"] = False
-        return await ask_ai(user_id, text)
+        answer = await ask_ai(user_id, text)
+        if context.user_data is not None:
+            context.user_data["_ai_already_sent"] = False
+        return answer
     finally:
         stop_event.set()
         try:
