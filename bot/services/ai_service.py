@@ -1597,41 +1597,17 @@ def should_auto_voice_reply(
     voice_chat_mode: bool = False,
 ) -> bool:
     """
-    تصمیم هوشمند برای ارسال ویس.
-    اولویت: حالت مکالمه ویسی > درخواست صریح > ورودی ویس > لحن محاوره.
+    ویس فقط وقتی:
+      ۱) کاربر صریحاً خواسته (با ویس / بخون / ...)
+      ۲) حالت مکالمه ویسی روشن است («ویس حرف بزنیم»)
+    ورودی ویس به‌تنهایی کافی نیست — الکی ویس نمی‌فرستد.
     """
     ans = (answer or "").strip()
     if not ans:
         return False
 
+    # فقط درخواست صریح یا حالت مکالمه ویسی
     if explicit_voice or voice_chat_mode:
-        # در حالت مکالمه ویسی حتی جواب‌های بلندتر را هم بخوان (کمی کوتاه‌شده در TTS)
-        if len(ans) > 1500 and not explicit_voice:
-            return True  # هنوز ویس بده؛ text_to_speech خودش کوتاه می‌کند
-        return True
-
-    # جواب خیلی بلند یا خیلی فنی → ویس نده (مگر حالت ویس/صریح)
-    if len(ans) > 900:
-        return False
-    if ans.count("```") >= 2:
-        return False
-    if ans.count("\n- ") + ans.count("\n• ") > 12:
-        return False
-
-    ut = (user_text or "").strip()
-    import re
-
-    # کاربر ویس فرستاده → تقریباً همیشه ویس جواب بده (مگر جواب خیلی بلند)
-    if input_was_voice and len(ans) <= 900:
-        return True
-
-    # محاوره / احوال / احساسات
-    casual = (
-        r"سلام|خوبی|چطوری|احوال|دوستت|خسته‌|غمگین|خوشحال|"
-        r"قصه|تعریف کن|برام بگو|محکم|دلداری|نصیحت|"
-        r"جوک|بخند|آرامم|حرف بزن|گپ بزن|چت کنیم"
-    )
-    if re.search(casual, ut, re.I) and len(ans) <= 600:
         return True
 
     return False
