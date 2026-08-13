@@ -156,7 +156,7 @@ async def _text_handler_inner(update: Update, context: ContextTypes.DEFAULT_TYPE
                     "🤖 دستیار هوشمند روز زیبا\n\n"
                     f"سرویس‌های فعال: {', '.join(providers) if providers else 'هیچ‌کدام'}\n"
                     "مدل دلخواهت را از دکمه «🎛 انتخاب مدل» انتخاب کن.\n"
-                    "پیامت را بفرست. برای خروج «🔙 بازگشت» را از کیبورد پایین بزن.",
+                    "پیامت را بفرست.",
                     reply_markup=get_ai_keyboard(user_id),
                 )
                 return
