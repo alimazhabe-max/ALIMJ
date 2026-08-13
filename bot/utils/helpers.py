@@ -169,12 +169,14 @@ def get_main_keyboard():
 
 
 def get_ai_keyboard(user_id=None):
-    """دکمه‌های شیشه‌ای زیر پیام AI: انتخاب مدل و پاک‌کردن حافظه."""
-    from bot.services.ai_service import get_selected_model
+    """دکمه‌های شیشه‌ای زیر پیام AI: انتخاب ارائه‌دهنده و پاک‌کردن حافظه."""
+    from bot.services.ai_service import get_selected_model, _PROVIDER_PRETTY
     selected = get_selected_model(user_id) if user_id is not None else None
-    selected_text = "🎛 انتخاب مدل"
+    selected_text = "🎛 انتخاب هوش مصنوعی"
     if selected:
-        selected_text = f"🎛 مدل: {selected[1]}"
+        provider = selected[0]
+        pretty = _PROVIDER_PRETTY.get(provider, provider)
+        selected_text = f"🎛 فعال: {pretty}"
     return InlineKeyboardMarkup([
         [InlineKeyboardButton(selected_text, callback_data="ai_models")],
         [InlineKeyboardButton("🧹 پاک کردن حافظه", callback_data="ai_clear_memory")],
@@ -182,15 +184,24 @@ def get_ai_keyboard(user_id=None):
 
 
 def get_ai_model_keyboard(user_id=None):
-    """لیست مدل‌های قابل انتخاب توسط کاربر."""
-    from bot.services.ai_service import available_model_options, get_selected_model
+    """
+    لیست ارائه‌دهنده‌ها (نه تک‌تک مدل‌ها).
+    با انتخاب یک ارائه‌دهنده، همه مدل‌هایش به‌صورت خودکار امتحان می‌شوند.
+    """
+    from bot.services.ai_service import available_providers, get_selected_model
     selected = get_selected_model(user_id) if user_id is not None else None
+    selected_provider = selected[0] if selected else None
     rows = []
-    for index, (provider, label, model) in enumerate(available_model_options()):
-        mark = "✅ " if selected == (provider, model) else ""
-        rows.append([InlineKeyboardButton(f"{mark}{label}", callback_data=f"ai_model:{index}")])
+    for index, (provider, label) in enumerate(available_providers()):
+        mark = "✅ " if selected_provider == provider else ""
+        rows.append([
+            InlineKeyboardButton(
+                f"{mark}{label}",
+                callback_data=f"ai_provider:{index}",
+            )
+        ])
     if not rows:
-        rows.append([InlineKeyboardButton("❌ مدلی تنظیم نشده", callback_data="ai_noop")])
+        rows.append([InlineKeyboardButton("❌ هیچ سرویسی تنظیم نشده", callback_data="ai_noop")])
     rows.append([InlineKeyboardButton("↩️ برگشت", callback_data="ai_models_back")])
     return InlineKeyboardMarkup(rows)
 
