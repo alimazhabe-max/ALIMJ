@@ -425,7 +425,33 @@ def init_extra_tables():
         "text TEXT,"
         "remind_at TEXT,"
         "done INTEGER DEFAULT 0,"
-        "created_at TEXT DEFAULT (datetime('now')))"
+        "created_at TEXT DEFAULT (datetime('now')),"
+        "repeat_type TEXT DEFAULT 'once',"
+        "repeat_every INTEGER DEFAULT 0,"
+        "active INTEGER DEFAULT 1)"
+    )
+    for col, typ in (
+        ("repeat_type", "TEXT DEFAULT 'once'"),
+        ("repeat_every", "INTEGER DEFAULT 0"),
+        ("active", "INTEGER DEFAULT 1"),
+    ):
+        try:
+            c.execute(f"ALTER TABLE reminders ADD COLUMN {col} {typ}")
+        except Exception:
+            pass
+    c.execute(
+        "CREATE TABLE IF NOT EXISTS ai_memory ("
+        "user_id INTEGER NOT NULL,"
+        "key TEXT NOT NULL,"
+        "value TEXT NOT NULL,"
+        "updated_at TEXT DEFAULT (datetime('now')),"
+        "PRIMARY KEY (user_id, key))"
+    )
+    c.execute(
+        "CREATE TABLE IF NOT EXISTS ai_history_summary ("
+        "user_id INTEGER PRIMARY KEY,"
+        "summary TEXT,"
+        "updated_at TEXT DEFAULT (datetime('now')))"
     )
     c.execute(
         "CREATE TABLE IF NOT EXISTS usage_stats ("
@@ -527,21 +553,40 @@ def delete_note(user_id, note_id):
     conn.close()
 
 
-def add_reminder(user_id, text, remind_at):
+def add_reminder(user_id, text, remind_at, repeat_type="once", repeat_every=0):
+    """
+    repeat_type: once | daily | weekly | monthly | every_minutes
+    repeat_every: برای every_minutes = تعداد دقیقه؛ برای بقیه معمولاً ۱
+    """
     conn = get_db_connection()
     c = conn.cursor()
-    c.execute("INSERT INTO reminders (user_id, text, remind_at) VALUES (?, ?, ?)", (user_id, text[:200], remind_at))
+    c.execute(
+        "INSERT INTO reminders (user_id, text, remind_at, done, repeat_type, repeat_every, active) "
+        "VALUES (?, ?, ?, 0, ?, ?, 1)",
+        (user_id, (text or "")[:300], remind_at, repeat_type or "once", int(repeat_every or 0)),
+    )
+    rid = c.lastrowid
     conn.commit()
     conn.close()
+    return rid
 
 
 def get_pending_reminders(before_time=None):
     conn = get_db_connection()
     c = conn.cursor()
     if before_time:
-        c.execute("SELECT id, user_id, text, remind_at FROM reminders WHERE done = 0 AND remind_at <= ?", (before_time,))
+        c.execute(
+            "SELECT id, user_id, text, remind_at, COALESCE(repeat_type,'once'), "
+            "COALESCE(repeat_every,0), COALESCE(active,1) "
+            "FROM reminders WHERE done = 0 AND COALESCE(active,1) = 1 AND remind_at <= ?",
+            (before_time,),
+        )
     else:
-        c.execute("SELECT id, user_id, text, remind_at FROM reminders WHERE done = 0")
+        c.execute(
+            "SELECT id, user_id, text, remind_at, COALESCE(repeat_type,'once'), "
+            "COALESCE(repeat_every,0), COALESCE(active,1) "
+            "FROM reminders WHERE done = 0 AND COALESCE(active,1) = 1"
+        )
     rows = c.fetchall()
     conn.close()
     return rows
@@ -550,9 +595,126 @@ def get_pending_reminders(before_time=None):
 def mark_reminder_done(rid):
     conn = get_db_connection()
     c = conn.cursor()
-    c.execute("UPDATE reminders SET done = 1 WHERE id = ?", (rid,))
+    c.execute("UPDATE reminders SET done = 1, active = 0 WHERE id = ?", (rid,))
     conn.commit()
     conn.close()
+
+
+def reschedule_reminder(rid, next_at):
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute(
+        "UPDATE reminders SET remind_at = ?, done = 0, active = 1 WHERE id = ?",
+        (next_at, rid),
+    )
+    conn.commit()
+    conn.close()
+
+
+def list_user_reminders(user_id, limit=20):
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute(
+        "SELECT id, text, remind_at, COALESCE(repeat_type,'once'), COALESCE(repeat_every,0), "
+        "COALESCE(done,0), COALESCE(active,1) FROM reminders "
+        "WHERE user_id = ? ORDER BY id DESC LIMIT ?",
+        (user_id, limit),
+    )
+    rows = c.fetchall()
+    conn.close()
+    return rows
+
+
+def cancel_reminder(user_id, rid):
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute(
+        "UPDATE reminders SET done = 1, active = 0 WHERE id = ? AND user_id = ?",
+        (rid, user_id),
+    )
+    conn.commit()
+    n = c.rowcount
+    conn.close()
+    return n > 0
+
+
+# ── حافظه بلندمدت AI ────────────────────────────────────────────────────────
+
+def set_ai_memory(user_id, key, value):
+    key = (key or "note").strip()[:80]
+    value = (value or "").strip()[:1000]
+    if not value:
+        return
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute(
+        "INSERT INTO ai_memory (user_id, key, value, updated_at) VALUES (?, ?, ?, datetime('now')) "
+        "ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')",
+        (user_id, key, value),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_ai_memory(user_id, limit=40):
+    conn = get_db_connection()
+    c = conn.cursor()
+    try:
+        c.execute(
+            "SELECT key, value FROM ai_memory WHERE user_id = ? ORDER BY updated_at DESC LIMIT ?",
+            (user_id, limit),
+        )
+        return c.fetchall()
+    except Exception:
+        return []
+    finally:
+        conn.close()
+
+
+def delete_ai_memory(user_id, key=None):
+    conn = get_db_connection()
+    c = conn.cursor()
+    if key:
+        c.execute("DELETE FROM ai_memory WHERE user_id = ? AND key = ?", (user_id, key))
+    else:
+        c.execute("DELETE FROM ai_memory WHERE user_id = ?", (user_id,))
+    conn.commit()
+    conn.close()
+
+
+def get_ai_history_summary(user_id):
+    conn = get_db_connection()
+    c = conn.cursor()
+    try:
+        c.execute("SELECT summary FROM ai_history_summary WHERE user_id = ?", (user_id,))
+        row = c.fetchone()
+        return row[0] if row and row[0] else ""
+    except Exception:
+        return ""
+    finally:
+        conn.close()
+
+
+def set_ai_history_summary(user_id, summary):
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute(
+        "INSERT INTO ai_history_summary (user_id, summary, updated_at) VALUES (?, ?, datetime('now')) "
+        "ON CONFLICT(user_id) DO UPDATE SET summary = excluded.summary, updated_at = datetime('now')",
+        (user_id, (summary or "")[:4000]),
+    )
+    conn.commit()
+    conn.close()
+
+
+def clear_ai_history_summary(user_id):
+    conn = get_db_connection()
+    c = conn.cursor()
+    try:
+        c.execute("DELETE FROM ai_history_summary WHERE user_id = ?", (user_id,))
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def track_usage(user_id, feature):

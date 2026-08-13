@@ -1,7 +1,15 @@
-from datetime import time, datetime
+from datetime import time, datetime, timedelta
 import pytz
 from bot.logger import logger
-from bot.database import get_all_users, update_stats, get_users_for_azan, backup_db
+from bot.database import (
+    get_all_users,
+    update_stats,
+    get_users_for_azan,
+    backup_db,
+    get_pending_reminders,
+    mark_reminder_done,
+    reschedule_reminder,
+)
 from bot.utils.helpers import build_message, get_refresh_button
 from bot.config import config
 from bot.api.prayer import get_prayer_times
@@ -70,13 +78,89 @@ async def check_azan_notifications(context):
             logger.error(f"azan notify error: {e}")
 
 
+def _next_occurrence(when: datetime, repeat_type: str, repeat_every: int) -> datetime | None:
+    """محاسبه زمان بعدی برای یادآوری تکراری."""
+    rt = (repeat_type or "once").lower()
+    if rt in ("once", "", "none"):
+        return None
+    if rt == "daily":
+        return when + timedelta(days=max(1, repeat_every or 1))
+    if rt == "weekly":
+        return when + timedelta(weeks=max(1, repeat_every or 1))
+    if rt == "monthly":
+        # تقریبی ۳۰ روز
+        return when + timedelta(days=30 * max(1, repeat_every or 1))
+    if rt in ("every_minutes", "minutes", "minutely"):
+        mins = max(1, int(repeat_every or 1))
+        return when + timedelta(minutes=mins)
+    if rt in ("every_hours", "hours", "hourly"):
+        hrs = max(1, int(repeat_every or 1))
+        return when + timedelta(hours=hrs)
+    return None
+
+
+async def check_user_reminders(context):
+    """ارسال یادآوری‌های سررسید (یک‌بار و تکراری)."""
+    tehran = pytz.timezone(config.TIMEZONE)
+    now = datetime.now(tehran)
+    now_iso = now.isoformat()
+    try:
+        rows = get_pending_reminders(before_time=now_iso)
+    except Exception as e:
+        logger.error(f"get_pending_reminders: {e}")
+        return
+
+    for row in rows:
+        try:
+            if len(row) >= 7:
+                rid, user_id, text, remind_at, repeat_type, repeat_every, active = row[:7]
+            else:
+                rid, user_id, text, remind_at = row[:4]
+                repeat_type, repeat_every, active = "once", 0, 1
+
+            if not active:
+                continue
+
+            body = text or "یادآوری"
+            msg = f"⏰ یادآوری\n\n{body}"
+            if repeat_type and repeat_type not in ("once", "", "none"):
+                msg += f"\n\n🔁 تکرار: {repeat_type}"
+                if repeat_every:
+                    msg += f" (هر {repeat_every})"
+
+            await context.bot.send_message(chat_id=user_id, text=msg)
+
+            # زمان پایه برای محاسبه بعدی
+            try:
+                base = datetime.fromisoformat(remind_at)
+                if base.tzinfo is None:
+                    base = tehran.localize(base)
+            except Exception:
+                base = now
+
+            nxt = _next_occurrence(base, repeat_type, int(repeat_every or 0))
+            # اگر از الان عقب‌تر شد، از الان جلو برو
+            if nxt is not None:
+                while nxt <= now:
+                    nxt2 = _next_occurrence(nxt, repeat_type, int(repeat_every or 0))
+                    if nxt2 is None or nxt2 <= nxt:
+                        break
+                    nxt = nxt2
+                reschedule_reminder(rid, nxt.isoformat())
+            else:
+                mark_reminder_done(rid)
+
+            await asyncio.sleep(0.05)
+        except Exception as e:
+            logger.error(f"reminder send error: {e}")
+
+
 async def periodic_backup(context):
     """بکاپ خودکار: GitHub (اگر ست شده) + تلگرام ادمین"""
     try:
         from bot.db_persist import auto_backup, send_db_to_admins, github_enabled
         ok, msg = auto_backup()
         logger.info(f"auto_backup: {msg}")
-        # اگر GitHub نبود، به تلگرام هم بفرست
         if not github_enabled():
             ok2, msg2 = await send_db_to_admins(context.bot)
             logger.info(f"telegram backup: {msg2}")
@@ -108,11 +192,17 @@ def setup_scheduler(app):
         first=10,
         name="azan_timer",
     )
-    # هر ۱۲ ساعت بکاپ به تلگرام ادمین
+    # یادآوری‌های کاربر هر ۳۰ ثانیه
+    job_queue.run_repeating(
+        check_user_reminders,
+        interval=30,
+        first=15,
+        name="user_reminders",
+    )
     job_queue.run_repeating(
         periodic_backup,
         interval=12 * 3600,
         first=300,
         name="db_backup_telegram",
     )
-    logger.info("Scheduler ready: daily + azan + telegram backup every 12h")
+    logger.info("Scheduler ready: daily + azan + reminders + telegram backup every 12h")
