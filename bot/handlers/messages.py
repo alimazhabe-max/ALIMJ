@@ -183,11 +183,10 @@ async def _handle_special_ai_intents(update, context, user_id, text: str) -> boo
 
 
 async def _send_ai_answer(update, user_id, answer: str, *, stream: bool = True):
-    """ارسال جواب AI با دکمه‌های اینلاین."""
+    """ارسال جواب AI — بدون دکمه زیر پیام."""
     msg = update.message
-    aid = store_answer(user_id, answer)
-    kb = get_ai_result_keyboard(user_id, aid)
-    return await msg.reply_text(f"🤖 {answer}", reply_markup=kb)
+    store_answer(user_id, answer)
+    return await msg.reply_text(f"🤖 {answer}")
 
 
 async def _ask_ai_stream_and_send(update, context, user_id, text: str):
@@ -219,15 +218,14 @@ async def _ask_ai_stream_and_send(update, context, user_id, text: str):
     answer = "".join(buf).strip()
     if not answer:
         raise RuntimeError("جواب خالی")
-    aid = store_answer(user_id, answer)
-    kb = get_ai_result_keyboard(user_id, aid)
+    store_answer(user_id, answer)
     final = "🤖 " + answer
     if len(final) > 4000:
         final = final[:3990] + "…"
     try:
-        await sent.edit_text(final, reply_markup=kb)
+        await sent.edit_text(final)
     except Exception:
-        await msg.reply_text(final, reply_markup=kb)
+        await msg.reply_text(final)
     return answer, provider_label or "ai"
 
 
@@ -361,8 +359,7 @@ async def _text_handler_inner(update: Update, context: ContextTypes.DEFAULT_TYPE
                     to_read = m_read.group(2).strip()
                     try:
                         await _send_ai_voice(
-                            update, to_read, user_id, reply_markup=get_ai_keyboard(user_id)
-                        )
+                            update, to_read, user_id)
                     except Exception as ve:
                         await update.message.reply_text(f"⚠️ ویس ساخته نشد: {ve}")
                     return
@@ -400,7 +397,6 @@ async def _text_handler_inner(update: Update, context: ContextTypes.DEFAULT_TYPE
                             update,
                             "باشه، با ویس حرف می‌زنیم. هر وقت خواستی بگو.",
                             user_id,
-                            reply_markup=get_ai_keyboard(user_id),
                         )
                     except Exception:
                         pass
@@ -428,7 +424,7 @@ async def _text_handler_inner(update: Update, context: ContextTypes.DEFAULT_TYPE
                 ):
                     try:
                         await _send_ai_voice(
-                            update, answer, user_id, reply_markup=get_ai_keyboard(user_id)
+                            update, answer, user_id
                         )
                     except Exception as ve:
                         await update.message.reply_text(
@@ -1224,7 +1220,6 @@ async def voice_ai_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     msg,
                     "باشه، با ویس حرف می‌زنیم. هر وقت خواستی بگو.",
                     user_id,
-                    reply_markup=get_ai_keyboard(user_id),
                 )
             except Exception as ve:
                 await msg.reply_text(f"⚠️ {ve}")
@@ -1281,7 +1276,7 @@ async def voice_ai_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ):
             try:
                 await _send_ai_voice(
-                    msg, answer, user_id, reply_markup=get_ai_keyboard(user_id)
+                    msg, answer, user_id
                 )
             except Exception as ve:
                 await msg.reply_text(f"⚠️ ویس خروجی ساخته نشد: {ve}")
