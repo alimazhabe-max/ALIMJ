@@ -1,7 +1,12 @@
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 from bot.database import get_user, get_user_city, set_last_main_msg_id
-from bot.services.ai_service import clear_history, available_model_options, set_selected_model, get_selected_model
+from bot.services.ai_service import (
+    clear_history,
+    available_providers,
+    set_selected_provider,
+    get_selected_model,
+)
 from bot.utils.helpers import (
     build_message,
     get_refresh_button,
@@ -37,16 +42,18 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer("هیچ مدل فعالی تنظیم نشده است.", show_alert=True)
         return
 
-    if data.startswith("ai_model:"):
+    if data.startswith("ai_provider:") or data.startswith("ai_model:"):
+        # ai_provider: انتخاب ارائه‌دهنده (همه مدل‌هایش شامل می‌شود)
+        # ai_model: سازگاری با پیام‌های قدیمی
         try:
             index = int(data.split(":", 1)[1])
-            options = available_model_options()
-            provider, _label, model = options[index]
+            providers = available_providers()
+            provider, label = providers[index]
         except (ValueError, IndexError):
-            await query.answer("❌ این مدل دیگر در دسترس نیست.", show_alert=True)
+            await query.answer("❌ این سرویس دیگر در دسترس نیست.", show_alert=True)
             return
-        set_selected_model(user_id, provider, model)
-        await query.answer(f"مدل انتخاب شد: {model}", show_alert=False)
+        set_selected_provider(user_id, provider)
+        await query.answer(f"✅ فعال شد: {label}", show_alert=False)
         await query.edit_message_reply_markup(reply_markup=get_ai_keyboard(user_id))
         return
 
