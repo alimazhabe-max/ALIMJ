@@ -44,7 +44,7 @@ from bot.services.ai_service import (
     ask_ai, ask_ai_media, clear_history, enabled_providers,
     _extract_text_from_bytes, generate_or_edit_image,
     looks_like_image_request, looks_like_image_edit,
-    text_to_speech, wants_voice_reply, strip_voice_prefix, speech_to_text,
+    text_to_speech, wants_voice_reply, strip_voice_prefix, speech_to_text, analyze_voice_emotion,
 )
 
 
@@ -950,6 +950,31 @@ async def voice_ai_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             user_text = caption + "\n\n(متن ویس): " + transcript
 
         await msg.reply_text("📝 شنیدم:\n" + transcript)
+
+        # تشخیص احساسات از صدا
+        try:
+            emo_notice = await msg.reply_text("💗 در حال تشخیص احساس از صدا...")
+            emotion = await analyze_voice_emotion(
+                data, transcript=transcript, filename=filename, mime=mime
+            )
+            try:
+                await emo_notice.delete()
+            except Exception:
+                pass
+            await msg.reply_text("🎭 تحلیل احساس صدا:\n" + emotion)
+            user_text = (
+                user_text
+                + "\n\n[تحلیل احساس صدای کاربر]\n"
+                + emotion
+            )
+        except Exception as ee:
+            try:
+                await emo_notice.delete()
+            except Exception:
+                pass
+            # غیرمسدودکننده
+            from bot.logger import logger
+            logger.warning("emotion detect failed: %s", ee)
 
         voice_out = wants_voice_reply(caption) if caption else False
         answer, provider = await _ask_ai_with_typing(
