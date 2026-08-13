@@ -113,10 +113,23 @@ async def _handle_special_ai_intents(update, context, user_id, text: str) -> boo
     # یادآوری
     rem = parse_natural_reminder(text)
     if rem:
-        body, when = rem
-        add_reminder(user_id, body, when.isoformat())
+        body, when, repeat_type, repeat_every = rem
+        add_reminder(
+            user_id,
+            body,
+            when.isoformat(),
+            repeat_type=repeat_type,
+            repeat_every=repeat_every,
+        )
+        repeat_label = {
+            "daily": "روزانه",
+            "weekly": "هفتگی",
+            "monthly": "ماهانه",
+            "every_minutes": f"هر {repeat_every} دقیقه",
+            "every_hours": f"هر {repeat_every} ساعت",
+        }.get(repeat_type, "یک‌بار")
         await update.message.reply_text(
-            f"⏰ یادآوری ثبت شد.\nموضوع: {body}\nزمان: {when.strftime('%Y-%m-%d %H:%M')}",
+            f"⏰ یادآوری ثبت شد.\nموضوع: {body}\nزمان: {when.strftime('%Y-%m-%d %H:%M')}\nتکرار: {repeat_label}",
             reply_markup=get_ai_keyboard(user_id),
         )
         return True
@@ -186,13 +199,11 @@ async def _send_ai_answer(update, user_id, answer: str, *, stream: bool = True):
     """ارسال جواب AI — بدون دکمه زیر پیام."""
     msg = update.message
     store_answer(user_id, answer)
-    if context := None:
-        pass
     return await msg.reply_text(f"🤖 {answer}")
 
 
-async def _ask_ai_stream_and_send(update, context, user_id, text: str):
-    """استریم واقعی از API و ادیت تدریجی پیام در تلگرام."""
+async def _ask_ai_stream_and_send(update, context, user_id: int, text: str):
+    """استریم AI و ویرایش تدریجی پیام؛ در شکست، پیام نیمه‌کاره حذف می‌شود."""
     import asyncio
     from bot.services.ai_service import ask_ai_stream
 
@@ -201,34 +212,45 @@ async def _ask_ai_stream_and_send(update, context, user_id, text: str):
     buf = []
     provider_label = ""
     last_edit = 0.0
-    async for piece, label in ask_ai_stream(user_id, text):
-        if label:
-            provider_label = label
-            continue
-        if piece:
-            buf.append(piece)
-            now = asyncio.get_event_loop().time()
-            if now - last_edit >= 0.35:
-                shown = "".join(buf)
-                if len(shown) > 3500:
-                    shown = shown[:3500] + "…"
-                try:
-                    await sent.edit_text("🤖 " + shown)
-                except Exception:
-                    pass
-                last_edit = now
-    answer = "".join(buf).strip()
-    if not answer:
-        raise RuntimeError("جواب خالی")
-    store_answer(user_id, answer)
-    final = "🤖 " + answer
-    if len(final) > 4000:
-        final = final[:3990] + "…"
+
     try:
-        await sent.edit_text(final)
+        async for piece, label in ask_ai_stream(user_id, text):
+            if label:
+                provider_label = label
+                continue
+            if piece:
+                buf.append(piece)
+                now = asyncio.get_event_loop().time()
+                if now - last_edit >= 0.35:
+                    shown = "".join(buf)
+                    if len(shown) > 3500:
+                        shown = shown[:3500] + "…"
+                    try:
+                        await sent.edit_text("🤖 " + shown)
+                    except Exception:
+                        pass
+                    last_edit = now
+
+        answer = "".join(buf).strip()
+        if not answer:
+            raise RuntimeError("جواب خالی")
+
+        store_answer(user_id, answer)
+        final = "🤖 " + answer
+        if len(final) > 4000:
+            final = final[:3990] + "…"
+        try:
+            await sent.edit_text(final)
+        except Exception:
+            await msg.reply_text(final)
+        return answer, provider_label or "ai"
+
     except Exception:
-        await msg.reply_text(final)
-    return answer, provider_label or "ai"
+        try:
+            await sent.delete()
+        except Exception:
+            pass
+        raise
 
 
 async def _send_ai_voice(update_or_msg, text: str, user_id: int, reply_markup=None):
