@@ -1360,6 +1360,70 @@ async def text_to_speech(text: str, *, voice: str | None = None) -> bytes:
         raise RuntimeError(f"ساخت ویس ناموفق: {e}")
 
 
+
+def wants_emotion_analysis(text: str) -> bool:
+    """آیا کاربر صریحاً تشخیص احساس از صدا خواسته؟"""
+    t = (text or "").strip()
+    if not t:
+        return False
+    import re
+    patterns = (
+        r"تشخیص\s*احساس",
+        r"احساس(ات)?\s*(من|صدا|از\s*صدا)?",
+        r"لحن(م|م\s*چطور)",
+        r"از\s*صدا(م)?\s*(بگو|تحلیل|تشخیص)",
+        r"حالم\s*از\s*صدا",
+        r"emotion",
+        r"sentiment\s*from\s*(voice|audio)",
+        r"تحلیل\s*احساس",
+        r"چه\s*احساسی",
+    )
+    return any(re.search(p, t, re.I) for p in patterns)
+
+
+def should_auto_voice_reply(
+    user_text: str,
+    answer: str,
+    *,
+    input_was_voice: bool = False,
+    explicit_voice: bool = False,
+) -> bool:
+    """
+    تصمیم هوشمند: آیا جواب را با ویس هم بفرستیم؟
+    - اگر کاربر صریحاً خواسته → بله
+    - اگر ورودی ویس بوده و جواب کوتاه/محاوره‌ای است → بله
+    - جواب خیلی بلند یا خیلی فنی → خیر (مگر درخواست صریح)
+    """
+    if explicit_voice:
+        return True
+    ans = (answer or "").strip()
+    if not ans:
+        return False
+    # جواب خیلی بلند را ویس نکن
+    if len(ans) > 700:
+        return False
+    # کد یا لیست خیلی ساختاری
+    if ans.count("```") >= 2 or ans.count("\n- ") + ans.count("\n• ") > 8:
+        return False
+
+    ut = (user_text or "").strip()
+    import re
+    # ورودی ویس + جواب کوتاه‌تر → معمولاً مکالمه صوتی
+    if input_was_voice and len(ans) <= 500:
+        return True
+
+    # لحن محاوره‌ای / احساسی / احوال‌پرسی
+    casual = (
+        r"سلام|خوبی|چطوری|احوال|دوستت|خسته‌|غمگین|خوشحال|"
+        r"قصه|تعریف کن|برام بگو|محکم|دلداری|نصیحت|"
+        r"جوک|بخند|آرامم"
+    )
+    if re.search(casual, ut, re.I) and len(ans) <= 550:
+        return True
+
+    return False
+
+
 def wants_voice_reply(text: str) -> bool:
     """آیا کاربر خواسته جواب با ویس باشد؟"""
     t = (text or "").strip()
