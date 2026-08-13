@@ -273,7 +273,7 @@ async def _send_ai_voice(update_or_msg, text: str, user_id: int, reply_markup=No
             pass
 
 async def _ask_ai_with_typing(update, context, user_id, text):
-    """درخواست به AI همراه با نمایش «در حال نوشتن» در تلگرام."""
+    """AI request with stable chunked output and safe fallback semantics."""
     import asyncio
     stop_event = asyncio.Event()
     chat_id = update.effective_chat.id
@@ -281,24 +281,18 @@ async def _ask_ai_with_typing(update, context, user_id, text):
     try:
         notice = await update.message.reply_text("✍️ در حال نوشتن...")
     except Exception:
-        notice = None
+        pass
     task = asyncio.create_task(_keep_typing(context.bot, chat_id, stop_event))
     try:
-        # تلاش برای استریم واقعی (پیام از قبل در چت ارسال می‌شود)
         try:
             result = await _ask_ai_stream_and_send(update, context, user_id, text)
-            if context.user_data is not None:
-                context.user_data["_ai_already_sent"] = True
+            context.user_data["_ai_already_sent"] = True
             return result
-        except Exception as _se:
-            from bot.logger import logger as _lg
-            _lg.warning("stream failed, fallback: %s", _se)
-            if context.user_data is not None:
-                context.user_data["_ai_already_sent"] = False
-        answer = await ask_ai(user_id, text)
-        if context.user_data is not None:
+        except Exception as stream_error:
+            from bot.logger import logger
+            logger.warning("AI chunked stream failed, using canonical fallback: %s", stream_error)
             context.user_data["_ai_already_sent"] = False
-        return answer
+            return await ask_ai(user_id, text)
     finally:
         stop_event.set()
         try:
