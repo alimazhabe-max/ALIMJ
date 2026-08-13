@@ -199,6 +199,22 @@ def clear_history(user_id: int, *, clear_long_term: bool = False) -> None:
         pass
 
 
+def _valid_selected_model(pref: Tuple[str, str] | None) -> Tuple[str, str] | None:
+    """Return a saved selection only if its provider/model still exists."""
+    if not pref:
+        return None
+    provider, model = pref
+    provider = (provider or "").strip().lower()
+    model = (model or "*").strip()
+    if provider not in {p for p, _label, _model in available_model_options()}:
+        return None
+    models = models_for_provider(provider)
+    if not models:
+        return None
+    if model == "*" or model in models:
+        return provider, model
+    return provider, "*"
+
 def get_selected_model(user_id: int) -> Tuple[str, str] | None:
     if user_id in _USER_SELECTION:
         return _USER_SELECTION[user_id]
@@ -206,8 +222,16 @@ def get_selected_model(user_id: int) -> Tuple[str, str] | None:
         from bot.database import get_ai_preference
         pref = get_ai_preference(user_id)
         if pref:
-            _USER_SELECTION[user_id] = pref
-            return pref
+            valid = _valid_selected_model(pref)
+            if valid:
+                _USER_SELECTION[user_id] = valid
+                if valid != pref:
+                    try:
+                        set_ai_preference(user_id, valid[0], valid[1])
+                    except Exception:
+                        pass
+                return valid
+            clear_selected_model(user_id)
     except Exception as e:
         logger.warning("get_ai_preference failed: %s", e)
     return None
@@ -246,7 +270,7 @@ def available_model_options() -> List[Tuple[str, str, str]]:
         # مدل‌های پایدار جدید؛ Lite برای سرعت، 3.6 برای کیفیت
         for model in _env_models(
             "GEMINI_MODELS",
-            ["gemini-3.6-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite"],
+            ["gemini-3.5-flash-lite", "gemini-3.6-flash", "gemini-3.1-flash-lite"],
         ):
             label = "Gemini • " + model.replace("gemini-", "Gemini ")
             items.append(("gemini", label, model))
@@ -603,7 +627,7 @@ async def _gemini(
 
             for _round in range(max_tool_rounds + 1 if use_tools else 1):
                 payload = {
-                    "systemInstruction": {"parts": [{"text": SYSTEM_PROMPT + (("\n\n" + _memory_block(user_id)) if _memory_block(user_id) else "")}]},
+                    "systemInstruction": {"parts": [{"text": SYSTEM_PROMPT}]},
                     "contents": working_contents,
                     "generationConfig": {"maxOutputTokens": MAX_OUTPUT},
                 }
@@ -655,9 +679,16 @@ async def _gemini(
                         result = await execute_tool(
                             name, args, user_id=user_id
                         )
+                        call_id = (
+                            call.get("id")
+                            or call.get("callId")
+                            or call.get("call_id")
+                            or f"call_{_round}_{name}"
+                        )
                         response_parts.append({
                             "functionResponse": {
                                 "name": name,
+                                "id": call_id,
                                 "response": {"result": result},
                             }
                         })
@@ -728,7 +759,6 @@ async def _openai_compatible(
         messages = _messages(user_id, prompt)
         # حداکثر ۲ دور tool calling تا گیر نکند
         max_tool_rounds = 2 if use_tools else 0
-        tools_enabled = bool(use_tools)
 
         try:
             for _round in range(max_tool_rounds + 1):
@@ -738,7 +768,7 @@ async def _openai_compatible(
                     "max_tokens": MAX_OUTPUT,
                     "temperature": 0.6,
                 }
-                if tools_enabled and _round < max_tool_rounds:
+                if use_tools and _round < max_tool_rounds:
                     tools = get_tool_definitions()
                     if tools:
                         payload["tools"] = tools
@@ -748,23 +778,17 @@ async def _openai_compatible(
                 if status >= 400:
                     # بعضی مدل‌ها tools را پشتیبانی نمی‌کنند → بدون tool دوباره امتحان
                     err_text = str(data).lower()
-                    if tools_enabled and (
-                        "tool" in err_text
-                        or "function" in err_text
-                        or status in (400, 422)
+                    if use_tools and any(
+                        marker in err_text
+                        for marker in (
+                            "tool_calls", "tool call", "tool_choice",
+                            "function calling", "function_call",
+                            "function calls", "unsupported parameter",
+                        )
                     ):
-                        tools_enabled = False
+                        use_tools = False
                         payload.pop("tools", None)
                         payload.pop("tool_choice", None)
-                        try:
-                            from bot.services.ai_tools import gather_context_for_prompt
-                            extra = await gather_context_for_prompt(user_id, prompt)
-                            if extra:
-                                fallback_messages = _messages(user_id, prompt)
-                                fallback_messages[-1]["content"] = (prompt + extra)[:MAX_INPUT]
-                                payload["messages"] = fallback_messages
-                        except Exception:
-                            pass
                         status, data = await _post_json(
                             url, headers=headers, json=payload
                         )
@@ -791,7 +815,7 @@ async def _openai_compatible(
                 message = choices[0].get("message") or {}
                 tool_calls = message.get("tool_calls") or []
 
-                if tool_calls and tools_enabled:
+                if tool_calls and use_tools:
                     # پاسخ assistant با tool_calls را به تاریخچه اضافه کن
                     messages.append(message)
                     for tc in tool_calls:
@@ -862,16 +886,6 @@ async def _openrouter(user_id: int, prompt: str, model: str) -> str:
 
 
 async def _cloudflare(user_id: int, prompt: str, model: str) -> str:
-    # Cloudflare AI Run does not expose the same OpenAI tool-call contract here.
-    # For live-data questions, prefetch only matching keyword tools.
-    try:
-        from bot.services.ai_tools import prompt_has_keyword_tool, gather_context_for_prompt
-        if prompt_has_keyword_tool(prompt):
-            extra = await gather_context_for_prompt(user_id, prompt)
-            if extra:
-                prompt = (prompt + extra)[:MAX_INPUT]
-    except Exception as exc:
-        logger.warning("Cloudflare tool fallback failed: %s", exc)
     account = os.getenv("CLOUDFLARE_ACCOUNT_ID")
     if not account:
         raise RuntimeError("CLOUDFLARE_ACCOUNT_ID تنظیم نشده")
@@ -1410,7 +1424,7 @@ async def speech_to_text(
     # ۲) Gemini (ورودی audio)
     gemini_keys = _next_keys("gemini")
     if gemini_keys:
-        model = os.getenv("GEMINI_STT_MODEL", "gemini-3.5-flash-lite")
+        model = os.getenv("GEMINI_STT_MODEL", "gemini-3.1-flash-lite")
         url = (
             f"https://generativelanguage.googleapis.com/v1beta/models/"
             f"{model}:generateContent"
@@ -1486,7 +1500,7 @@ async def analyze_voice_emotion(
     if len(audio_bytes) > 4_500_000:
         audio_bytes = audio_bytes[:4_500_000]
 
-    model = os.getenv("GEMINI_EMOTION_MODEL", os.getenv("GEMINI_STT_MODEL", "gemini-3.5-flash-lite"))
+    model = os.getenv("GEMINI_EMOTION_MODEL", os.getenv("GEMINI_STT_MODEL", "gemini-3.1-flash-lite"))
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 
     prompt = (
@@ -1808,10 +1822,11 @@ async def generate_music(prompt: str) -> bytes:
     errors = []
     for model in models:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
-        payloads = [{
+        payloads = [
+        {
             "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-            "generationConfig": {"responseModalities": ["AUDIO"]},
-        }]
+        },
+    ]
         for key in keys:
             for payload in payloads:
                 try:
@@ -1853,7 +1868,7 @@ async def analyze_video(
     if len(video_bytes) > 15_000_000:
         raise RuntimeError("ویدیو خیلی بزرگ است (حد حدود ۱۵ مگ).")
 
-    model = os.getenv("GEMINI_VIDEO_MODEL", "gemini-3.5-flash-lite")
+    model = os.getenv("GEMINI_VIDEO_MODEL", "gemini-3.1-flash-lite")
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
     text = (prompt or "").strip() or (
         "این ویدیو کوتاه را خلاصه و تحلیل کن: موضوع، افراد/اشیاء مهم، "
@@ -1983,8 +1998,6 @@ async def ask_ai(user_id: int, prompt: str) -> tuple[str, str]:
         if selected:
             provider, model = selected
             available_for_selected = _models_of(provider)
-            if not available_for_selected:
-                selected = None
             if model == "*" or model is None:
                 ordered.extend(available_for_selected)
             else:
@@ -2164,9 +2177,12 @@ async def _stream_gemini(user_id: int, prompt: str, model: str):
 
 async def ask_ai_stream(user_id: int, prompt: str):
     """
-    Async generator: ییلد (chunk:str | None, provider_label:str | None)
-    در پایان یک بار (None, "provider / model") می‌فرستد.
-    اگر استریم ممکن نبود، کل جواب را یک‌جا ییلد می‌کند.
+    Stable streaming facade.
+
+    Tool-calling providers are intentionally called through the same canonical
+    non-stream path as ask_ai(), then the final answer is emitted in chunks.
+    This prevents partial Telegram messages when a tool call arrives mid-stream
+    and keeps Gemini/OpenAI-compatible tool semantics identical.
     """
     prompt = (prompt or "").strip()
     if not prompt:
@@ -2179,82 +2195,48 @@ async def ask_ai_stream(user_id: int, prompt: str):
         _extract_and_store_memory(user_id, original)
     except Exception:
         pass
+
     options = available_model_options()
     if not options:
         raise RuntimeError("هیچ سرویس AI تنظیم نشده")
-
-    # Streaming endpoints in this project intentionally do not execute function calls.
-    # For tool-intent prompts, use the authoritative non-stream path so live data is correct.
-    try:
-        from bot.services.ai_tools import prompt_has_keyword_tool
-        if prompt_has_keyword_tool(original):
-            answer, label = await ask_ai(user_id, original)
-            yield answer, None
-            yield None, label
-            return
-    except Exception:
-        pass
 
     async with _LOCKS[user_id]:
         selected = get_selected_model(user_id)
         ordered: List[Tuple[str, str]] = []
         if selected:
             provider, model = selected
-            if not models_for_provider(provider):
-                selected = None
-            elif model == "*" or model is None:
-                ordered.extend((provider, m) for m in models_for_provider(provider))
-            else:
-                ordered.append((provider, model))
-                for m in models_for_provider(provider):
-                    if (provider, m) not in ordered:
-                        ordered.append((provider, m))
+            for m in models_for_provider(provider):
+                if model == "*" or m == model:
+                    ordered.append((provider, m))
+            for m in models_for_provider(provider):
+                if (provider, m) not in ordered:
+                    ordered.append((provider, m))
         for provider, _label, model in options:
             if (provider, model) not in ordered:
                 ordered.append((provider, model))
 
         errors = []
         for provider, model in ordered:
-            full = []
             try:
-                if provider in ("groq", "cerebras", "openrouter"):
-                    if provider == "groq":
-                        url = os.getenv("GROQ_BASE_URL", "https://api.groq.com/openai/v1").rstrip("/") + "/chat/completions"
-                        extra_h = None
-                    elif provider == "cerebras":
-                        url = "https://api.cerebras.ai/v1/chat/completions"
-                        extra_h = None
-                    else:
-                        url = "https://openrouter.ai/api/v1/chat/completions"
-                        extra_h = {"HTTP-Referer": "https://t.me", "X-Title": "RoozeZiba"}
-                    async for piece in _stream_openai_compatible(
-                        provider, user_id, prompt, url=url, model=model, extra_headers=extra_h
-                    ):
-                        full.append(piece)
-                        yield piece, None
-                elif provider == "gemini":
-                    async for piece in _stream_gemini(user_id, prompt, model):
-                        full.append(piece)
-                        yield piece, None
-                else:
-                    # fallback غیر استریم
-                    answer = await _call_provider(provider, user_id, prompt, model)
-                    full.append(answer)
-                    yield answer, None
-
-                answer = "".join(full).strip()
+                answer = await _call_provider(provider, user_id, original, model)
                 if not answer:
-                    raise RuntimeError("empty stream")
+                    raise RuntimeError("empty answer")
                 _save_turn(user_id, original, answer)
                 if not selected:
                     set_selected_model(user_id, provider, "*")
+
+                # Emit bounded chunks so Telegram still appears to stream.
+                chunk_size = max(80, int(os.getenv("AI_STREAM_CHUNK", "180")))
+                for i in range(0, len(answer), chunk_size):
+                    yield answer[i:i + chunk_size], None
+                    await asyncio.sleep(0)
                 yield None, f"{provider} / {model}"
                 return
-            except Exception as e:
-                errors.append(f"{provider}/{model}: {str(e)[:200]}")
-                logger.warning("stream failed: %s", e)
+            except Exception as exc:
+                msg = str(exc).replace("\n", " ")[:300]
+                errors.append(f"{provider}/{model}: {msg}")
+                logger.warning("stream facade provider failed: %s", msg)
                 await asyncio.sleep(0.05)
-                continue
 
-    raise RuntimeError("استریم ناموفق:\n" + "\n".join(errors[:6]))
+    raise RuntimeError("استریم ناموفق:\n" + "\n".join(errors[:8]))
 

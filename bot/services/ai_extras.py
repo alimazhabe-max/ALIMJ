@@ -104,8 +104,6 @@ def parse_chart_request(text: str) -> Optional[Tuple[str, List[str], List[float]
     مثال: نمودار میله‌ای قیمت: دلار 60000، یورو 65000
     """
     t = (text or "").strip()
-    # normalize Persian/Arabic digits so regexes behave consistently
-    t = t.translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789"))
     if not re.search(r"نمودار|chart|گراف", t, re.I):
         return None
     ctype = "bar"
@@ -174,114 +172,98 @@ async def web_search(query: str, max_results: int = 5) -> str:
 # ── یادآوری زبان طبیعی ─────────────────────────────────────────────────────
 
 def parse_natural_reminder(text: str) -> Optional[Tuple[str, datetime, str, int]]:
-    """
-    استخراج یادآوری از جملات فارسی.
-    خروجی: (متن, زمان, repeat_type, repeat_every)
-    repeat_type: once | daily | weekly | monthly | every_minutes | every_hours
+    """Parse common Persian natural-language reminders.
+
+    Returns: (body, when, repeat_type, repeat_every).
+    Supports Persian/Arabic digits and one-time/daily/weekly/monthly/minute/hour repeats.
     """
     t = (text or "").strip()
-    if not re.search(r"یادآوری|یادم\s*بیار|ریمایندر|یادآوری\s*کن|آلارم|هر\s*روز|هر\s*هفته", t, re.I):
-        if not re.search(r"فردا|پس‌فردا|ساعت\s*\d|دقیقه\s*دیگه|ساعت\s*دیگه", t, re.I):
-            return None
-        if not re.search(r"یاد|بگو|خبرم|پیام\s*بده", t, re.I):
-            return None
+    if not t:
+        return None
+
+    digit_map = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
+    t = t.translate(digit_map)
+    normalized = t.replace("‌", " ")
+
+    reminder_hint = re.search(
+        r"یادآوری|یادم\s*بیار|یادم\s*باشه|یادآوری\s*کن|ریمایندر|آلارم|خبرم\s*کن|پیام\s*بده|یاد\s*بده",
+        normalized, re.I,
+    )
+    time_hint = re.search(
+        r"فردا|پس\s*فردا|امروز|ساعت\s*\d|\d+\s*دقیقه\s*(?:دیگه|دیگر)|\d+\s*ساعت\s*(?:دیگه|دیگر)|هر\s*(?:روز|هفته|ماه|\d+\s*(?:دقیقه|ساعت))",
+        normalized, re.I,
+    )
+    if not reminder_hint and not time_hint:
+        return None
 
     now = datetime.now(TEHRAN)
-    when = None
+    when: Optional[datetime] = None
     repeat_type = "once"
     repeat_every = 0
 
-    # تکرار
-    if re.search(r"هر\s*روز|روزانه|daily", t, re.I):
-        repeat_type = "daily"
-        repeat_every = 1
-    elif re.search(r"هر\s*هفته|هفتگی|weekly", t, re.I):
-        repeat_type = "weekly"
-        repeat_every = 1
-    elif re.search(r"هر\s*ماه|ماهانه|monthly", t, re.I):
-        repeat_type = "monthly"
-        repeat_every = 1
+    if re.search(r"هر\s*روز|روزانه|daily", normalized, re.I):
+        repeat_type, repeat_every = "daily", 1
+    elif re.search(r"هر\s*هفته|هفتگی|weekly", normalized, re.I):
+        repeat_type, repeat_every = "weekly", 1
+    elif re.search(r"هر\s*ماه|ماهانه|monthly", normalized, re.I):
+        repeat_type, repeat_every = "monthly", 1
     else:
-        m = re.search(r"هر\s*(\d+)\s*دقیقه", t)
+        m = re.search(r"هر\s*(\d+)\s*دقیقه", normalized, re.I)
         if m:
-            repeat_type = "every_minutes"
-            repeat_every = int(m.group(1))
+            repeat_type, repeat_every = "every_minutes", max(1, int(m.group(1)))
         else:
-            m = re.search(r"هر\s*(\d+)\s*ساعت", t)
+            m = re.search(r"هر\s*(\d+)\s*ساعت", normalized, re.I)
             if m:
-                repeat_type = "every_hours"
-                repeat_every = int(m.group(1))
+                repeat_type, repeat_every = "every_hours", max(1, int(m.group(1)))
 
-    # N دقیقه دیگر
-    m = re.search(r"(\d+)\s*دقیقه\s*(ی\s*)?(دیگر|دیگه)", t)
+    def _hm() -> Optional[tuple[int, int]]:
+        m = re.search(r"ساعت\s*(\d{1,2})(?:\s*[:：]\s*(\d{1,2}))?", normalized, re.I)
+        if not m:
+            return None
+        return min(23, int(m.group(1))), min(59, int(m.group(2) or 0))
+
+    m = re.search(r"(\d+)\s*دقیقه\s*(?:دیگه|دیگر)", normalized, re.I)
     if m:
-        when = now + timedelta(minutes=int(m.group(1)))
+        when = now + timedelta(minutes=max(1, int(m.group(1))))
 
     if when is None:
-        m = re.search(r"(\d+)\s*ساعت\s*(ی\s*)?(دیگر|دیگه)", t)
+        m = re.search(r"(\d+)\s*ساعت\s*(?:دیگه|دیگر)", normalized, re.I)
         if m:
-            when = now + timedelta(hours=int(m.group(1)))
+            when = now + timedelta(hours=max(1, int(m.group(1))))
+
+    if when is None and re.search(r"پس\s*فردا", normalized, re.I):
+        hm = _hm() or (9, 0)
+        when = (now + timedelta(days=2)).replace(hour=hm[0], minute=hm[1], second=0, microsecond=0)
+
+    if when is None and re.search(r"فردا", normalized, re.I):
+        hm = _hm() or (9, 0)
+        when = (now + timedelta(days=1)).replace(hour=hm[0], minute=hm[1], second=0, microsecond=0)
 
     if when is None:
-        m = re.search(r"فردا(?:\s*ساعت)?\s*(\d{1,2})(?:[:：](\d{2}))?", t)
-        if m:
-            h = int(m.group(1))
-            mi = int(m.group(2) or 0)
-            when = (now + timedelta(days=1)).replace(
-                hour=min(h, 23), minute=mi, second=0, microsecond=0
-            )
-
-    if when is None and re.search(r"پس\s*فردا", t):
-        m = re.search(r"ساعت\s*(\d{1,2})(?:[:：](\d{2}))?", t)
-        h = int(m.group(1)) if m else 9
-        mi = int(m.group(2)) if m and m.group(2) else 0
-        when = (now + timedelta(days=2)).replace(
-            hour=min(h, 23), minute=mi, second=0, microsecond=0
-        )
-
-    if when is None:
-        m = re.search(r"(?:امروز\s*)?ساعت\s*(\d{1,2})(?:[:：](\d{2}))?", t)
-        if m:
-            h = int(m.group(1))
-            mi = int(m.group(2) or 0)
-            when = now.replace(hour=min(h, 23), minute=mi, second=0, microsecond=0)
+        hm = _hm()
+        if hm:
+            when = now.replace(hour=hm[0], minute=hm[1], second=0, microsecond=0)
             if when <= now:
-                when = when + timedelta(days=1)
+                when += timedelta(days=1)
 
-    # فقط تکرار بدون زمان مشخص → امروز/الان+۱ دقیقه در همان ساعت رایج
-    if when is None and repeat_type != "once":
-        m = re.search(r"ساعت\s*(\d{1,2})(?:[:：](\d{2}))?", t)
-        if m:
-            h = int(m.group(1))
-            mi = int(m.group(2) or 0)
-            when = now.replace(hour=min(h, 23), minute=mi, second=0, microsecond=0)
-            if when <= now:
-                when = when + timedelta(days=1)
-        elif repeat_type == "every_minutes":
-            when = now + timedelta(minutes=max(1, repeat_every))
-        elif repeat_type == "every_hours":
-            when = now + timedelta(hours=max(1, repeat_every))
-        else:
-            when = now + timedelta(minutes=1)
+    if when is None and repeat_type == "every_minutes":
+        when = now + timedelta(minutes=repeat_every)
+    elif when is None and repeat_type == "every_hours":
+        when = now + timedelta(hours=repeat_every)
+    elif when is None and repeat_type != "once":
+        when = now + timedelta(minutes=1)
 
     if when is None:
         return None
 
-    body = t
-    body = re.sub(r"یادآوری(\s*کن)?|یادم\s*(?:بیار|باشه)|ریمایندر|آلارم", "", body, flags=re.I)
+    body = normalized
+    body = re.sub(r"یادآوری(?:\s*کن)?|یادم\s*(?:بیار|باشه)|ریمایندر|آلارم|خبرم\s*کن|یاد\s*بده", "", body, flags=re.I)
     body = re.sub(
-        r"(\d+\s*دقیقه\s*(ی\s*)?(دیگر|دیگه)|\d+\s*ساعت\s*(ی\s*)?(دیگر|دیگه)|"
-        r"فردا|پس\s*فردا|امروز|ساعت\s*\d{1,2}(?:[:：]\d{2})?|"
-        r"هر\s*روز|روزانه|هر\s*هفته|هفتگی|هر\s*ماه|ماهانه|هر\s*\d+\s*دقیقه|هر\s*\d+\s*ساعت|"
-        r"daily|weekly|monthly)",
-        "",
-        body,
-        flags=re.I,
+        r"(?:\d+\s*دقیقه\s*(?:دیگه|دیگر)|\d+\s*ساعت\s*(?:دیگه|دیگر)|فردا|پس\s*فردا|امروز|ساعت\s*\d{1,2}(?:\s*[:：]\s*\d{1,2})?|هر\s*روز|روزانه|هر\s*هفته|هفتگی|هر\s*ماه|ماهانه|هر\s*\d+\s*دقیقه|هر\s*\d+\s*ساعت|daily|weekly|monthly)",
+        "", body, flags=re.I,
     )
-    body = re.sub(r"\s+", " ", body).strip(" :、-")
-    if not body:
-        body = "یادآوری"
-    return body[:200], when, repeat_type, int(repeat_every or 0)
+    body = re.sub(r"\s+", " ", body).strip(" :،,-") or "یادآوری"
+    return body[:200], when, repeat_type, repeat_every
 
 
 # ── OCR فیش (پرامپت تقویت‌شده) ─────────────────────────────────────────────

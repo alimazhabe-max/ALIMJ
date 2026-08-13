@@ -21,7 +21,7 @@
             "required": ["arg1"],
         },
         handler=my_feature,  # sync یا async هر دو OK
-        keywords=[r"کلمه\s*کلیدی"],  # اختیاری برای مدل‌های بدون tool
+        keywords=["کلمه کلیدی"],  # اختیاری برای مدل‌های بدون tool
     )
 
 بعد از import شدن آن ماژول، ابزار در TOOL_DEFINITIONS ظاهر می‌شود.
@@ -116,25 +116,36 @@ async def execute_tool(name: str, arguments: dict, *, user_id: int = 0) -> str:
 
 
 async def gather_context_for_prompt(user_id: int, prompt: str) -> str:
-    """برای مدل‌های بدون tool calling: با کلیدواژه، ابزار مرتبط را اجرا کن."""
+    """
+    Compatibility fallback for providers that do not support function calling.
+
+    IMPORTANT: never execute a tool that has required arguments with ``{}``.
+    That old behaviour could silently call tools with invalid parameters and
+    inject unrelated data into the prompt. Only zero-argument tools are safe
+    to prefetch here. Providers with native function calling should use the
+    registry directly instead.
+    """
     text = (prompt or "").strip()
     if not text:
         return ""
 
     chunks: List[str] = []
     used = set()
-
     for name, entry in _REGISTRY.items():
         if name in used:
             continue
         kws = entry.get("keywords") or []
         if not kws:
             continue
+        params = entry.get("parameters") or {}
+        required = params.get("required") or []
+        if required:
+            continue
         for kw in kws:
             try:
                 if re.search(kw, text, re.I):
                     result = await execute_tool(name, {}, user_id=user_id)
-                    if result and not str(result).startswith("خطا"):
+                    if result and not str(result).startswith("خطا") and not str(result).startswith("ابزار ناشناخته"):
                         chunks.append(f"[{name}]\n{result}")
                         used.add(name)
                     break
@@ -148,25 +159,6 @@ async def gather_context_for_prompt(user_id: int, prompt: str) -> str:
         + "\n---\n".join(chunks[:6])
     )
 
-
-
-def prompt_has_keyword_tool(prompt: str) -> bool:
-    """True when the prompt matches at least one registered keyword tool.
-
-    Used by streaming/fallback providers that cannot reliably perform native
-    function calling. It deliberately does not execute anything.
-    """
-    text = (prompt or "").strip()
-    if not text:
-        return False
-    for entry in _REGISTRY.values():
-        for kw in entry.get("keywords") or []:
-            try:
-                if re.search(kw, text, re.I):
-                    return True
-            except re.error:
-                continue
-    return False
 
 def list_registered_tools() -> List[str]:
     return sorted(_REGISTRY.keys())
@@ -445,9 +437,21 @@ async def _tool_web_search(query: str = "") -> str:
     return await web_search(query)
 
 
-def _tool_reminder(text: str = "", remind_at: str = "", user_id: int = 0) -> str:
+def _tool_reminder(
+    text: str = "",
+    remind_at: str = "",
+    repeat_type: str = "once",
+    repeat_every: int = 0,
+    user_id: int = 0,
+) -> str:
     from bot.database import add_reminder
-    add_reminder(user_id, text, remind_at)
+    repeat_type = repeat_type or "once"
+    repeat_every = max(0, int(repeat_every or 0))
+    add_reminder(
+        user_id, text, remind_at,
+        repeat_type=repeat_type,
+        repeat_every=repeat_every,
+    )
     return f"یادآوری ثبت شد: {text} در {remind_at}"
 
 def _register_builtin_tools() -> None:
@@ -786,6 +790,11 @@ def _register_builtin_tools() -> None:
             "properties": {
                 "text": {"type": "string"},
                 "remind_at": {"type": "string", "description": "ISO datetime"},
+                "repeat_type": {
+                    "type": "string",
+                    "enum": ["once", "daily", "weekly", "monthly", "every_minutes", "every_hours"],
+                },
+                "repeat_every": {"type": "integer", "minimum": 0},
             },
             "required": ["text", "remind_at"],
         },
