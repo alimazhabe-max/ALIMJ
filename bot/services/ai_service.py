@@ -57,6 +57,8 @@ _HISTORY: Dict[int, Deque[Tuple[str, str]]] = defaultdict(
 _LOCKS: Dict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
 # (provider, model) — model="*" یعنی همه مدل‌های اون ارائه‌دهنده
 _USER_SELECTION: Dict[int, Tuple[str, str]] = {}
+# کاربران در حال خلاصه‌سازی؛ از ساخت چند task همزمان جلوگیری می‌کند.
+_SUMMARY_RUNNING: set[int] = set()
 
 # کلاینت HTTP مشترک برای اتصال مجدد و سرعت بیشتر
 _HTTP: Optional[httpx.AsyncClient] = None
@@ -71,6 +73,13 @@ def _get_http() -> httpx.AsyncClient:
             http2=False,
         )
     return _HTTP
+
+async def close_http() -> None:
+    """بستن کلاینت HTTP در shutdown ربات."""
+    global _HTTP
+    if _HTTP is not None and not _HTTP.is_closed:
+        await _HTTP.aclose()
+    _HTTP = None
 
 # ── Key Pool: چند کلید + چرخش وقتی یکی تمام شد ─────────────────────────────
 # key_id -> cooldown_until (unix timestamp)
@@ -234,10 +243,10 @@ def available_model_options() -> List[Tuple[str, str, str]]:
 
     if _provider_keys("gemini"):
         items = []
-        # flash-lite اول = سریع‌تر
+        # مدل‌های پایدار جدید؛ Lite برای سرعت، 3.6 برای کیفیت
         for model in _env_models(
             "GEMINI_MODELS",
-            ["gemini-3.1-flash-lite", "gemini-3.5-flash"],
+            ["gemini-3.5-flash-lite", "gemini-3.6-flash", "gemini-3.1-flash-lite"],
         ):
             label = "Gemini • " + model.replace("gemini-", "Gemini ")
             items.append(("gemini", label, model))
@@ -423,26 +432,27 @@ def _extract_and_store_memory(user_id: int, prompt: str) -> None:
 
 
 async def _maybe_summarize_history(user_id: int) -> None:
-    """وقتی تاریخچه پر شد، خلاصه خودکار بساز و قدیمی‌ها را سبک کن."""
+    """وقتی تاریخچه پر شد، یک‌بار خلاصه می‌سازد و بخش قدیمی را سبک می‌کند."""
     history = _HISTORY[user_id]
-    if len(history) < HISTORY_ITEMS:
+    if len(history) < HISTORY_ITEMS or user_id in _SUMMARY_RUNNING:
         return
-    # ساخت متن خلاصه از کل تاریخچه فعلی
-    lines = []
-    for role, content in list(history):
-        tag = "کاربر" if role == "user" else "دستیار"
-        lines.append(f"{tag}: {content[:400]}")
-    blob = "\n".join(lines)[:3500]
-    summary_prompt = (
-        "این گفتگو را در حداکثر ۸ خط فارسی خلاصه کن. "
-        "حقایق مهم درباره کاربر، تصمیم‌ها و موضوعات اصلی را نگه دار:\n\n" + blob
-    )
+
+    _SUMMARY_RUNNING.add(user_id)
     try:
-        # از یک مدل سریع بدون ابزار
+        snapshot = list(history)
+        lines = []
+        for role, content in snapshot:
+            tag = "کاربر" if role == "user" else "دستیار"
+            lines.append(f"{tag}: {content[:500]}")
+        blob = "\n".join(lines)[:5000]
+        summary_prompt = (
+            "این گفتگو را در حداکثر ۸ خط فارسی خلاصه کن. "
+            "حقایق مهم درباره کاربر، تصمیم‌ها و موضوعات اصلی را نگه دار:\n\n" + blob
+        )
+
         summary = None
-        for provider, _label, model in available_model_options()[:3]:
+        for provider, _label, model in available_model_options():
             try:
-                # مستقیم بدون تاریخچه کاربر
                 if provider == "groq":
                     summary = await _openai_compatible(
                         "Groq", "groq", 0, summary_prompt,
@@ -452,24 +462,28 @@ async def _maybe_summarize_history(user_id: int) -> None:
                         use_tools=False,
                     )
                 elif provider == "gemini":
-                    summary = await _gemini(0, summary_prompt, model)
+                    summary = await _gemini(0, summary_prompt, model, use_tools=False)
                 else:
                     continue
                 if summary:
                     break
             except Exception:
                 continue
+
         if summary:
             from bot.database import get_ai_history_summary, set_ai_history_summary
             prev = get_ai_history_summary(user_id) or ""
             merged = (prev + "\n" + summary).strip() if prev else summary
             set_ai_history_summary(user_id, merged[-3500:])
-            # نصف تاریخچه را خالی کن (قدیمی‌ها)
+
+            # نصف جدیدتر تاریخچه را نگه می‌داریم.
             keep = max(2, HISTORY_ITEMS // 2)
             while len(history) > keep:
                 history.popleft()
     except Exception as e:
         logger.warning("auto summarize failed: %s", e)
+    finally:
+        _SUMMARY_RUNNING.discard(user_id)
 
 
 def _messages(user_id: int, prompt: str) -> List[dict]:
@@ -533,60 +547,152 @@ def _extract_openai(data: dict) -> str:
 
 # ── Provider callers with key rotation ──────────────────────────────────────
 
-async def _gemini(user_id: int, prompt: str, model: str) -> str:
+async def _gemini(
+    user_id: int,
+    prompt: str,
+    model: str,
+    *,
+    use_tools: bool = True,
+    max_tool_rounds: int = 2,
+) -> str:
+    """
+    Gemini REST caller with real function-calling support.
+
+    نسخه قبلی فقط برای Gemini از keyword injection استفاده می‌کرد، در حالی که
+    registry ابزارها برای OpenAI-compatibleها واقعاً اجرا می‌شد. این نسخه هر دو
+    مسیر را دارد: function calling واقعی + دادهٔ زندهٔ keyword-based به‌عنوان fallback.
+    """
     keys = _next_keys("gemini")
     if not keys:
         raise RuntimeError("هیچ کلید Gemini تنظیم نشده")
 
+    from bot.services.ai_tools import get_tool_definitions, execute_tool, parse_tool_arguments
+
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+
     contents = []
     for role, content in _HISTORY[user_id]:
-        contents.append(
-            {
-                "role": "model" if role == "assistant" else "user",
-                "parts": [{"text": content}],
-            }
-        )
+        contents.append({
+            "role": "model" if role == "assistant" else "user",
+            "parts": [{"text": content}],
+        })
     contents.append({"role": "user", "parts": [{"text": prompt}]})
-    payload = {
-        "systemInstruction": {"parts": [{"text": SYSTEM_PROMPT}]},
-        "contents": contents,
-        "generationConfig": {"maxOutputTokens": MAX_OUTPUT},
-    }
+
+    # OpenAI-style registry -> Gemini functionDeclarations
+    gemini_tools = []
+    if use_tools:
+        declarations = []
+        for tool in get_tool_definitions():
+            fn = tool.get("function") or {}
+            if fn.get("name"):
+                declarations.append({
+                    "name": fn["name"],
+                    "description": fn.get("description", ""),
+                    "parameters": fn.get(
+                        "parameters",
+                        {"type": "object", "properties": {}},
+                    ),
+                })
+        if declarations:
+            gemini_tools = [{"functionDeclarations": declarations}]
 
     errors = []
     for key in keys:
         try:
-            status, data = await _post_json(url, params={"key": key}, json=payload)
-            if status >= 400:
-                if _is_quota_error(status, data):
-                    daily = status != 429 or "daily" in str(data).lower() or "quota" in str(data).lower()
-                    _mark_key_cooldown("gemini", key, daily=daily)
-                    errors.append(f"{_key_id('gemini', key)} HTTP {status}")
-                    continue
-                raise RuntimeError(f"Gemini HTTP {status}: {str(data)[:900]}")
+            working_contents = list(contents)
 
-            try:
-                parts = data["candidates"][0]["content"]["parts"]
-                text = "".join(p.get("text", "") for p in parts).strip()
-            except Exception:
-                raise RuntimeError(f"Gemini unexpected response: {str(data)[:900]}")
+            for _round in range(max_tool_rounds + 1 if use_tools else 1):
+                payload = {
+                    "systemInstruction": {"parts": [{"text": SYSTEM_PROMPT}]},
+                    "contents": working_contents,
+                    "generationConfig": {"maxOutputTokens": MAX_OUTPUT},
+                }
+                if gemini_tools and _round < max_tool_rounds:
+                    payload["tools"] = gemini_tools
 
-            if not text:
-                raise RuntimeError("Gemini returned an empty answer")
+                status, data = await _post_json(
+                    url, params={"key": key}, json=payload
+                )
 
-            _advance_rr("gemini")
-            return text
+                if status >= 400:
+                    if _is_quota_error(status, data):
+                        text = str(data).lower()
+                        daily = status == 403 or "daily" in text or "quota" in text
+                        _mark_key_cooldown("gemini", key, daily=daily)
+                        errors.append(f"{_key_id('gemini', key)} HTTP {status}")
+                        break
+                    raise RuntimeError(
+                        f"Gemini HTTP {status}: {str(data)[:900]}"
+                    )
+
+                candidates = data.get("candidates") or []
+                if not candidates:
+                    raise RuntimeError(
+                        f"Gemini پاسخ خالی داد: {str(data)[:900]}"
+                    )
+
+                content = candidates[0].get("content") or {}
+                parts = content.get("parts") or []
+
+                function_calls = [
+                    p.get("functionCall") or p.get("function_call")
+                    for p in parts
+                    if p.get("functionCall") or p.get("function_call")
+                ]
+
+                if function_calls and use_tools and _round < max_tool_rounds:
+                    # پاسخ مدل را عیناً به history موقت اضافه کن.
+                    working_contents.append({
+                        "role": "model",
+                        "parts": parts,
+                    })
+
+                    response_parts = []
+                    for call in function_calls:
+                        name = call.get("name") or ""
+                        args = call.get("args") or call.get("arguments") or {}
+                        args = parse_tool_arguments(args)
+                        result = await execute_tool(
+                            name, args, user_id=user_id
+                        )
+                        response_parts.append({
+                            "functionResponse": {
+                                "name": name,
+                                "response": {"result": result},
+                            }
+                        })
+
+                    if response_parts:
+                        working_contents.append({
+                            "role": "user",
+                            "parts": response_parts,
+                        })
+                        continue
+
+                text = "".join(
+                    p.get("text", "")
+                    for p in parts
+                    if isinstance(p, dict)
+                ).strip()
+
+                if not text:
+                    raise RuntimeError(
+                        f"Gemini پاسخ متنی خالی داد: {str(data)[:700]}"
+                    )
+
+                _advance_rr("gemini")
+                return text
+
         except RuntimeError as exc:
-            if "HTTP" in str(exc) and any(x in str(exc) for x in ("429", "403", "quota")):
-                _mark_key_cooldown("gemini", key, daily=True)
-                errors.append(str(exc)[:200])
-                continue
-            # خطای غیرسهمیه: همان کلید را رد کن ولی cooldown نزن
-            errors.append(str(exc)[:200])
+            errors.append(str(exc)[:300])
+            continue
+        except Exception as exc:
+            errors.append(str(exc)[:300])
             continue
 
-    raise RuntimeError("همه کلیدهای Gemini تمام/خطا: " + " | ".join(errors[:5]))
+    raise RuntimeError(
+        "همه کلیدهای Gemini تمام/خطا: " + " | ".join(errors[:5])
+    )
 
 
 async def _openai_compatible(
@@ -1874,14 +1980,17 @@ async def ask_ai(user_id: int, prompt: str) -> tuple[str, str]:
         # ۱) اگر کاربر ارائه‌دهنده انتخاب کرده → همه مدل‌های همان ارائه‌دهنده
         if selected:
             provider, model = selected
+            available_for_selected = _models_of(provider)
             if model == "*" or model is None:
-                ordered.extend(_models_of(provider))
+                ordered.extend(available_for_selected)
             else:
-                # مدل خاص انتخاب شده بود — اول همون، بعد بقیه مدل‌های همون provider
-                ordered.append((provider, model))
-                for item in _models_of(provider):
-                    if item not in ordered:
-                        ordered.append(item)
+                # اگر مدل قدیمی حذف شده باشد، آن را کورکورانه صدا نزن؛
+                # اول نزدیک‌ترین مدل فعال همان provider را امتحان کن.
+                if (provider, model) in available_for_selected:
+                    ordered.append((provider, model))
+                ordered.extend(
+                    item for item in available_for_selected if item not in ordered
+                )
 
         # ۲) بقیه ارائه‌دهنده‌ها (fallback) به ترتیب پیش‌فرض
         for provider, _label, model in options:
