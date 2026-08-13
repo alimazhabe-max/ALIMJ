@@ -231,7 +231,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try:
                 await context.bot.send_message(
                     chat_id=query.message.chat_id,
-                    text="⬇️",
+                    text="",
                     reply_markup=get_main_keyboard(),
                 )
             except Exception:
