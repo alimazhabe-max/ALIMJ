@@ -136,25 +136,69 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # بروزرسانی = ویرایش همان پیام
     if data == "refresh_main":
-        first_name = get_user(user_id)[1] if get_user(user_id) else "کاربر"
-        city = get_user_city(user_id)
-        message = await build_message(user_id, first_name, city)
-        await query.edit_message_text(message, reply_markup=get_refresh_button())
-        context.user_data["last_main_msg_id"] = query.message.message_id
-        set_last_main_msg_id(user_id, query.message.message_id)
+        try:
+            user_row = get_user(user_id)
+            first_name = (user_row[1] if user_row and user_row[1] else None) or "کاربر"
+            city = get_user_city(user_id) or "قم"
+            message = await build_message(user_id, first_name, city)
+            if len(message) > 4000:
+                message = message[:3990] + "\n…"
+            await query.edit_message_text(message, reply_markup=get_refresh_button())
+            context.user_data["last_main_msg_id"] = query.message.message_id
+            set_last_main_msg_id(user_id, query.message.message_id)
+        except Exception as e:
+            from bot.logger import logger
+            logger.error(f"refresh_main error: {e}", exc_info=True)
+            try:
+                await query.edit_message_text(
+                    "⚠️ موقتاً اطلاعات کامل در دسترس نیست. چند ثانیه بعد «بروزرسانی» را بزنید.",
+                    reply_markup=get_refresh_button(),
+                )
+            except Exception:
+                await query.message.reply_text(
+                    "⚠️ موقتاً مشکلی پیش آمد. چند ثانیه بعد دوباره امتحان کنید."
+                )
         return
 
     if data == "back_to_main":
-        first_name = get_user(user_id)[1] if get_user(user_id) else "کاربر"
-        city = get_user_city(user_id)
-        message = await build_message(user_id, first_name, city)
-        msg = await query.message.reply_text(message, reply_markup=get_refresh_button())
-        context.user_data["last_main_msg_id"] = msg.message_id
-        set_last_main_msg_id(user_id, msg.message_id)
         try:
-            await query.message.delete()
-        except Exception:
-            pass
+            user_row = get_user(user_id)
+            first_name = (user_row[1] if user_row and user_row[1] else None) or "کاربر"
+            city = get_user_city(user_id) or "قم"
+            message = await build_message(user_id, first_name, city)
+            if len(message) > 4000:
+                message = message[:3990] + "\n…"
+            # مثل refresh: همان پیام را ویرایش کن (پایدارتر از reply+delete)
+            try:
+                await query.edit_message_text(message, reply_markup=get_refresh_button())
+                context.user_data["last_main_msg_id"] = query.message.message_id
+                set_last_main_msg_id(user_id, query.message.message_id)
+            except Exception:
+                # اگر edit نشد (مثلاً پیام خیلی قدیمی)، پیام جدید بفرست
+                msg = await query.message.reply_text(
+                    message, reply_markup=get_refresh_button()
+                )
+                context.user_data["last_main_msg_id"] = msg.message_id
+                set_last_main_msg_id(user_id, msg.message_id)
+                try:
+                    await query.message.delete()
+                except Exception:
+                    pass
+            # کیبورد اصلی پایین صفحه را هم برگردان
+            try:
+                await query.message.reply_text("⬇️", reply_markup=get_main_keyboard())
+            except Exception:
+                pass
+        except Exception as e:
+            from bot.logger import logger
+            logger.error(f"back_to_main error: {e}", exc_info=True)
+            try:
+                await query.message.reply_text(
+                    "⚠️ موقتاً مشکلی پیش آمد. چند ثانیه بعد دوباره امتحان کنید.\n"
+                    "یا دستور /start را بفرستید."
+                )
+            except Exception:
+                pass
         return
 
     if data == "calendar_today":
