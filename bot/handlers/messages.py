@@ -46,6 +46,7 @@ from bot.services.ai_service import (
     looks_like_image_request, looks_like_image_edit,
     text_to_speech, wants_voice_reply, strip_voice_prefix, speech_to_text,
     analyze_voice_emotion, wants_emotion_analysis, should_auto_voice_reply,
+    wants_voice_chat_mode, wants_end_voice_chat,
 )
 
 
@@ -75,6 +76,25 @@ async def _keep_typing(bot, chat_id, stop_event):
         except Exception:
             pass
 
+
+
+
+def _apply_voice_chat_flags(context, text: str) -> str | None:
+    """
+    فعال/غیرفعال کردن حالت مکالمه ویسی.
+    پیام تأیید برای کاربر برمی‌گرداند یا None.
+    """
+    if wants_end_voice_chat(text):
+        context.user_data["ai_voice_chat"] = False
+        return "📝 حالت ویس خاموش شد. از این به بعد جواب‌ها بیشتر متنی است."
+    if wants_voice_chat_mode(text):
+        context.user_data["ai_voice_chat"] = True
+        return (
+            "🎙️ حالت مکالمه ویسی روشن شد.\n"
+            "هر چی بگی (متن یا ویس) سعی می‌کنم با صدا جواب بدم.\n"
+            "برای خاموش کردن بگو: «قطع ویس» یا «فقط متن»."
+        )
+    return None
 
 
 async def _send_ai_voice(update_or_msg, text: str, user_id: int, reply_markup=None):
@@ -221,15 +241,38 @@ async def _text_handler_inner(update: Update, context: ContextTypes.DEFAULT_TYPE
                         except Exception:
                             pass
                     return
-                voice_mode = wants_voice_reply(text)
-                ask_text = strip_voice_prefix(text) if voice_mode else text
+                mode_msg = _apply_voice_chat_flags(context, text)
+                if mode_msg:
+                    await update.message.reply_text(
+                        mode_msg, reply_markup=get_ai_keyboard(user_id)
+                    )
+                voice_mode = wants_voice_reply(text) or bool(
+                    context.user_data.get("ai_voice_chat")
+                )
+                ask_text = strip_voice_prefix(text) if wants_voice_reply(text) else text
+                # اگر فقط روشن کردن حالت ویس بود و سؤال دیگری نبود، لازم نیست AI سنگین
+                if mode_msg and wants_voice_chat_mode(text) and len(ask_text) < 40:
+                    try:
+                        await _send_ai_voice(
+                            update,
+                            "باشه، با ویس حرف می‌زنیم. هر وقت خواستی بگو.",
+                            user_id,
+                            reply_markup=get_ai_keyboard(user_id),
+                        )
+                    except Exception:
+                        pass
+                    return
                 answer, provider = await _ask_ai_with_typing(
                     update, context, user_id, ask_text
                 )
                 await update.message.reply_text(f"🤖 {answer}")
-                explicit = voice_mode
+                explicit = wants_voice_reply(text)
                 if should_auto_voice_reply(
-                    ask_text, answer, input_was_voice=False, explicit_voice=explicit
+                    ask_text,
+                    answer,
+                    input_was_voice=False,
+                    explicit_voice=explicit,
+                    voice_chat_mode=bool(context.user_data.get("ai_voice_chat")),
                 ):
                     try:
                         await _send_ai_voice(
@@ -985,7 +1028,38 @@ async def voice_ai_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 from bot.logger import logger
                 logger.warning("emotion detect failed: %s", ee)
 
-        explicit_voice = wants_voice_reply(caption) if caption else False
+        # حالت مکالمه ویسی از روی متن ویس یا کپشن
+        combined_for_mode = ((caption or "") + " " + (transcript or "")).strip()
+        mode_msg = _apply_voice_chat_flags(context, combined_for_mode)
+        if mode_msg:
+            await msg.reply_text(mode_msg, reply_markup=get_ai_keyboard(user_id))
+
+        # ورودی ویس به خودی خود مکالمه را به سمت ویس می‌برد
+        if not context.user_data.get("ai_voice_chat"):
+            # اگر گفت ویس حرف بزنیم یا کلاً ویس فرستاد برای گپ، حالت را نرم روشن کن
+            if wants_voice_chat_mode(combined_for_mode):
+                context.user_data["ai_voice_chat"] = True
+
+        explicit_voice = bool(
+            wants_voice_reply(caption or "")
+            or wants_voice_reply(transcript or "")
+            or context.user_data.get("ai_always_voice")
+        )
+        voice_chat = bool(context.user_data.get("ai_voice_chat"))
+
+        # اگر فقط درخواست شروع حالت ویس بود
+        if mode_msg and wants_voice_chat_mode(combined_for_mode) and len(transcript) < 50:
+            try:
+                await _send_ai_voice(
+                    msg,
+                    "باشه، با ویس حرف می‌زنیم. هر وقت خواستی بگو.",
+                    user_id,
+                    reply_markup=get_ai_keyboard(user_id),
+                )
+            except Exception as ve:
+                await msg.reply_text(f"⚠️ {ve}")
+            return
+
         answer, provider = await _ask_ai_with_typing(
             update, context, user_id, user_text
         )
@@ -997,7 +1071,8 @@ async def voice_ai_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             user_text,
             answer,
             input_was_voice=True,
-            explicit_voice=explicit_voice or context.user_data.get("ai_always_voice"),
+            explicit_voice=explicit_voice,
+            voice_chat_mode=voice_chat or True,  # ویس ورودی → پیش‌فرض ویس خروجی
         ):
             try:
                 await _send_ai_voice(
