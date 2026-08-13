@@ -160,11 +160,39 @@ def get_main_keyboard():
         [
             [KeyboardButton("🏙 انتخاب شهر"), KeyboardButton("📅 تقویم")],
             [KeyboardButton("🌍 زبان"), KeyboardButton("➕ بیشتر")],
+            [KeyboardButton("🤖 دستیار هوشمند")],
         ],
         resize_keyboard=True,
         one_time_keyboard=False,
         input_field_placeholder="پیام بنویسید یا از دکمه‌ها استفاده کنید...",
     )
+
+
+def get_ai_keyboard(user_id=None):
+    """دکمه‌های شیشه‌ای زیر پیام AI: انتخاب مدل و پاک‌کردن حافظه."""
+    from bot.services.ai_service import get_selected_model
+    selected = get_selected_model(user_id) if user_id is not None else None
+    selected_text = "🎛 انتخاب مدل"
+    if selected:
+        selected_text = f"🎛 مدل: {selected[1]}"
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(selected_text, callback_data="ai_models")],
+        [InlineKeyboardButton("🧹 پاک کردن حافظه", callback_data="ai_clear_memory")],
+    ])
+
+
+def get_ai_model_keyboard(user_id=None):
+    """لیست مدل‌های قابل انتخاب توسط کاربر."""
+    from bot.services.ai_service import available_model_options, get_selected_model
+    selected = get_selected_model(user_id) if user_id is not None else None
+    rows = []
+    for index, (provider, label, model) in enumerate(available_model_options()):
+        mark = "✅ " if selected == (provider, model) else ""
+        rows.append([InlineKeyboardButton(f"{mark}{label}", callback_data=f"ai_model:{index}")])
+    if not rows:
+        rows.append([InlineKeyboardButton("❌ مدلی تنظیم نشده", callback_data="ai_noop")])
+    rows.append([InlineKeyboardButton("↩️ برگشت", callback_data="ai_models_back")])
+    return InlineKeyboardMarkup(rows)
 
 
 def get_more_keyboard():
@@ -174,7 +202,6 @@ def get_more_keyboard():
             [KeyboardButton("💰 بازار"), KeyboardButton("🌤 هوا و مکان")],
             [KeyboardButton("🛠 ابزارها"), KeyboardButton("🎮 سرگرمی")],
             [KeyboardButton("🎨 فونت"), KeyboardButton("👤 پروفایل")],
-            [KeyboardButton("🤖 دستیار هوشمند")],
             [KeyboardButton("🔙 بازگشت")],
         ],
         resize_keyboard=True,
