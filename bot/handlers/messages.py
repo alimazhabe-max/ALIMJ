@@ -343,14 +343,12 @@ async def _text_handler_inner(update: Update, context: ContextTypes.DEFAULT_TYPE
             else:
                 # repeat the AI entry prompt
                 providers = enabled_providers()
+                provider_text = "، ".join(providers) if providers else "هیچ سرویس فعالی ندارد"
                 await update.message.reply_text(
                     "🤖 دستیار هوشمند روز زیبا\n\n"
-                    f"سرویس‌های فعال: {', '.join(providers) if providers else 'هیچ‌کدام'}\n"
-                    "مدل دلخواهت را از دکمه «🎛 انتخاب مدل» انتخاب کن.\n"
-                    "متن، عکس یا فایل بفرست.\n"
-                    "«تصویر بساز …» → ساخت تصویر\n"
-                    "عکس + کپشن ویرایش → ویرایش تصویر\n"
-                    "ویس بفرست → جواب هوشمند (گاهی با صدا)\n«با ویس ...» یا جواب کوتاه محاوره‌ای → ویس\nکپشن ویس: «تشخیص احساس» → تحلیل احساس\n«بخون: متن» → فقط ویس\nبرای خروج «🔙 بازگشت» را بزن.",
+                    "پیامت را بفرست تا به هوش مصنوعی ارسال شود.\n"
+                    f"سرویس‌های فعال: {provider_text}\n\n"
+                    "مدل دلخواهت را از «🎛 انتخاب مدل» انتخاب کن.",
                     reply_markup=get_ai_keyboard(user_id),
                 )
                 return
@@ -505,8 +503,7 @@ async def _text_handler_inner(update: Update, context: ContextTypes.DEFAULT_TYPE
             "🤖 دستیار هوشمند روز زیبا\n\n"
             "پیامت را بفرست تا به هوش مصنوعی ارسال شود.\n"
             f"سرویس‌های فعال: {provider_text}\n\n"
-            "مدل دلخواهت را از «🎛 انتخاب مدل» انتخاب کن.\n"
-            " ",
+            "مدل دلخواهت را از «🎛 انتخاب مدل» انتخاب کن.",
             reply_markup=get_ai_keyboard(user_id),
         )
         return
@@ -1280,7 +1277,7 @@ async def voice_ai_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             answer,
             input_was_voice=True,
             explicit_voice=explicit_voice,
-            voice_chat_mode=voice_chat or True,  # ویس ورودی → پیش‌فرض ویس خروجی
+            voice_chat_mode=bool(voice_chat),  # فقط اگر حالت ویس روشن باشد
         ):
             try:
                 await _send_ai_voice(
