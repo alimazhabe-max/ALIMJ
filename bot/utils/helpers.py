@@ -172,14 +172,14 @@ def get_ai_keyboard(user_id=None):
     """دکمه‌های شیشه‌ای زیر پیام AI: انتخاب ارائه‌دهنده و پاک‌کردن حافظه."""
     from bot.services.ai_service import get_selected_model, _PROVIDER_PRETTY
     selected = get_selected_model(user_id) if user_id is not None else None
-    selected_text = "🎛 انتخاب هوش مصنوعی"
+    selected_text = "🎛 انتخاب مدل AI"
     if selected:
         provider = selected[0]
         pretty = _PROVIDER_PRETTY.get(provider, provider)
         selected_text = f"🎛 فعال: {pretty}"
     return InlineKeyboardMarkup([
         [InlineKeyboardButton(selected_text, callback_data="ai_models")],
-        [InlineKeyboardButton("🧹 پاک کردن حافظه", callback_data="ai_clear_memory")],
+        [InlineKeyboardButton("🧹 حذف حافظه", callback_data="ai_clear_memory")],
     ])
 
 
