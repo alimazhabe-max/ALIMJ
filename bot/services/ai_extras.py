@@ -104,6 +104,8 @@ def parse_chart_request(text: str) -> Optional[Tuple[str, List[str], List[float]
     مثال: نمودار میله‌ای قیمت: دلار 60000، یورو 65000
     """
     t = (text or "").strip()
+    # normalize Persian/Arabic digits so regexes behave consistently
+    t = t.translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789"))
     if not re.search(r"نمودار|chart|گراف", t, re.I):
         return None
     ctype = "bar"
@@ -266,7 +268,7 @@ def parse_natural_reminder(text: str) -> Optional[Tuple[str, datetime, str, int]
         return None
 
     body = t
-    body = re.sub(r"یادآوری(\s*کن)?|یادم\s*بیار|ریمایندر|آلارم", "", body, flags=re.I)
+    body = re.sub(r"یادآوری(\s*کن)?|یادم\s*(?:بیار|باشه)|ریمایندر|آلارم", "", body, flags=re.I)
     body = re.sub(
         r"(\d+\s*دقیقه\s*(ی\s*)?(دیگر|دیگه)|\d+\s*ساعت\s*(ی\s*)?(دیگر|دیگه)|"
         r"فردا|پس\s*فردا|امروز|ساعت\s*\d{1,2}(?:[:：]\d{2})?|"

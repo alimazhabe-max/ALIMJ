@@ -149,6 +149,25 @@ async def gather_context_for_prompt(user_id: int, prompt: str) -> str:
     )
 
 
+
+def prompt_has_keyword_tool(prompt: str) -> bool:
+    """True when the prompt matches at least one registered keyword tool.
+
+    Used by streaming/fallback providers that cannot reliably perform native
+    function calling. It deliberately does not execute anything.
+    """
+    text = (prompt or "").strip()
+    if not text:
+        return False
+    for entry in _REGISTRY.values():
+        for kw in entry.get("keywords") or []:
+            try:
+                if re.search(kw, text, re.I):
+                    return True
+            except re.error:
+                continue
+    return False
+
 def list_registered_tools() -> List[str]:
     return sorted(_REGISTRY.keys())
 

@@ -246,7 +246,7 @@ def available_model_options() -> List[Tuple[str, str, str]]:
         # مدل‌های پایدار جدید؛ Lite برای سرعت، 3.6 برای کیفیت
         for model in _env_models(
             "GEMINI_MODELS",
-            ["gemini-3.5-flash-lite", "gemini-3.6-flash", "gemini-3.1-flash-lite"],
+            ["gemini-3.6-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite"],
         ):
             label = "Gemini • " + model.replace("gemini-", "Gemini ")
             items.append(("gemini", label, model))
@@ -603,7 +603,7 @@ async def _gemini(
 
             for _round in range(max_tool_rounds + 1 if use_tools else 1):
                 payload = {
-                    "systemInstruction": {"parts": [{"text": SYSTEM_PROMPT}]},
+                    "systemInstruction": {"parts": [{"text": SYSTEM_PROMPT + (("\n\n" + _memory_block(user_id)) if _memory_block(user_id) else "")}]},
                     "contents": working_contents,
                     "generationConfig": {"maxOutputTokens": MAX_OUTPUT},
                 }
@@ -728,6 +728,7 @@ async def _openai_compatible(
         messages = _messages(user_id, prompt)
         # حداکثر ۲ دور tool calling تا گیر نکند
         max_tool_rounds = 2 if use_tools else 0
+        tools_enabled = bool(use_tools)
 
         try:
             for _round in range(max_tool_rounds + 1):
@@ -737,7 +738,7 @@ async def _openai_compatible(
                     "max_tokens": MAX_OUTPUT,
                     "temperature": 0.6,
                 }
-                if use_tools and _round < max_tool_rounds:
+                if tools_enabled and _round < max_tool_rounds:
                     tools = get_tool_definitions()
                     if tools:
                         payload["tools"] = tools
@@ -747,14 +748,23 @@ async def _openai_compatible(
                 if status >= 400:
                     # بعضی مدل‌ها tools را پشتیبانی نمی‌کنند → بدون tool دوباره امتحان
                     err_text = str(data).lower()
-                    if use_tools and (
+                    if tools_enabled and (
                         "tool" in err_text
                         or "function" in err_text
                         or status in (400, 422)
                     ):
-                        use_tools = False
+                        tools_enabled = False
                         payload.pop("tools", None)
                         payload.pop("tool_choice", None)
+                        try:
+                            from bot.services.ai_tools import gather_context_for_prompt
+                            extra = await gather_context_for_prompt(user_id, prompt)
+                            if extra:
+                                fallback_messages = _messages(user_id, prompt)
+                                fallback_messages[-1]["content"] = (prompt + extra)[:MAX_INPUT]
+                                payload["messages"] = fallback_messages
+                        except Exception:
+                            pass
                         status, data = await _post_json(
                             url, headers=headers, json=payload
                         )
@@ -781,7 +791,7 @@ async def _openai_compatible(
                 message = choices[0].get("message") or {}
                 tool_calls = message.get("tool_calls") or []
 
-                if tool_calls and use_tools:
+                if tool_calls and tools_enabled:
                     # پاسخ assistant با tool_calls را به تاریخچه اضافه کن
                     messages.append(message)
                     for tc in tool_calls:
@@ -852,6 +862,16 @@ async def _openrouter(user_id: int, prompt: str, model: str) -> str:
 
 
 async def _cloudflare(user_id: int, prompt: str, model: str) -> str:
+    # Cloudflare AI Run does not expose the same OpenAI tool-call contract here.
+    # For live-data questions, prefetch only matching keyword tools.
+    try:
+        from bot.services.ai_tools import prompt_has_keyword_tool, gather_context_for_prompt
+        if prompt_has_keyword_tool(prompt):
+            extra = await gather_context_for_prompt(user_id, prompt)
+            if extra:
+                prompt = (prompt + extra)[:MAX_INPUT]
+    except Exception as exc:
+        logger.warning("Cloudflare tool fallback failed: %s", exc)
     account = os.getenv("CLOUDFLARE_ACCOUNT_ID")
     if not account:
         raise RuntimeError("CLOUDFLARE_ACCOUNT_ID تنظیم نشده")
@@ -1390,7 +1410,7 @@ async def speech_to_text(
     # ۲) Gemini (ورودی audio)
     gemini_keys = _next_keys("gemini")
     if gemini_keys:
-        model = os.getenv("GEMINI_STT_MODEL", "gemini-3.1-flash-lite")
+        model = os.getenv("GEMINI_STT_MODEL", "gemini-3.5-flash-lite")
         url = (
             f"https://generativelanguage.googleapis.com/v1beta/models/"
             f"{model}:generateContent"
@@ -1466,7 +1486,7 @@ async def analyze_voice_emotion(
     if len(audio_bytes) > 4_500_000:
         audio_bytes = audio_bytes[:4_500_000]
 
-    model = os.getenv("GEMINI_EMOTION_MODEL", os.getenv("GEMINI_STT_MODEL", "gemini-3.1-flash-lite"))
+    model = os.getenv("GEMINI_EMOTION_MODEL", os.getenv("GEMINI_STT_MODEL", "gemini-3.5-flash-lite"))
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 
     prompt = (
@@ -1778,8 +1798,7 @@ async def generate_music(prompt: str) -> bytes:
     models = [
         os.getenv("GEMINI_MUSIC_MODEL", "").strip(),
         "lyria-3-clip-preview",
-        "lyria-realtime-preview",
-        "gemini-2.5-flash-preview-tts",
+        "lyria-3-pro-preview",
     ]
     models = [m for m in models if m]
     # حذف تکراری با حفظ ترتیب
@@ -1789,16 +1808,10 @@ async def generate_music(prompt: str) -> bytes:
     errors = []
     for model in models:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
-        payloads = [
-            {
-                "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-                "generationConfig": {"responseModalities": ["AUDIO"]},
-            },
-            {
-                "contents": [{"role": "user", "parts": [{"text": "Generate a short instrumental music clip: " + prompt}]}],
-                "generationConfig": {"responseModalities": ["AUDIO"]},
-            },
-        ]
+        payloads = [{
+            "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+            "generationConfig": {"responseModalities": ["AUDIO"]},
+        }]
         for key in keys:
             for payload in payloads:
                 try:
@@ -1840,7 +1853,7 @@ async def analyze_video(
     if len(video_bytes) > 15_000_000:
         raise RuntimeError("ویدیو خیلی بزرگ است (حد حدود ۱۵ مگ).")
 
-    model = os.getenv("GEMINI_VIDEO_MODEL", "gemini-3.1-flash-lite")
+    model = os.getenv("GEMINI_VIDEO_MODEL", "gemini-3.5-flash-lite")
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
     text = (prompt or "").strip() or (
         "این ویدیو کوتاه را خلاصه و تحلیل کن: موضوع، افراد/اشیاء مهم، "
@@ -1956,17 +1969,6 @@ async def ask_ai(user_id: int, prompt: str) -> tuple[str, str]:
         _extract_and_store_memory(user_id, original_prompt)
     except Exception:
         pass
-    # داده زنده از قابلیت‌های ربات را به پرامپت اضافه کن
-    try:
-        from bot.services.ai_tools import gather_context_for_prompt
-        extra = await gather_context_for_prompt(user_id, prompt)
-        if extra:
-            prompt = prompt + extra
-            if len(prompt) > MAX_INPUT:
-                prompt = prompt[:MAX_INPUT]
-    except Exception as e:
-        logger.warning("gather_context_for_prompt failed: %s", e)
-
     # ساخت لیست (provider, model) برای امتحان — سریع‌ترین‌ها اول
     def _models_of(provider: str) -> List[Tuple[str, str]]:
         return [(provider, m) for m in models_for_provider(provider)]
@@ -1981,6 +1983,8 @@ async def ask_ai(user_id: int, prompt: str) -> tuple[str, str]:
         if selected:
             provider, model = selected
             available_for_selected = _models_of(provider)
+            if not available_for_selected:
+                selected = None
             if model == "*" or model is None:
                 ordered.extend(available_for_selected)
             else:
@@ -2175,24 +2179,30 @@ async def ask_ai_stream(user_id: int, prompt: str):
         _extract_and_store_memory(user_id, original)
     except Exception:
         pass
-    try:
-        from bot.services.ai_tools import gather_context_for_prompt
-        extra = await gather_context_for_prompt(user_id, prompt)
-        if extra:
-            prompt = (prompt + extra)[:MAX_INPUT]
-    except Exception:
-        pass
-
     options = available_model_options()
     if not options:
         raise RuntimeError("هیچ سرویس AI تنظیم نشده")
+
+    # Streaming endpoints in this project intentionally do not execute function calls.
+    # For tool-intent prompts, use the authoritative non-stream path so live data is correct.
+    try:
+        from bot.services.ai_tools import prompt_has_keyword_tool
+        if prompt_has_keyword_tool(original):
+            answer, label = await ask_ai(user_id, original)
+            yield answer, None
+            yield None, label
+            return
+    except Exception:
+        pass
 
     async with _LOCKS[user_id]:
         selected = get_selected_model(user_id)
         ordered: List[Tuple[str, str]] = []
         if selected:
             provider, model = selected
-            if model == "*" or model is None:
+            if not models_for_provider(provider):
+                selected = None
+            elif model == "*" or model is None:
                 ordered.extend((provider, m) for m in models_for_provider(provider))
             else:
                 ordered.append((provider, model))
