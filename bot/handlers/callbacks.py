@@ -164,23 +164,20 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # ───────────────── بروزرسانی منوی اصلی ─────────────────
-    # فقط همان پیام ویرایش می‌شود؛ در صورت خطا پیام جدید ارسال نمی‌کنیم.
     if data == "refresh_main":
         from bot.logger import logger
 
         lock = _get_refresh_lock(user_id)
 
-        # اگر کاربر چند بار سریع روی بروزرسانی بزند، درخواست‌های همزمان
-        # باعث خطای MessageNotModified و در نسخه قبلی ایجاد پیام‌های تکراری می‌شد.
         if lock.locked():
             await _safe_answer(query, "⏳ بروزرسانی قبلی هنوز در حال انجام است.", show_alert=False)
             return
 
         async with lock:
-            try:
-                # بلافاصله به کاربر فیدبک بده تا حس کند دکمه کار کرده
-                await _safe_answer(query, "🔄 در حال بروزرسانی...", show_alert=False)
+            # ۱) فوری Toast — کاربر باید بفهمد دکمه کار کرده
+            await _safe_answer(query, "🔄 در حال بروزرسانی...", show_alert=False)
 
+            try:
                 user_row = get_user(user_id)
                 first_name = (
                     (user_row[1] if user_row and len(user_row) > 1 and user_row[1] else None)
@@ -192,51 +189,82 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if len(message) > 4000:
                     message = message[:3990] + "\n…"
 
-                current_text = getattr(query.message, "text", None) or ""
-                # مقایسه با نرمال‌سازی فاصله‌ها برای جلوگیری از false positive
-                if current_text.strip() == message.strip():
-                    # محتوا یکی است؛ فقط کیبورد را تازه می‌کنیم تا حس بروزرسانی بدهد
-                    try:
-                        await query.edit_message_reply_markup(reply_markup=get_refresh_button())
-                    except Exception:
-                        pass
-                    return
+                sent = False
+                chat_id = query.message.chat_id if query.message else update.effective_chat.id
 
-                await query.edit_message_text(
-                    text=message,
-                    reply_markup=get_refresh_button(),
-                )
-
-                context.user_data["last_main_msg_id"] = query.message.message_id
+                # ۲) ویرایش همان پیام
                 try:
-                    set_last_main_msg_id(user_id, query.message.message_id)
-                except Exception:
-                    pass
-
-            except BadRequest as e:
-                error_text = str(e).lower()
-
-                # خطای رایج تلگرام هنگام یکسان بودن متن/کیبورد.
-                if "message is not modified" in error_text or "not modified" in error_text:
+                    await query.edit_message_text(
+                        text=message,
+                        reply_markup=get_refresh_button(),
+                    )
+                    mid = query.message.message_id
+                    context.user_data["last_main_msg_id"] = mid
                     try:
-                        await query.edit_message_reply_markup(reply_markup=get_refresh_button())
+                        set_last_main_msg_id(user_id, mid)
                     except Exception:
                         pass
-                    return
+                    sent = True
+                except BadRequest as e:
+                    err = str(e).lower()
+                    if "message is not modified" in err or "not modified" in err:
+                        try:
+                            await query.edit_message_reply_markup(
+                                reply_markup=get_refresh_button()
+                            )
+                            sent = True
+                        except Exception:
+                            pass
+                    else:
+                        logger.warning("refresh_main edit BadRequest: %s", e)
+                except Exception as e:
+                    logger.warning("refresh_main edit failed: %s", e)
 
-                logger.error(
-                    "refresh_main Telegram error: %s",
-                    e,
-                    exc_info=True,
-                )
+                # ۳) اگر ویرایش نشد → پیام جدید
+                if not sent:
+                    try:
+                        msg = await context.bot.send_message(
+                            chat_id=chat_id,
+                            text=message,
+                            reply_markup=get_refresh_button(),
+                        )
+                        context.user_data["last_main_msg_id"] = msg.message_id
+                        try:
+                            set_last_main_msg_id(user_id, msg.message_id)
+                        except Exception:
+                            pass
+                        sent = True
+                        try:
+                            await query.message.delete()
+                        except Exception:
+                            pass
+                    except Exception as e:
+                        logger.error("refresh_main send failed: %s", e, exc_info=True)
+
+                if not sent:
+                    try:
+                        await context.bot.send_message(
+                            chat_id=chat_id,
+                            text="⚠️ بروزرسانی انجام نشد. لطفاً /start را بفرستید.",
+                        )
+                    except Exception:
+                        pass
 
             except Exception as e:
-                # خطا فقط در لاگ ثبت می‌شود و پیام جدیدی به کاربر ارسال نمی‌کنیم.
-                logger.error(
-                    "refresh_main error: %s",
-                    e,
-                    exc_info=True,
-                )
+                logger.error("refresh_main error: %s", e, exc_info=True)
+                try:
+                    chat_id = (
+                        query.message.chat_id
+                        if query.message
+                        else (update.effective_chat.id if update.effective_chat else None)
+                    )
+                    if chat_id:
+                        await context.bot.send_message(
+                            chat_id=chat_id,
+                            text="⚠️ بروزرسانی موقتاً ناموفق بود. چند ثانیه بعد دوباره بزنید یا /start بفرستید.",
+                        )
+                except Exception:
+                    pass
         return
 
     if data == "back_to_main":
