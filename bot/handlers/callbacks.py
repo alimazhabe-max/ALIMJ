@@ -1,4 +1,5 @@
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.error import BadRequest
 from telegram.ext import ContextTypes
 from bot.database import get_user, get_user_city, set_last_main_msg_id
 from bot.services.ai_service import (
@@ -10,13 +11,26 @@ from bot.services.ai_service import (
 from bot.utils.helpers import (
     build_message,
     get_refresh_button,
-    get_main_keyboard, get_ai_keyboard, get_ai_model_keyboard,
+    get_main_keyboard, get_more_keyboard, get_ai_keyboard, get_ai_model_keyboard,
     get_calendar_buttons,
     get_calendar_text,
 )
 from bot.api.calendar import get_today_tehran
 from bot.handlers.middleware import check_and_rate_limit
 import jdatetime
+import asyncio
+
+
+# جلوگیری از اجرای همزمان چند بروزرسانی برای یک کاربر
+_refresh_locks = {}
+
+
+def _get_refresh_lock(user_id: int):
+    lock = _refresh_locks.get(user_id)
+    if lock is None:
+        lock = asyncio.Lock()
+        _refresh_locks[user_id] = lock
+    return lock
 
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -134,29 +148,82 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.message.reply_text(f"⚠️ {e}")
         return
 
-    # بروزرسانی = ویرایش همان پیام
+    # ───────────────── بروزرسانی منوی اصلی ─────────────────
+    # فقط همان پیام ویرایش می‌شود؛ در صورت خطا پیام جدید ارسال نمی‌کنیم.
     if data == "refresh_main":
-        try:
-            user_row = get_user(user_id)
-            first_name = (user_row[1] if user_row and user_row[1] else None) or "کاربر"
-            city = get_user_city(user_id) or "قم"
-            message = await build_message(user_id, first_name, city)
-            if len(message) > 4000:
-                message = message[:3990] + "\n…"
-            await query.edit_message_text(message, reply_markup=get_refresh_button())
-            context.user_data["last_main_msg_id"] = query.message.message_id
-            set_last_main_msg_id(user_id, query.message.message_id)
-        except Exception as e:
-            from bot.logger import logger
-            logger.error(f"refresh_main error: {e}", exc_info=True)
+        from bot.logger import logger
+
+        lock = _get_refresh_lock(user_id)
+
+        # اگر کاربر چند بار سریع روی بروزرسانی بزند، درخواست‌های همزمان
+        # باعث خطای MessageNotModified و در نسخه قبلی ایجاد پیام‌های تکراری می‌شد.
+        if lock.locked():
+            await query.answer("⏳ بروزرسانی قبلی هنوز در حال انجام است.", show_alert=False)
+            return
+
+        async with lock:
             try:
+                user_row = get_user(user_id)
+                first_name = (
+                    (user_row[1] if user_row and len(user_row) > 1 and user_row[1] else None)
+                    or "کاربر"
+                )
+                city = get_user_city(user_id) or "قم"
+
+                message = await build_message(user_id, first_name, city)
+                if len(message) > 4000:
+                    message = message[:3990] + "\n…"
+
+                # اگر محتوا دقیقاً همان است، تلگرام edit_message_text را رد می‌کند.
+                # در این حالت فقط یک Toast نشان می‌دهیم و هیچ پیام جدیدی نمی‌فرستیم.
+                current_text = getattr(query.message, "text", None) or ""
+                if current_text == message:
+                    await query.answer("✅ اطلاعات همین حالا به‌روز است.", show_alert=False)
+                    return
+
                 await query.edit_message_text(
-                    "⚠️ موقتاً اطلاعات کامل در دسترس نیست. چند ثانیه بعد «بروزرسانی» را بزنید.",
+                    text=message,
                     reply_markup=get_refresh_button(),
                 )
-            except Exception:
-                await query.message.reply_text(
-                    "⚠️ موقتاً مشکلی پیش آمد. چند ثانیه بعد دوباره امتحان کنید."
+
+                context.user_data["last_main_msg_id"] = query.message.message_id
+                try:
+                    set_last_main_msg_id(user_id, query.message.message_id)
+                except Exception:
+                    pass
+
+                await query.answer("✅ بروزرسانی شد.", show_alert=False)
+
+            except BadRequest as e:
+                error_text = str(e).lower()
+
+                # خطای رایج تلگرام هنگام یکسان بودن متن/کیبورد.
+                # نباید پیام خطا به چت ارسال شود.
+                if "message is not modified" in error_text or "not modified" in error_text:
+                    await query.answer("✅ اطلاعات همین حالا به‌روز است.", show_alert=False)
+                    return
+
+                logger.error(
+                    "refresh_main Telegram error: %s",
+                    e,
+                    exc_info=True,
+                )
+                await query.answer(
+                    "⚠️ بروزرسانی انجام نشد؛ دوباره چند لحظه بعد امتحان کنید.",
+                    show_alert=False,
+                )
+
+            except Exception as e:
+                # خطا فقط در لاگ ثبت می‌شود و پیام جدیدی به کاربر ارسال نمی‌کنیم.
+                # این قسمت جلوی دو پیام خطای پشت‌سرهم در اسکرین‌شات را می‌گیرد.
+                logger.error(
+                    "refresh_main error: %s",
+                    e,
+                    exc_info=True,
+                )
+                await query.answer(
+                    "⚠️ بروزرسانی موقتاً انجام نشد؛ چند لحظه بعد دوباره بزنید.",
+                    show_alert=False,
                 )
         return
 
