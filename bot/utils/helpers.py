@@ -185,16 +185,6 @@ async def _build_message_inner(user_id, user_name, city):
     except Exception:
         pass
 
-    # زمان دقیق بروزرسانی — تضمین می‌کند متن پیام هر بار با قبلی فرق کند
-    # تا تلگرام خطای Message is not modified ندهد.
-    try:
-        upd_h = to_persian_num(f"{now.hour:02d}")
-        upd_m = to_persian_num(f"{now.minute:02d}")
-        upd_s = to_persian_num(f"{now.second:02d}")
-        updated_at = f"🔄 آخرین بروزرسانی: {upd_h}:{upd_m}:{upd_s}"
-    except Exception:
-        updated_at = "🔄 آخرین بروزرسانی: —"
-
     def _safe_text(key, **kwargs):
         try:
             return get_text(user_id, key, **kwargs)
@@ -216,14 +206,12 @@ async def _build_message_inner(user_id, user_name, city):
             + _safe_text("weather", city=city) + nl + weather_text + nl + nl
             + "📊 قیمت بازار:" + nl + market_text + nl
             + _safe_text("motivation") + nl + motivation + nl + nl
-            + _safe_text("change_city") + nl + nl
-            + updated_at
+            + _safe_text("change_city")
         )
     except Exception:
         message = (
             f"🌟 سلام {user_name} عزیز!\n\n"
-            f"⚠️ بخشی از اطلاعات موقتاً در دسترس نیست. /start را دوباره بفرستید.\n\n"
-            f"{updated_at}"
+            f"⚠️ بخشی از اطلاعات موقتاً در دسترس نیست. /start را دوباره بفرستید."
         )
 
     if len(message) > 4000:
