@@ -35,6 +35,8 @@ def to_persian_num(num):
 
 async def build_message(user_id, user_name, city):
     """ساخت پیام اصلی — کاملاً مقاوم؛ هیچ خطایی بیرون نمی‌رود."""
+    import asyncio
+
     nl = chr(10)
     city = city or "قم"
     # نام کاربر ممکن است { } داشته باشد و text.format را بشکند
@@ -97,10 +99,16 @@ async def build_message(user_id, user_name, city):
     except Exception:
         pass
 
+    # درخواست‌های blocking (requests) را در executor اجرا می‌کنیم
+    # تا event loop بات هنگام بروزرسانی قفل نشود.
+    loop = asyncio.get_running_loop()
+
     prayer_text = "⚠️ اوقات شرعی در دسترس نیست."
     next_prayer_text = ""
     try:
-        prayer_times = get_prayer_times(city, country=country)
+        prayer_times = await loop.run_in_executor(
+            None, lambda: get_prayer_times(city, country=country)
+        )
         if prayer_times:
             prayer_text = nl.join([f"🕌 {k}: {v}" for k, v in prayer_times.items()])
             try:
@@ -110,9 +118,11 @@ async def build_message(user_id, user_name, city):
                     total_sec = int(getattr(delta, "total_seconds", lambda: delta.seconds)())
                     hours = total_sec // 3600
                     minutes = (total_sec % 3600) // 60
+                    seconds = total_sec % 60
                     next_prayer_text = (
                         nl
-                        + f"⏳ تا {name}: {to_persian_num(hours)} ساعت و {to_persian_num(minutes)} دقیقه"
+                        + f"⏳ تا {name}: {to_persian_num(hours)} ساعت و "
+                        + f"{to_persian_num(minutes)} دقیقه و {to_persian_num(seconds)} ثانیه"
                         + nl
                     )
             except Exception:
@@ -122,7 +132,7 @@ async def build_message(user_id, user_name, city):
 
     weather_text = "⚠️ آب و هوا در دسترس نیست."
     try:
-        weather = get_weather(city)
+        weather = await loop.run_in_executor(None, lambda: get_weather(city))
         if weather:
             weather_text = (
                 f"🌡️ دما: {weather.get('temp', '—')}°C"
@@ -155,6 +165,16 @@ async def build_message(user_id, user_name, city):
     except Exception:
         pass
 
+    # زمان دقیق بروزرسانی — تضمین می‌کند متن پیام هر بار با قبلی فرق کند
+    # تا تلگرام خطای Message is not modified ندهد.
+    try:
+        upd_h = to_persian_num(f"{now.hour:02d}")
+        upd_m = to_persian_num(f"{now.minute:02d}")
+        upd_s = to_persian_num(f"{now.second:02d}")
+        updated_at = f"🔄 آخرین بروزرسانی: {upd_h}:{upd_m}:{upd_s}"
+    except Exception:
+        updated_at = "🔄 آخرین بروزرسانی: —"
+
     def _safe_text(key, **kwargs):
         try:
             return get_text(user_id, key, **kwargs)
@@ -176,10 +196,15 @@ async def build_message(user_id, user_name, city):
             + _safe_text("weather", city=city) + nl + weather_text + nl + nl
             + "📊 قیمت بازار:" + nl + market_text + nl
             + _safe_text("motivation") + nl + motivation + nl + nl
-            + _safe_text("change_city")
+            + _safe_text("change_city") + nl + nl
+            + updated_at
         )
     except Exception:
-        message = f"🌟 سلام {user_name} عزیز!\n\n⚠️ بخشی از اطلاعات موقتاً در دسترس نیست. /start را دوباره بفرستید."
+        message = (
+            f"🌟 سلام {user_name} عزیز!\n\n"
+            f"⚠️ بخشی از اطلاعات موقتاً در دسترس نیست. /start را دوباره بفرستید.\n\n"
+            f"{updated_at}"
+        )
 
     if len(message) > 4000:
         message = message[:3990] + "\n…"
