@@ -33,27 +33,43 @@ def _get_refresh_lock(user_id: int):
     return lock
 
 
+async def _safe_answer(query, text: str = None, show_alert: bool = False):
+    """پاسخ به callback فقط یک‌بار؛ اگر قبلاً جواب داده شده باشد بی‌صدا رد می‌شود."""
+    try:
+        if text is None:
+            await query.answer()
+        else:
+            await query.answer(text, show_alert=show_alert)
+    except Exception:
+        pass
+
+
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    await query.answer()
+    # نکته مهم: callback_query را فقط یک‌بار می‌توان answer کرد.
+    # answer اولیه را حذف کردیم تا شاخه‌هایی که نیاز به Toast دارند
+    # (مثل refresh_main و عضویت کانال) بتوانند پیام مناسب نشان دهند.
 
     if not await check_and_rate_limit(update, context):
+        # middleware در صورت نیاز خودش answer کرده؛ در غیر این صورت spinner را قطع می‌کنیم
+        await _safe_answer(query)
         return
 
     data = query.data
     user_id = update.effective_user.id
 
-
     if data == "ai_models":
+        await _safe_answer(query)
         await query.edit_message_reply_markup(reply_markup=get_ai_model_keyboard(user_id))
         return
 
     if data == "ai_models_back":
+        await _safe_answer(query)
         await query.edit_message_reply_markup(reply_markup=get_ai_keyboard(user_id))
         return
 
     if data == "ai_noop":
-        await query.answer("هیچ مدل فعالی تنظیم نشده است.", show_alert=True)
+        await _safe_answer(query, "هیچ مدل فعالی تنظیم نشده است.", show_alert=True)
         return
 
     if data.startswith("ai_provider:") or data.startswith("ai_model:"):
@@ -64,16 +80,16 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             providers = available_providers()
             provider, label = providers[index]
         except (ValueError, IndexError):
-            await query.answer("❌ این سرویس دیگر در دسترس نیست.", show_alert=True)
+            await _safe_answer(query, "❌ این سرویس دیگر در دسترس نیست.", show_alert=True)
             return
         set_selected_provider(user_id, provider)
-        await query.answer(f"✅ فعال شد: {label}", show_alert=False)
+        await _safe_answer(query, f"✅ فعال شد: {label}", show_alert=False)
         await query.edit_message_reply_markup(reply_markup=get_ai_keyboard(user_id))
         return
 
     if data == "ai_clear_memory":
         clear_history(user_id)
-        await query.answer("حافظه AI پاک شد ✅", show_alert=False)
+        await _safe_answer(query, "حافظه AI پاک شد ✅", show_alert=False)
         try:
             await query.edit_message_reply_markup(
                 reply_markup=get_ai_keyboard(user_id)
@@ -86,11 +102,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "ai_exit":
         context.user_data.pop("ai_mode", None)
         context.user_data.pop("waiting_for", None)
-        await query.answer()
+        await _safe_answer(query)
         await query.message.reply_text("➕ منوی بیشتر:", reply_markup=get_more_keyboard())
         return
 
-    
     if data.startswith("ai_tts:"):
         from bot.services.ai_extras import get_stored_answer
         from bot.services.ai_service import text_to_speech
@@ -98,9 +113,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         aid = data.split(":", 1)[1]
         text = get_stored_answer(aid, user_id)
         if not text:
-            await query.answer("این جواب منقضی شده. دوباره بپرس.", show_alert=True)
+            await _safe_answer(query, "این جواب منقضی شده. دوباره بپرس.", show_alert=True)
             return
-        await query.answer("در حال ویس دادن...")
+        await _safe_answer(query, "در حال ویس دادن...")
         try:
             notice = await query.message.reply_text("🔊 در حال ویس دادن...")
             audio = await text_to_speech(text)
@@ -117,7 +132,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data.startswith("ai_quick:"):
         kind = data.split(":", 1)[1]
-        await query.answer()
+        await _safe_answer(query)
         try:
             from bot.database import get_user_city
             city = get_user_city(user_id) or "تهران"
@@ -158,11 +173,14 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # اگر کاربر چند بار سریع روی بروزرسانی بزند، درخواست‌های همزمان
         # باعث خطای MessageNotModified و در نسخه قبلی ایجاد پیام‌های تکراری می‌شد.
         if lock.locked():
-            await query.answer("⏳ بروزرسانی قبلی هنوز در حال انجام است.", show_alert=False)
+            await _safe_answer(query, "⏳ بروزرسانی قبلی هنوز در حال انجام است.", show_alert=False)
             return
 
         async with lock:
             try:
+                # بلافاصله به کاربر فیدبک بده تا حس کند دکمه کار کرده
+                await _safe_answer(query, "🔄 در حال بروزرسانی...", show_alert=False)
+
                 user_row = get_user(user_id)
                 first_name = (
                     (user_row[1] if user_row and len(user_row) > 1 and user_row[1] else None)
@@ -174,11 +192,14 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if len(message) > 4000:
                     message = message[:3990] + "\n…"
 
-                # اگر محتوا دقیقاً همان است، تلگرام edit_message_text را رد می‌کند.
-                # در این حالت فقط یک Toast نشان می‌دهیم و هیچ پیام جدیدی نمی‌فرستیم.
                 current_text = getattr(query.message, "text", None) or ""
-                if current_text == message:
-                    await query.answer("✅ اطلاعات همین حالا به‌روز است.", show_alert=False)
+                # مقایسه با نرمال‌سازی فاصله‌ها برای جلوگیری از false positive
+                if current_text.strip() == message.strip():
+                    # محتوا یکی است؛ فقط کیبورد را تازه می‌کنیم تا حس بروزرسانی بدهد
+                    try:
+                        await query.edit_message_reply_markup(reply_markup=get_refresh_button())
+                    except Exception:
+                        pass
                     return
 
                 await query.edit_message_text(
@@ -192,15 +213,15 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 except Exception:
                     pass
 
-                await query.answer("✅ بروزرسانی شد.", show_alert=False)
-
             except BadRequest as e:
                 error_text = str(e).lower()
 
                 # خطای رایج تلگرام هنگام یکسان بودن متن/کیبورد.
-                # نباید پیام خطا به چت ارسال شود.
                 if "message is not modified" in error_text or "not modified" in error_text:
-                    await query.answer("✅ اطلاعات همین حالا به‌روز است.", show_alert=False)
+                    try:
+                        await query.edit_message_reply_markup(reply_markup=get_refresh_button())
+                    except Exception:
+                        pass
                     return
 
                 logger.error(
@@ -208,27 +229,19 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     e,
                     exc_info=True,
                 )
-                await query.answer(
-                    "⚠️ بروزرسانی انجام نشد؛ دوباره چند لحظه بعد امتحان کنید.",
-                    show_alert=False,
-                )
 
             except Exception as e:
                 # خطا فقط در لاگ ثبت می‌شود و پیام جدیدی به کاربر ارسال نمی‌کنیم.
-                # این قسمت جلوی دو پیام خطای پشت‌سرهم در اسکرین‌شات را می‌گیرد.
                 logger.error(
                     "refresh_main error: %s",
                     e,
                     exc_info=True,
                 )
-                await query.answer(
-                    "⚠️ بروزرسانی موقتاً انجام نشد؛ چند لحظه بعد دوباره بزنید.",
-                    show_alert=False,
-                )
         return
 
     if data == "back_to_main":
         from bot.logger import logger
+        await _safe_answer(query)
         try:
             user_row = get_user(user_id)
             first_name = (
@@ -326,6 +339,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if data == "calendar_today":
+        await _safe_answer(query)
         today = get_today_tehran()
         text = get_calendar_text(today.year, today.month, today.day, user_id)
         await query.edit_message_text(
@@ -335,6 +349,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if data.startswith("day_"):
+        await _safe_answer(query)
         parts = data.split("_")
         year, month, day = int(parts[1]), int(parts[2]), int(parts[3])
         try:
@@ -361,6 +376,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if data.startswith("cal_"):
+        await _safe_answer(query)
         parts = data.split("_")
         year, month, day = int(parts[1]), int(parts[2]), int(parts[3])
         if month < 1:
@@ -375,3 +391,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=get_calendar_buttons(year, month, day, user_id)
         )
         return
+
+    # هر callback ناشناخته‌ای — حداقل spinner را قطع کن
+    await _safe_answer(query)
