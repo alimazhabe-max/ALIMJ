@@ -625,25 +625,20 @@ def parse_currency_input(text: str):
 
 async def get_crypto_chart(symbol: str, days: int = 7) -> Tuple[Optional[bytes], str]:
     """
-    ساخت نمودار قیمت خطی — چندمنبعی:
-    CoinGecko → Binance Vision → OKX
+    نمودار چندپنلی شبیه TradingView/AlgoAnalyzer:
+    کندل + Bollinger + EMA + حجم + ADX + RSI
     """
     try:
-        days = max(1, min(int(days or 7), 90))
+        days = max(1, min(int(days or 7), 365))
     except Exception:
         days = 7
 
     symbol_clean = (symbol or "").lower().strip().replace(" ", "").replace("‌", "")
-    for junk in ("نمودار", "chart", "قیمت", "روز", "روزه", "price"):
+    for junk in ("نمودار", "chart", "قیمت", "روز", "روزه", "price", "تحلیل"):
         symbol_clean = symbol_clean.replace(junk, "")
-    symbol_clean = symbol_clean.strip() or "btc"
+    symbol_clean = symbol_clean.replace("usdt", "").strip() or "btc"
 
     coin_id = await resolve_coin_id(symbol_clean)
-    # نماد صرافی
-    market_sym = (SYMBOL_TO_ID.get(symbol_clean) and symbol_clean) or symbol_clean
-    # اگر resolve شد، از symbol اصلی استفاده کن
-    binance_sym = symbol_clean.upper().replace("USDT", "").replace("-", "") + "USDT"
-    # نگاشت چند نماد خاص
     _sym_map = {
         "bitcoin": "BTC", "ethereum": "ETH", "tether": "USDT", "binancecoin": "BNB",
         "solana": "SOL", "ripple": "XRP", "the-open-network": "TON", "dogecoin": "DOGE",
@@ -651,275 +646,236 @@ async def get_crypto_chart(symbol: str, days: int = 7) -> Tuple[Optional[bytes],
         "polkadot": "DOT", "avalanche-2": "AVAX", "shiba-inu": "SHIB",
         "matic-network": "MATIC", "near": "NEAR", "pepe": "PEPE", "sui": "SUI",
     }
+    pair = symbol_clean.upper().replace("USDT", "").replace("-", "") + "USDT"
     if coin_id and coin_id in _sym_map:
-        binance_sym = _sym_map[coin_id] + "USDT"
+        pair = _sym_map[coin_id] + "USDT"
     elif symbol_clean in _sym_map:
-        binance_sym = _sym_map[symbol_clean] + "USDT"
+        pair = _sym_map[symbol_clean] + "USDT"
 
-    headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
-    prices = []  # list of [ts_ms, price]
-    source = ""
+    # انتخاب interval بر اساس days
+    if days <= 3:
+        interval, limit = "15m", min(300, days * 96)
+    elif days <= 14:
+        interval, limit = "1h", min(400, days * 24)
+    elif days <= 60:
+        interval, limit = "4h", min(400, days * 6)
+    else:
+        interval, limit = "1d", min(400, days)
 
-    # ── 1) CoinGecko ──────────────────────────────────────────
-    if coin_id and not prices:
-        try:
-            async with httpx.AsyncClient(timeout=15.0, headers=headers) as client:
-                r = await client.get(
-                    f"https://api.coingecko.com/api/v3/coins/{coin_id}/market_chart",
-                    params={"vs_currency": "usd", "days": str(days)},
-                )
-                if r.status_code == 200:
-                    data = r.json() or {}
-                    prices = data.get("prices") or []
-                    if prices:
-                        source = "CoinGecko"
-                else:
-                    logger.warning(f"chart CG status {r.status_code}")
-        except Exception as e:
-            logger.warning(f"chart CG: {e}")
-
-    # ── 2) Binance Vision (بدون بلاک جغرافیایی) ───────────────
-    if len(prices) < 2:
-        try:
-            if days <= 2:
-                interval, limit = "15m", min(200, days * 96)
-            elif days <= 7:
-                interval, limit = "1h", min(200, days * 24)
-            elif days <= 30:
-                interval, limit = "4h", min(200, days * 6)
-            else:
-                interval, limit = "1d", min(200, days)
-            async with httpx.AsyncClient(timeout=15.0, headers=headers) as client:
-                r = await client.get(
-                    "https://data-api.binance.vision/api/v3/klines",
-                    params={"symbol": binance_sym, "interval": interval, "limit": int(limit)},
-                )
-                if r.status_code == 200:
-                    klines = r.json() or []
-                    if klines:
-                        prices = [[int(k[0]), float(k[4])] for k in klines]
-                        source = "Binance"
-                else:
-                    logger.warning(f"chart BN vision {binance_sym}: {r.status_code}")
-        except Exception as e:
-            logger.warning(f"chart BN vision: {e}")
-
-    # ── 3) OKX fallback ───────────────────────────────────────
-    if len(prices) < 2:
-        try:
-            okx_sym = binance_sym.replace("USDT", "-USDT")
-            if days <= 2:
-                bar, limit = "15m", "200"
-            elif days <= 7:
-                bar, limit = "1H", "168"
-            elif days <= 30:
-                bar, limit = "4H", "180"
-            else:
-                bar, limit = "1D", str(min(90, days))
-            async with httpx.AsyncClient(timeout=15.0, headers=headers) as client:
-                r = await client.get(
-                    "https://www.okx.com/api/v5/market/candles",
-                    params={"instId": okx_sym, "bar": bar, "limit": limit},
-                )
-                if r.status_code == 200:
-                    data = r.json() or {}
-                    candles = data.get("data") or []
-                    if candles:
-                        # OKX: newest first → reverse
-                        candles = list(reversed(candles))
-                        prices = [[int(c[0]), float(c[4])] for c in candles]
-                        source = "OKX"
-                else:
-                    logger.warning(f"chart OKX {okx_sym}: {r.status_code}")
-        except Exception as e:
-            logger.warning(f"chart OKX: {e}")
-
-    # ── 4) CoinGecko OHLC ساده (کمتر rate-limit حساس) ────────
-    if len(prices) < 2 and coin_id:
-        try:
-            async with httpx.AsyncClient(timeout=15.0, headers=headers) as client:
-                r = await client.get(
-                    f"https://api.coingecko.com/api/v3/coins/{coin_id}/ohlc",
-                    params={"vs_currency": "usd", "days": str(min(days, 30))},
-                )
-                if r.status_code == 200:
-                    ohlc = r.json() or []
-                    if ohlc:
-                        prices = [[int(row[0]), float(row[4])] for row in ohlc]
-                        source = "CoinGecko-OHLC"
-        except Exception as e:
-            logger.warning(f"chart CG ohlc: {e}")
-
-    if not prices or len(prices) < 2:
+    klines = await _fetch_klines_interval(pair, interval, int(limit))
+    if not klines or len(klines) < 20:
         return None, (
-            "❌ داده تاریخی برای این ارز در دسترس نیست.\n"
-            f"نماد امتحان‌شده: {symbol_clean.upper()} / {binance_sym}\n"
-            "مثال: btc ، eth ، sol ، ton ، pepe"
+            f"❌ داده نموداری برای {pair} در دسترس نیست.\n"
+            "مثال: btc ، eth ، sol ، ton"
         )
 
-    # نمونه‌برداری برای خوانایی
-    step = max(1, len(prices) // 48)
-    sampled = prices[::step]
-    if prices[-1] not in sampled:
-        sampled.append(prices[-1])
-
-    labels = []
-    values = []
-    for item in sampled:
-        try:
-            ts, price = item[0], item[1]
-            # ts ممکن است ثانیه یا میلی‌ثانیه باشد
-            if ts < 1e12:
-                ts = ts * 1000
-            dt = datetime.utcfromtimestamp(ts / 1000.0)
-            if days <= 2:
-                labels.append(dt.strftime("%H:%M"))
-            else:
-                labels.append(dt.strftime("%m/%d"))
-            values.append(float(price))
-        except Exception:
-            continue
-
-    if len(values) < 2:
-        return None, "❌ داده کافی برای رسم نمودار نیست."
-
     try:
+        import numpy as np
         import matplotlib
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
+        from matplotlib.patches import Rectangle
         plt.rcParams["axes.unicode_minus"] = False
         plt.rcParams["font.family"] = "DejaVu Sans"
-    except ImportError:
-        return None, "❌ matplotlib نصب نیست."
+    except ImportError as e:
+        return None, f"❌ کتابخانه رسم نصب نیست: {e}"
+
+    opens = np.array([float(k[1]) for k in klines], dtype=float)
+    highs = np.array([float(k[2]) for k in klines], dtype=float)
+    lows = np.array([float(k[3]) for k in klines], dtype=float)
+    closes = np.array([float(k[4]) for k in klines], dtype=float)
+    vols = np.array([float(k[5]) for k in klines], dtype=float)
+    n = len(closes)
+    x = np.arange(n)
+
+    def _ema(arr, period):
+        out = np.zeros(len(arr), dtype=float)
+        out[0] = arr[0]
+        a = 2.0 / (period + 1)
+        for i in range(1, len(arr)):
+            out[i] = a * arr[i] + (1 - a) * out[i - 1]
+        return out
+
+    def _rsi_arr(c, period=14):
+        out = np.full(len(c), np.nan)
+        if len(c) <= period:
+            return out
+        diff = np.diff(c)
+        gains = np.where(diff > 0, diff, 0.0)
+        losses = np.where(diff < 0, -diff, 0.0)
+        ag = gains[:period].mean()
+        al = losses[:period].mean()
+        out[period] = 100.0 if al == 0 else 100 - 100 / (1 + ag / al)
+        for i in range(period, len(diff)):
+            ag = (ag * (period - 1) + gains[i]) / period
+            al = (al * (period - 1) + losses[i]) / period
+            out[i + 1] = 100.0 if al == 0 else 100 - 100 / (1 + ag / al)
+        return out
+
+    def _adx_arr(h, l, c, period=14):
+        out = np.full(len(c), np.nan)
+        if len(c) < period + 2:
+            return out
+        tr = np.zeros(len(c))
+        dp = np.zeros(len(c))
+        dm = np.zeros(len(c))
+        for i in range(1, len(c)):
+            tr[i] = max(h[i] - l[i], abs(h[i] - c[i - 1]), abs(l[i] - c[i - 1]))
+            up = h[i] - h[i - 1]
+            dn = l[i - 1] - l[i]
+            dp[i] = up if up > dn and up > 0 else 0
+            dm[i] = dn if dn > up and dn > 0 else 0
+        atr = tr.copy()
+        for i in range(period, len(c)):
+            atr[i] = atr[i - 1] - atr[i - 1] / period + tr[i] if i > period else tr[1:i + 1].mean()
+        dxs = []
+        for i in range(period, len(c)):
+            atr_v = atr[i] if atr[i] else 1e-9
+            di_p = 100 * (dp[i - period + 1:i + 1].mean()) / atr_v
+            di_m = 100 * (dm[i - period + 1:i + 1].mean()) / atr_v
+            s = di_p + di_m
+            dx = 0 if s == 0 else 100 * abs(di_p - di_m) / s
+            dxs.append(dx)
+            out[i] = dx if len(dxs) < period else float(np.mean(dxs[-period:]))
+        return out
+
+    ema20 = _ema(closes, 20)
+    ema50 = _ema(closes, 50) if n >= 50 else _ema(closes, max(10, n // 3))
+    # Bollinger
+    bb_period = 20
+    sma = np.convolve(closes, np.ones(bb_period) / bb_period, mode="same")
+    std = np.array([closes[max(0, i - bb_period + 1):i + 1].std() for i in range(n)])
+    bb_u, bb_l = sma + 2 * std, sma - 2 * std
+    rsi = _rsi_arr(closes, 14)
+    adx = _adx_arr(highs, lows, closes, 14)
 
     try:
-        fig, ax = plt.subplots(figsize=(9, 4.8), dpi=130)
-        color = "#22c55e" if values[-1] >= values[0] else "#ef4444"
-        ax.plot(range(len(values)), values, color=color, linewidth=2.0)
-        ax.fill_between(range(len(values)), values, alpha=0.18, color=color)
-        n_ticks = min(8, len(labels))
-        tick_idx = [int(i * (len(labels) - 1) / max(1, n_ticks - 1)) for i in range(n_ticks)]
-        ax.set_xticks(tick_idx)
-        ax.set_xticklabels([labels[i] for i in tick_idx], rotation=25, fontsize=8)
-        title_sym = symbol_clean.upper()
-        ax.set_title(f"{title_sym} Price — last {days} days (USD) [{source}]", fontsize=11, fontweight="bold")
-        ax.set_ylabel("USD")
-        ax.grid(True, alpha=0.28, linestyle="--")
-        ax.spines["top"].set_visible(False)
-        ax.spines["right"].set_visible(False)
-        fig.tight_layout()
+        fig = plt.figure(figsize=(11, 8.5), dpi=120)
+        gs = fig.add_gridspec(4, 1, height_ratios=[3.2, 0.9, 0.9, 0.9], hspace=0.08)
+        ax_price = fig.add_subplot(gs[0])
+        ax_vol = fig.add_subplot(gs[1], sharex=ax_price)
+        ax_adx = fig.add_subplot(gs[2], sharex=ax_price)
+        ax_rsi = fig.add_subplot(gs[3], sharex=ax_price)
 
+        # BB
+        ax_price.fill_between(x, bb_l, bb_u, color="#93c5fd", alpha=0.35, label="BBANDS(20,2)")
+        ax_price.plot(x, sma, color="#3b82f6", linewidth=0.9, linestyle="--", alpha=0.9)
+
+        # Candles
+        width = 0.55
+        for i in range(n):
+            color = "#16a34a" if closes[i] >= opens[i] else "#dc2626"
+            ax_price.plot([i, i], [lows[i], highs[i]], color=color, linewidth=0.7, solid_capstyle="round")
+            body = abs(closes[i] - opens[i])
+            bottom = min(opens[i], closes[i])
+            if body < (highs[i] - lows[i]) * 0.001:
+                body = max((highs[i] - lows[i]) * 0.01, closes[i] * 0.00005)
+            ax_price.add_patch(
+                Rectangle((i - width / 2, bottom), width, body, facecolor=color, edgecolor=color, linewidth=0.4)
+            )
+
+        ax_price.plot(x, ema20, color="#0ea5e9", linewidth=1.2, label="EMA(20)")
+        ax_price.plot(x, ema50, color="#f59e0b", linewidth=1.2, label="EMA(50)")
+        ax_price.set_title(f"{pair} — {days}D Chart ({interval})", fontsize=12, fontweight="bold")
+        ax_price.legend(loc="upper left", fontsize=8, framealpha=0.85)
+        ax_price.grid(True, alpha=0.25, linestyle="--")
+        ax_price.set_ylabel("USD")
+        plt.setp(ax_price.get_xticklabels(), visible=False)
+
+        # Volume
+        vcolors = ["#16a34a" if closes[i] >= opens[i] else "#dc2626" for i in range(n)]
+        ax_vol.bar(x, vols, color=vcolors, width=0.75, alpha=0.75)
+        ax_vol.set_ylabel("Vol")
+        ax_vol.grid(True, alpha=0.25)
+        plt.setp(ax_vol.get_xticklabels(), visible=False)
+
+        # ADX
+        ax_adx.plot(x, adx, color="#111827", linewidth=1.1, label="ADX(14)")
+        ax_adx.axhline(25, color="#9ca3af", linestyle="--", linewidth=0.7)
+        ax_adx.set_ylabel("ADX")
+        ax_adx.legend(loc="upper left", fontsize=7)
+        ax_adx.grid(True, alpha=0.25)
+        plt.setp(ax_adx.get_xticklabels(), visible=False)
+
+        # RSI
+        ax_rsi.plot(x, rsi, color="#111827", linewidth=1.1, label="RSI(14)")
+        ax_rsi.axhline(70, color="#9ca3af", linestyle="--", linewidth=0.7)
+        ax_rsi.axhline(30, color="#9ca3af", linestyle="--", linewidth=0.7)
+        ax_rsi.set_ylim(0, 100)
+        ax_rsi.set_ylabel("RSI")
+        ax_rsi.legend(loc="upper left", fontsize=7)
+        ax_rsi.grid(True, alpha=0.25)
+
+        # x labels sparse
+        step = max(1, n // 8)
+        ticks = list(range(0, n, step))
+        if n - 1 not in ticks:
+            ticks.append(n - 1)
+        labels = []
+        for i in ticks:
+            ts = int(klines[i][0])
+            if ts < 1e12:
+                ts *= 1000
+            dt = datetime.utcfromtimestamp(ts / 1000.0)
+            labels.append(dt.strftime("%m/%d" if days > 3 else "%m/%d %H"))
+        ax_rsi.set_xticks(ticks)
+        ax_rsi.set_xticklabels(labels, rotation=20, fontsize=8)
+
+        fig.subplots_adjust(left=0.08, right=0.98, top=0.95, bottom=0.08)
         buf = io.BytesIO()
-        fig.savefig(buf, format="png", bbox_inches="tight", facecolor="white")
+        fig.savefig(buf, format="png", facecolor="white")
         plt.close(fig)
         buf.seek(0)
         png = buf.read()
     except Exception as e:
-        logger.error(f"matplotlib chart error: {e}")
+        logger.error(f"chart draw: {e}")
         try:
             plt.close("all")
         except Exception:
             pass
         return None, f"❌ خطا در رسم نمودار: {e}"
 
-    first = values[0]
-    last = values[-1]
+    first, last = float(closes[0]), float(closes[-1])
     chg = ((last - first) / first * 100) if first else 0
     emoji = "🟢" if chg >= 0 else "🔴"
-    high = max(values)
-    low = min(values)
     caption = (
-        f"📊 {symbol_clean.upper()} — {days} day chart\n"
-        f"Source: {source}\n"
-        f"Start: ${first:,.4f}\n"
-        f"End: ${last:,.4f}\n"
-        f"High/Low: ${high:,.4f} / ${low:,.4f}\n"
-        f"Change: {emoji} {chg:+.2f}%"
+        f"📊 {pair} | {days}D ({interval})\n"
+        f"Start: ${first:,.4f} → End: ${last:,.4f}\n"
+        f"High/Low: ${float(highs.max()):,.4f} / ${float(lows.min()):,.4f}\n"
+        f"Change: {emoji} {chg:+.2f}%\n"
+        f"EMA20/50 + BB + Vol + ADX + RSI"
     )
     return png, caption
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# تحلیل جامع کریپتو (چندمنبعی)
-# ─────────────────────────────────────────────────────────────────────────────
-
-async def _fetch_coingecko_detail(coin_id: str) -> dict:
+async def _fetch_klines_interval(pair: str, interval: str, limit: int) -> list:
+    headers = {"User-Agent": "Mozilla/5.0"}
     try:
-        async with httpx.AsyncClient(timeout=12.0, headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"}) as c:
+        async with httpx.AsyncClient(timeout=18.0, headers=headers) as c:
             r = await c.get(
-                f"https://api.coingecko.com/api/v3/coins/{coin_id}",
-                params={
-                    "localization": "false",
-                    "tickers": "false",
-                    "market_data": "true",
-                    "community_data": "true",
-                    "developer_data": "false",
-                },
+                "https://data-api.binance.vision/api/v3/klines",
+                params={"symbol": pair, "interval": interval, "limit": limit},
             )
             if r.status_code == 200:
-                return r.json() or {}
-    except Exception as e:
-        logger.warning(f"cg detail: {e}")
-    return {}
-
-
-async def _fetch_binance_futures(symbol: str) -> dict:
-    """داده فیوچرز بایننس (جایگزین تقریبی بخشی از Coinglass): funding + OI"""
-    sym = (symbol or "").upper().replace("USDT", "") + "USDT"
-    out = {}
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as c:
-            r = await c.get("https://fapi.binance.com/fapi/v1/premiumIndex", params={"symbol": sym})
-            if r.status_code == 200:
-                d = r.json()
-                out["funding_rate"] = float(d.get("lastFundingRate") or 0) * 100
-                out["mark_price"] = float(d.get("markPrice") or 0)
-            r2 = await c.get("https://fapi.binance.com/fapi/v1/openInterest", params={"symbol": sym})
-            if r2.status_code == 200:
-                out["open_interest"] = float(r2.json().get("openInterest") or 0)
-            r3 = await c.get("https://fapi.binance.com/fapi/v1/ticker/24hr", params={"symbol": sym})
-            if r3.status_code == 200:
-                t = r3.json()
-                out["volume_24h"] = float(t.get("quoteVolume") or 0)
-                out["price_change_pct"] = float(t.get("priceChangePercent") or 0)
-    except Exception as e:
-        logger.warning(f"binance futures {sym}: {e}")
-    return out
-
-
-async def _fetch_fear_greed() -> Optional[dict]:
-    try:
-        async with httpx.AsyncClient(timeout=8.0) as c:
-            r = await c.get("https://api.alternative.me/fng/?limit=1")
-            if r.status_code == 200:
-                data = (r.json() or {}).get("data") or []
+                data = r.json() or []
                 if data:
-                    return data[0]
+                    return data
+            # OKX map
+            okx_bar = {"15m": "15m", "1h": "1H", "4h": "4H", "1d": "1D"}.get(interval, "1H")
+            okx_sym = pair.replace("USDT", "-USDT")
+            r2 = await c.get(
+                "https://www.okx.com/api/v5/market/candles",
+                params={"instId": okx_sym, "bar": okx_bar, "limit": str(min(limit, 300))},
+            )
+            if r2.status_code == 200:
+                rows = (r2.json() or {}).get("data") or []
+                out = []
+                for row in reversed(rows):
+                    out.append([int(row[0]), row[1], row[2], row[3], row[4], row[5]])
+                return out
     except Exception as e:
-        logger.warning(f"fear greed: {e}")
-    return None
-
-
-async def _fetch_coinpaprika_ticker(coin_id: str) -> dict:
-    mapping = {
-        "bitcoin": "btc-bitcoin", "ethereum": "eth-ethereum", "tether": "usdt-tether",
-        "binancecoin": "bnb-binance-coin", "solana": "sol-solana", "ripple": "xrp-xrp",
-        "the-open-network": "ton-toncoin", "dogecoin": "doge-dogecoin", "cardano": "ada-cardano",
-        "tron": "trx-tron", "chainlink": "link-chainlink", "litecoin": "ltc-litecoin",
-        "polkadot": "dot-polkadot", "avalanche-2": "avax-avalanche", "shiba-inu": "shib-shiba-inu",
-        "matic-network": "matic-polygon", "near": "near-near-protocol",
-    }
-    pid = mapping.get(coin_id)
-    if not pid:
-        return {}
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as c:
-            r = await c.get(f"https://api.coinpaprika.com/v1/tickers/{pid}")
-            if r.status_code == 200:
-                return r.json() or {}
-    except Exception as e:
-        logger.warning(f"paprika ticker: {e}")
-    return {}
+        logger.warning(f"klines interval: {e}")
+    return []
 
 
 async def analyze_crypto(symbol: str) -> str:
