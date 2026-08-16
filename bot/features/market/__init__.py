@@ -10,6 +10,14 @@ from .finance import (
     parse_currency_input,
     resolve_coin_id,
     SYMBOL_TO_ID,
+    get_crypto_analysis_keyboard,
+    trading_recommendation,
+    derivatives_radar,
+    risk_scenarios,
+    position_size_guide,
+    calc_position_size,
+    entry_alert_text,
+    register_price_alert,
 )
 
 __all__ = [
@@ -24,4 +32,12 @@ __all__ = [
     "parse_currency_input",
     "resolve_coin_id",
     "SYMBOL_TO_ID",
+    "get_crypto_analysis_keyboard",
+    "trading_recommendation",
+    "derivatives_radar",
+    "risk_scenarios",
+    "position_size_guide",
+    "calc_position_size",
+    "entry_alert_text",
+    "register_price_alert",
 ]
