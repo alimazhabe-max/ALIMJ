@@ -482,5 +482,94 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
+
+    # ── منوی تحلیل کریپتو (cx:action:symbol) ─────────────────
+    if data.startswith("cx:"):
+        await _safe_answer(query)
+        parts = data.split(":")
+        if len(parts) < 3:
+            await query.message.reply_text("❌ درخواست نامعتبر")
+            return
+        action, symbol = parts[1], parts[2]
+        context.user_data["crypto_symbol"] = symbol
+        try:
+            from bot.features.market.finance import (
+                analyze_crypto, get_crypto_chart, get_crypto_analysis_keyboard,
+                trading_recommendation, derivatives_radar, risk_scenarios,
+                position_size_guide, entry_alert_text,
+            )
+            menu = get_crypto_analysis_keyboard(symbol)
+            if action == "sum":
+                txt = await analyze_crypto(symbol)
+                await query.message.reply_text(txt[:4000], reply_markup=menu)
+            elif action == "day":
+                wait = await query.message.reply_text("⏳ نمودار روزانه...")
+                png, cap = await get_crypto_chart(symbol, 90)
+                try:
+                    await wait.delete()
+                except Exception:
+                    pass
+                if png:
+                    from io import BytesIO
+                    bio = BytesIO(png)
+                    bio.name = f"{symbol}_daily.png"
+                    await query.message.reply_photo(photo=bio, caption=(cap or "نمودار روزانه")[:1024], reply_markup=menu)
+                else:
+                    await query.message.reply_text(cap or "❌ نمودار روزانه در دسترس نیست", reply_markup=menu)
+            elif action == "hr":
+                wait = await query.message.reply_text("⏳ نمودار ساعتی...")
+                png, cap = await get_crypto_chart(symbol, 7)
+                try:
+                    await wait.delete()
+                except Exception:
+                    pass
+                if png:
+                    from io import BytesIO
+                    bio = BytesIO(png)
+                    bio.name = f"{symbol}_hourly.png"
+                    await query.message.reply_photo(photo=bio, caption=(cap or "نمودار ساعتی")[:1024], reply_markup=menu)
+                else:
+                    await query.message.reply_text(cap or "❌ نمودار ساعتی در دسترس نیست", reply_markup=menu)
+            elif action == "rec":
+                txt = await trading_recommendation(symbol)
+                await query.message.reply_text(txt, reply_markup=menu)
+            elif action == "der":
+                txt = await derivatives_radar(symbol)
+                await query.message.reply_text(txt, reply_markup=menu)
+            elif action == "risk":
+                txt = await risk_scenarios(symbol)
+                await query.message.reply_text(txt, reply_markup=menu)
+            elif action == "pos":
+                context.user_data["waiting_for"] = "crypto_pos"
+                await query.message.reply_text(position_size_guide(symbol), reply_markup=menu)
+            elif action == "al":
+                context.user_data["waiting_for"] = "crypto_alert"
+                txt = await entry_alert_text(symbol)
+                await query.message.reply_text(txt, reply_markup=menu)
+            elif action == "ref":
+                wait = await query.message.reply_text("⏳ بروزرسانی...")
+                txt = await analyze_crypto(symbol)
+                png, cap = await get_crypto_chart(symbol, 30)
+                try:
+                    await wait.delete()
+                except Exception:
+                    pass
+                if png:
+                    from io import BytesIO
+                    bio = BytesIO(png)
+                    bio.name = f"{symbol}_ref.png"
+                    await query.message.reply_photo(
+                        photo=bio,
+                        caption=(txt + "\n\n🔄 بروزرسانی شد")[:1024],
+                        reply_markup=menu,
+                    )
+                else:
+                    await query.message.reply_text(txt[:4000], reply_markup=menu)
+            else:
+                await query.message.reply_text("❌ گزینه ناشناخته", reply_markup=menu)
+        except Exception as e:
+            await query.message.reply_text(f"⚠️ خطا: {e}")
+        return
+
     # هر callback ناشناخته‌ای — حداقل spinner را قطع کن
     await _safe_answer(query)

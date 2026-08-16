@@ -27,7 +27,7 @@ from bot.features.date.date_tools import (
 )
 from bot.features.date.converters import calculate_age, parse_birth_datetime
 from bot.features.religious import qibla_direction, daily_adhkar, daily_verse_hadith, religious_countdown, istikhara, istikhara_intro
-from bot.features.market.finance import full_market_prices, convert_currency, profit_loss, parse_profit, get_top_crypto, convert_crypto, get_crypto_chart, analyze_crypto, parse_currency_input
+from bot.features.market.finance import full_market_prices, convert_currency, profit_loss, parse_profit, get_top_crypto, convert_crypto, get_crypto_chart, analyze_crypto, parse_currency_input, get_crypto_analysis_keyboard, trading_recommendation, derivatives_radar, risk_scenarios, position_size_guide, calc_position_size, entry_alert_text, register_price_alert
 from bot.features.tools.app_tools import calculator, generate_password, count_text, world_distance
 from bot.features.fun.fun_tools import hafez_fal, joke_of_day, fact_of_day, daily_challenge, random_joke, get_joke_categories
 from bot.features.weather.weather_extra import weather_forecast, air_quality
@@ -483,7 +483,7 @@ async def _text_handler_inner(update: Update, context: ContextTypes.DEFAULT_TYPE
                 "date_diff": _h_date_diff, "age_diff": _h_age_diff,
                 "event_search": _h_event_search, "countdown": _h_countdown,
                 "calc": _h_calc,
-                "profit": _h_profit, "currency": _h_currency, "distance": _h_distance, "crypto_chart": _h_crypto_full, "crypto_analyze": _h_crypto_full, "crypto_full": _h_crypto_full,
+                "profit": _h_profit, "currency": _h_currency, "distance": _h_distance, "crypto_chart": _h_crypto_full, "crypto_analyze": _h_crypto_full, "crypto_full": _h_crypto_full, "crypto_pos": _h_crypto_pos, "crypto_alert": _h_crypto_pos,
                 "birth_save": _h_birth_save,
                 "count_text": _h_count_text,
                 "font_text": _h_font_text, "font_all": _h_font_all,
@@ -964,7 +964,7 @@ async def _h_currency(u, c, t, uid):
 
 
 async def _h_crypto_full(u, c, t, uid):
-    """یک پیام واحد: نمودار + تحلیل تکنیکال/فاندامنتال در کپشن"""
+    """تحلیل کامل + منوی دکمه‌ای زیرش (مثل Algo Analyzer)"""
     c.user_data.pop("waiting_for", None)
     raw = (t or "").strip().translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789"))
     parts = [p for p in raw.replace(",", " ").split() if p]
@@ -974,7 +974,7 @@ async def _h_crypto_full(u, c, t, uid):
         pl = p.lower()
         if pl.replace(".", "", 1).isdigit():
             try:
-                days = int(float(p))
+                days = max(1, min(365, int(float(p))))
             except Exception:
                 pass
         elif pl not in ("روز", "day", "days", "نمودار", "chart", "تحلیل", "analyze", "ارز"):
@@ -989,71 +989,82 @@ async def _h_crypto_full(u, c, t, uid):
         )
         return
 
-    wait = await u.message.reply_text(f"⏳ در حال آماده‌سازی {symbol.upper()}...")
+    symbol = symbol.lower().replace("usdt", "").strip()
+    c.user_data["crypto_symbol"] = symbol
+    wait = await u.message.reply_text(f"⏳ تحلیل {symbol.upper()}...")
 
-    # موازی: نمودار + تحلیل
-    png = None
     report = ""
+    png = None
     try:
-        chart_task = get_crypto_chart(symbol, days)
-        # جمع‌بندی AI کوتاه (اختیاری)
-        ai_summary = ""
+        import asyncio as _aio
+        chart_task = _aio.create_task(get_crypto_chart(symbol, days))
         try:
             base = await analyze_crypto(symbol, ai_summary="")
+            ai_summary = ""
             try:
                 from bot.services.ai_service import ask_ai
                 prompt = (
-                    "فقط ۲ تا ۴ جمله فارسی، بدون عنوان. "
-                    "روند، سیگنال لانگ/شورت/صبر، و یک نکته عملی. توصیه قطعی نده.\\n\\n"
+                    "فقط ۲ تا ۴ جمله فارسی بدون عنوان. "
+                    "روند، سیگنال لانگ/شورت/صبر و یک نکته عملی. توصیه قطعی نده.\n\n"
                     + base[:2000]
                 )
                 answer, _ = await ask_ai(uid, prompt)
-                ai_summary = (answer or "").strip().replace("\\n", " ")
+                ai_summary = (answer or "").strip().replace("\n", " ")
                 if len(ai_summary) > 260:
                     ai_summary = ai_summary[:260].rsplit(" ", 1)[0] + "…"
             except Exception:
-                ai_summary = ""
+                pass
             report = await analyze_crypto(symbol, ai_summary=ai_summary) if ai_summary else base
         except Exception as e:
             report = f"⚠️ خطا در تحلیل: {e}"
-
         try:
-            png, _cap = await chart_task
-        except Exception as e:
-            png, _cap = None, str(e)
+            png, _ = await chart_task
+        except Exception:
+            png = None
     except Exception as e:
         report = f"⚠️ خطا: {e}"
 
-    # یک پیام: عکس + کل تحلیل در کپشن
     try:
         await wait.delete()
     except Exception:
         pass
+
+    menu = get_crypto_analysis_keyboard(symbol)
+    footer = "\n\n✅ پایان بخش خلاصه — از منوی زیر استفاده کنید:"
+    caption = ((report or "تحلیل آماده شد.") + footer)[:1024]
 
     if png:
         try:
             from io import BytesIO
             bio = BytesIO(png)
             bio.name = f"{symbol}_analysis.png"
-            # کپشن حداکثر 1024
-            caption = (report or "تحلیل آماده شد.")[:1024]
-            await u.message.reply_photo(
-                photo=bio,
-                caption=caption,
-                reply_markup=get_market_keyboard(),
-            )
-            return
+            await u.message.reply_photo(photo=bio, caption=caption, reply_markup=menu)
         except Exception as e:
-            await u.message.reply_text(
-                (report or "") + f"\\n\\n⚠️ نمودار ارسال نشد: {e}",
-                reply_markup=get_market_keyboard(),
-            )
-            return
+            await u.message.reply_text((report or "") + f"\n⚠️ نمودار: {e}" + footer, reply_markup=menu)
+    else:
+        await u.message.reply_text((report or "❌ داده نبود.") + footer, reply_markup=menu)
 
-    await u.message.reply_text(
-        report or "❌ داده در دسترس نیست.",
-        reply_markup=get_market_keyboard(),
-    )
+    await u.message.reply_text("📊 منوی تحلیل فعال است.", reply_markup=get_market_keyboard())
+
+
+async def _h_crypto_pos(u, c, t, uid):
+    """پاسخ به ورودی سایز پوزیشن یا قیمت هشدار"""
+    mode = c.user_data.pop("waiting_for", None)
+    sym = c.user_data.get("crypto_symbol") or "btc"
+    if mode == "crypto_pos":
+        await u.message.reply_text(calc_position_size(t), reply_markup=get_crypto_analysis_keyboard(sym))
+        return
+    if mode == "crypto_alert":
+        raw = (t or "").translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789"))
+        nums = re.findall(r"[\d]+(?:\.\d+)?", raw)
+        if not nums:
+            await u.message.reply_text("❌ قیمت معتبر بفرستید. مثال: 64000")
+            c.user_data["waiting_for"] = "crypto_alert"
+            return
+        price = float(nums[0])
+        msg = await register_price_alert(uid, sym, price)
+        await u.message.reply_text(msg, reply_markup=get_crypto_analysis_keyboard(sym))
+        return
 
 
 async def _h_crypto_chart(u, c, t, uid):
