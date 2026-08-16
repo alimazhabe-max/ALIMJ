@@ -708,14 +708,17 @@ async def _text_handler_inner(update: Update, context: ContextTypes.DEFAULT_TYPE
     if text in ("🔄 تبدیل ارز", "تبدیل ارز", "🔄 تبدیل ارز / کریپتو", "تبدیل ارز / کریپتو"):
         context.user_data["waiting_for"] = "currency"; track_usage(user_id, "currency")
         await update.message.reply_text(
-            "🔄 مبدل ارز (مشابه ارزدیجیتال)\n\n"
-            "فرمت: مقدار ارز_مبدا ارز_مقصد\n\n"
-            "مثال:\n"
-            "• 1 btc usdt\n"
-            "• 100 usdt toman\n"
+            "🔄 مبدل هوشمند ارز / کریپتو\n\n"
+            "تقریباً همه ارزهای دیجیتال + تومان/دلار پشتیبانی می‌شود.\n\n"
+            "مثال‌ها:\n"
+            "• 1.5 btc\n"
             "• 20 ton\n"
+            "• 100 تتر\n"
             "• 50 دلار\n"
-            "• 1000000 ریال تومان",
+            "• 1 btc eth\n"
+            "• 50000 تومان دلار\n"
+            "• 100 usdt toman\n"
+            "• ۲ بیتکوین",
             reply_markup=get_market_keyboard()
         ); return
     if text in ("📈 سود و ضرر", "سود و ضرر"):
@@ -944,32 +947,45 @@ async def _h_profit(u, c, t, uid):
 
 async def _h_currency(u, c, t, uid):
     c.user_data.pop("waiting_for", None)
-    from bot.features.market.finance import parse_currency_input, SYMBOL_TO_ID
+    from bot.features.market.finance import parse_currency_input, SYMBOL_TO_ID, convert_currency as smart_convert
     parsed = parse_currency_input(t)
     if not parsed:
         await u.message.reply_text(
-            "❌ مثال:\n`20 ton`\n`100 دلار`\n`50000 تومان دلار`",
+            "❌ مثال:\n"
+            "• `20 ton` یا `۱.۵ بیتکوین`\n"
+            "• `100 دلار` یا `۵۰ تتر`\n"
+            "• `50000 تومان دلار`\n"
+            "• `1 btc eth`\n"
+            "• `100 usdt toman`",
             reply_markup=get_market_keyboard(),
         )
         return
     amount, a, b = parsed
-    if a and a.lower() in SYMBOL_TO_ID:
-        await u.message.reply_text(await convert_crypto(amount, a), reply_markup=get_market_keyboard())
-        return
-    await u.message.reply_text(await convert_currency(amount, a or "usd", b or "toman"), reply_markup=get_market_keyboard())
+    try:
+        result = await smart_convert(amount, a or "usd", b or "")
+        await u.message.reply_text(result, reply_markup=get_market_keyboard())
+    except Exception as e:
+        await u.message.reply_text(f"⚠️ خطا در تبدیل: {e}", reply_markup=get_market_keyboard())
 
 
 async def _h_crypto_chart(u, c, t, uid):
     """نمودار قیمت: btc یا eth 30"""
-    t = (t or "").strip().translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789"))
-    parts = t.split()
-    symbol = parts[0] if parts else ""
+    c.user_data.pop("waiting_for", None)
+    raw = (t or "").strip().translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789"))
+    parts = [p for p in raw.replace(",", " ").split() if p]
+    symbol = ""
     days = 7
-    if len(parts) >= 2:
-        try:
-            days = int(float(parts[1]))
-        except Exception:
-            days = 7
+    for p in parts:
+        if p.replace(".", "", 1).isdigit():
+            try:
+                days = int(float(p))
+            except Exception:
+                pass
+        elif p.lower() not in ("روز", "day", "days", "نمودار", "chart"):
+            symbol = p
+            break
+    if not symbol and parts:
+        symbol = parts[0]
     if not symbol:
         await u.message.reply_text("❌ نماد را بفرستید. مثال: btc یا eth 30", reply_markup=get_market_keyboard())
         return
@@ -980,29 +996,71 @@ async def _h_crypto_chart(u, c, t, uid):
             from io import BytesIO
             bio = BytesIO(png)
             bio.name = f"{symbol}_chart.png"
-            await u.message.reply_photo(photo=bio, caption=caption, reply_markup=get_market_keyboard())
-            await m.delete()
+            await u.message.reply_photo(photo=bio, caption=caption[:1000], reply_markup=get_market_keyboard())
+            try:
+                await m.delete()
+            except Exception:
+                pass
         else:
             await m.edit_text(caption or "❌ خطا در ساخت نمودار")
             await u.message.reply_text("📊", reply_markup=get_market_keyboard())
     except Exception as e:
-        await m.edit_text(f"⚠️ خطا: {e}")
+        try:
+            await m.edit_text(f"⚠️ خطا: {e}")
+        except Exception:
+            await u.message.reply_text(f"⚠️ خطا: {e}")
         await u.message.reply_text("📊", reply_markup=get_market_keyboard())
 
 
 async def _h_crypto_analyze(u, c, t, uid):
-    """تحلیل جامع ارز"""
-    symbol = (t or "").strip().split()[0] if t else ""
+    """تحلیل جامع ارز + نظر هوش مصنوعی"""
+    c.user_data.pop("waiting_for", None)
+    raw = (t or "").strip()
+    symbol = raw.split()[0] if raw else ""
+    for junk in ("تحلیل", "analyze", "ارز", "کریپتو"):
+        if symbol.lower() == junk:
+            parts = raw.split()
+            symbol = parts[1] if len(parts) > 1 else ""
+            break
     if not symbol:
         await u.message.reply_text("❌ نماد را بفرستید. مثال: btc", reply_markup=get_market_keyboard())
         return
     m = await u.message.reply_text("⏳ در حال تحلیل چندمنبعی...")
     try:
         report = await analyze_crypto(symbol)
-        await m.edit_text(report)
+        # پیام اول: داده خام
+        try:
+            await m.edit_text(report)
+        except Exception:
+            await u.message.reply_text(report)
+
+        # پیام دوم: تحلیل AI
+        wait_ai = await u.message.reply_text("🤖 در حال تحلیل هوش مصنوعی...")
+        try:
+            from bot.services.ai_service import ask_ai
+            prompt = (
+                "تو یک تحلیل‌گر حرفه‌ای بازار رمزارز هستی. بر اساس داده‌های زیر، "
+                "یک تحلیل کوتاه و کاربردی به فارسی بنویس (حداکثر ۱۲ خط). "
+                "شامل: وضعیت فعلی، سیگنال احتمالی (خنثی/صعودی/نزولی)، ریسک‌ها و یک نکته عملی. "
+                "توصیه سرمایه‌گذاری قطعی نده. داده‌ها:\n\n" + report[:3500]
+            )
+            answer, provider = await ask_ai(uid, prompt)
+            ai_text = f"🤖 **تحلیل هوش مصنوعی** ({provider})\n────────────────────────\n{answer}"
+            try:
+                await wait_ai.edit_text(ai_text)
+            except Exception:
+                await u.message.reply_text(ai_text)
+        except Exception as e:
+            try:
+                await wait_ai.edit_text(f"⚠️ تحلیل AI در دسترس نیست: {e}")
+            except Exception:
+                pass
         await u.message.reply_text("🔍", reply_markup=get_market_keyboard())
     except Exception as e:
-        await m.edit_text(f"⚠️ خطا در تحلیل: {e}")
+        try:
+            await m.edit_text(f"⚠️ خطا در تحلیل: {e}")
+        except Exception:
+            await u.message.reply_text(f"⚠️ خطا در تحلیل: {e}")
         await u.message.reply_text("🔍", reply_markup=get_market_keyboard())
 
 
