@@ -699,10 +699,10 @@ async def _text_handler_inner(update: Update, context: ContextTypes.DEFAULT_TYPE
         r = await full_market_prices()
         await m.edit_text(r)
         await update.message.reply_text("💰", reply_markup=get_market_keyboard()); return
-    if text in ("💎 ۳۰۰ ارز برتر کریپتو", "۳۰۰ ارز برتر کریپتو", "کریپتو"):
+    if text in ("💎 ۲۰ ارز برتر کریپتو", "۲۰ ارز برتر کریپتو", "💎 ۳۰۰ ارز برتر کریپتو", "۳۰۰ ارز برتر کریپتو", "کریپتو"):
         track_usage(user_id, "crypto_top")
         m = await update.message.reply_text("⏳ دریافت لیست کریپتو...")
-        r = await get_top_crypto(300)
+        r = await get_top_crypto(20)
         await m.edit_text(r)
         await update.message.reply_text("💎", reply_markup=get_market_keyboard()); return
     if text in ("🔄 تبدیل ارز", "تبدیل ارز", "🔄 تبدیل ارز / کریپتو", "تبدیل ارز / کریپتو"):
