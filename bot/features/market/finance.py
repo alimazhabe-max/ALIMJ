@@ -1417,3 +1417,304 @@ def _derive_signal(ta: dict, chg_24, binance: dict):
 async def get_crypto_analysis_short(symbol: str) -> str:
     """نسخه کوتاه‌تر برای ابزار AI"""
     return await analyze_crypto(symbol)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# منوی کامل تحلیل (شبیه Algo Analyzer)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def get_crypto_analysis_keyboard(symbol: str) -> "InlineKeyboardMarkup":
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+    s = (symbol or "btc").lower().replace("usdt", "").strip()
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton("1️⃣ خلاصه کلی", callback_data=f"cx:sum:{s}"),
+                InlineKeyboardButton("2️⃣ نمودار روزانه", callback_data=f"cx:day:{s}"),
+            ],
+            [
+                InlineKeyboardButton("3️⃣ نمودار ساعتی", callback_data=f"cx:hr:{s}"),
+                InlineKeyboardButton("4️⃣ توصیه معاملاتی", callback_data=f"cx:rec:{s}"),
+            ],
+            [
+                InlineKeyboardButton("5️⃣ رادار مشتقات", callback_data=f"cx:der:{s}"),
+                InlineKeyboardButton("6️⃣ ریسک و سناریوها", callback_data=f"cx:risk:{s}"),
+            ],
+            [
+                InlineKeyboardButton("📐 سایز پوزیشن", callback_data=f"cx:pos:{s}"),
+                InlineKeyboardButton("🔔 هشدار ورود", callback_data=f"cx:al:{s}"),
+            ],
+            [InlineKeyboardButton("🔄 بروزرسانی تحلیل", callback_data=f"cx:ref:{s}")],
+        ]
+    )
+
+
+def _pair_from_symbol(symbol: str) -> str:
+    symbol_clean = (symbol or "btc").lower().strip().replace(" ", "").replace("‌", "")
+    for junk in ("تحلیل", "analyze", "ارز", "کریپتو", "usdt"):
+        symbol_clean = symbol_clean.replace(junk, "")
+    symbol_clean = symbol_clean.strip() or "btc"
+    _sym_map = {
+        "bitcoin": "BTC", "ethereum": "ETH", "binancecoin": "BNB", "solana": "SOL",
+        "ripple": "XRP", "the-open-network": "TON", "dogecoin": "DOGE", "cardano": "ADA",
+        "tron": "TRX", "chainlink": "LINK", "litecoin": "LTC", "polkadot": "DOT",
+        "avalanche-2": "AVAX", "shiba-inu": "SHIB", "matic-network": "MATIC",
+        "near": "NEAR", "pepe": "PEPE", "sui": "SUI", "btc": "BTC", "eth": "ETH",
+        "sol": "SOL", "ton": "TON", "bnb": "BNB", "xrp": "XRP", "doge": "DOGE",
+    }
+    base = _sym_map.get(symbol_clean, symbol_clean.upper())
+    if len(base) > 10:
+        base = symbol_clean.upper()[:10]
+    return base + "USDT"
+
+
+async def trading_recommendation(symbol: str) -> str:
+    """توصیه معاملاتی ساخت‌یافته"""
+    report = await analyze_crypto(symbol, ai_summary="")
+    pair = _pair_from_symbol(symbol)
+    klines = await _fetch_klines_for_ta(pair, limit=100)
+    closes, highs, lows, vols = [], [], [], []
+    for k in klines or []:
+        try:
+            highs.append(float(k[2])); lows.append(float(k[3]))
+            closes.append(float(k[4])); vols.append(float(k[5]))
+        except Exception:
+            continue
+    ta = _compute_ta(closes, highs, lows, vols) if len(closes) >= 30 else {}
+    cur = closes[-1] if closes else None
+    support, resistance = _support_resistance(closes, highs, lows, cur)
+    signal, sem, score, rr, risk, status = _derive_signal(ta, None, await _fetch_binance_futures(symbol))
+
+    entry = support if "لانگ" in signal else resistance
+    stop = (support * 0.985) if support and "لانگ" in signal else ((resistance * 1.015) if resistance else None)
+    if "شورت" in signal and resistance:
+        entry = resistance
+        stop = resistance * 1.015 if resistance else None
+        tp1 = support
+    elif "لانگ" in signal and support:
+        entry = support
+        stop = support * 0.985
+        tp1 = resistance
+    else:
+        entry = cur
+        stop = (cur * 0.98) if cur else None
+        tp1 = (cur * 1.02) if cur else None
+
+    def f(v):
+        if v is None:
+            return "—"
+        return f"{v:,.2f}" if v >= 1 else f"{v:,.6f}"
+
+    lines = [
+        f"🎯 توصیه معاملاتی — {pair}",
+        "────────────────────",
+        f"سیگنال: {signal} {sem}",
+        f"امتیاز ستاپ: {score}/10",
+        f"وضعیت: {status}",
+        f"ریسک: {risk} | R:R: {rr}",
+        "",
+        f"📍 نقطه ورود تقریبی: {f(entry)}",
+        f"🛑 حد ضرر پیشنهادی: {f(stop)}",
+        f"🎯 هدف ۱: {f(tp1)}",
+        "",
+        "نکته: ورود پله‌ای و حجم کم در شرایط نامطمئن بهتر است.",
+        "⚠️ توصیه قطعی نیست؛ مسئولیت معامله با خودتان است.",
+    ]
+    return "\n".join(lines)
+
+
+async def derivatives_radar(symbol: str) -> str:
+    """رادار مشتقات: Funding, OI, حجم فیوچرز"""
+    pair = _pair_from_symbol(symbol)
+    base = pair.replace("USDT", "")
+    data = await _fetch_binance_futures(symbol)
+    lines = [
+        f"📡 رادار مشتقات — {pair}",
+        "────────────────────",
+    ]
+    if not data:
+        lines.append("❌ داده فیوچرز در دسترس نیست (ممکن است نماد فیوچرز نداشته باشد).")
+        return "\n".join(lines)
+
+    fr = data.get("funding_rate")
+    if fr is not None:
+        em = "🟢" if fr > 0 else "🔴" if fr < 0 else "⚪"
+        lines.append(f"Funding Rate: {em} {fr:+.4f}%")
+        if fr > 0.03:
+            lines.append("  → لانگ‌ها هزینه می‌دهند؛ احتمال اصلاح/فشار فروش")
+        elif fr < -0.03:
+            lines.append("  → شورت‌ها هزینه می‌دهند؛ احتمال اسکوییز صعودی")
+        else:
+            lines.append("  → فاندینگ متعادل")
+    if data.get("open_interest"):
+        lines.append(f"Open Interest: {data['open_interest']:,.0f}")
+    if data.get("volume_24h"):
+        lines.append(f"حجم فیوچرز ۲۴س: ${data['volume_24h']:,.0f}")
+    if data.get("mark_price"):
+        lines.append(f"Mark Price: ${data['mark_price']:,.4f}")
+    if data.get("price_change_pct") is not None:
+        chg = data["price_change_pct"]
+        em = "🟢" if chg >= 0 else "🔴"
+        lines.append(f"تغییر فیوچرز ۲۴س: {em} {chg:+.2f}%")
+
+    lines.append("")
+    lines.append("منبع: Binance Futures (نزدیک به داده‌های مشتقه)")
+    lines.append("⚠️ صرفاً اطلاعاتی است.")
+    return "\n".join(lines)
+
+
+async def risk_scenarios(symbol: str) -> str:
+    """سناریوهای صعودی/نزولی و ریسک"""
+    pair = _pair_from_symbol(symbol)
+    klines = await _fetch_klines_for_ta(pair, limit=120)
+    closes, highs, lows, vols = [], [], [], []
+    for k in klines or []:
+        try:
+            highs.append(float(k[2])); lows.append(float(k[3]))
+            closes.append(float(k[4])); vols.append(float(k[5]))
+        except Exception:
+            continue
+    if len(closes) < 20:
+        return f"❌ داده کافی برای سناریوی {pair} نیست."
+
+    cur = closes[-1]
+    ta = _compute_ta(closes, highs, lows, vols)
+    support, resistance = _support_resistance(closes, highs, lows, cur)
+    atr = 0
+    if len(highs) >= 15:
+        trs = []
+        for i in range(1, min(15, len(closes))):
+            trs.append(max(highs[-i] - lows[-i], abs(highs[-i] - closes[-i - 1]), abs(lows[-i] - closes[-i - 1])))
+        atr = sum(trs) / len(trs) if trs else cur * 0.02
+
+    bull = resistance or (cur + atr * 2)
+    bear = support or (cur - atr * 2)
+    invalid = (support * 0.99) if support else (cur - atr * 3)
+
+    def f(v):
+        return f"{v:,.2f}" if v >= 1 else f"{v:,.6f}"
+
+    lines = [
+        f"🎲 ریسک و سناریوها — {pair}",
+        "────────────────────",
+        f"قیمت فعلی: ${f(cur)}",
+        f"ATR تقریبی: ${f(atr)}",
+        "",
+        "🟢 سناریو صعودی:",
+        f"  شکست مقاومت ~{f(bull)} می‌تواند مسیر رشد را باز کند.",
+        f"  هدف بعدی تقریبی: ${f(bull + atr)}",
+        "",
+        "🔴 سناریو نزولی:",
+        f"  از دست رفتن حمایت ~{f(bear)} فشار فروش را تشدید می‌کند.",
+        f"  سطح خطرناک‌تر: ${f(invalid)}",
+        "",
+        f"روند فعلی سیستم: {ta.get('trend', '—')}",
+        f"RSI: {ta.get('rsi', 0):.1f}" if ta.get("rsi") is not None else "RSI: —",
+        "",
+        "مدیریت ریسک: حداکثر ۱–۲٪ سرمایه در هر معامله پیشنهاد می‌شود.",
+        "⚠️ سناریوها احتمالی‌اند؛ قطعی نیستند.",
+    ]
+    return "\n".join(lines)
+
+
+def position_size_guide(symbol: str = "") -> str:
+    pair = _pair_from_symbol(symbol) if symbol else "BTCUSDT"
+    return (
+        f"📐 محاسبه سایز پوزیشن — {pair}\n"
+        "────────────────────\n"
+        "فرمت پیام بعدی:\n"
+        "`سرمایه حدضرر درصد`\n\n"
+        "مثال:\n"
+        "• `1000 2`  → سرمایه ۱۰۰۰ دلار، حد ضرر ۲٪\n"
+        "• `5000 1.5` → سرمایه ۵۰۰۰، حد ضرر ۱.۵٪\n\n"
+        "فرمول:\n"
+        "ریسک دلاری = سرمایه × (درصد حدضرر / ۱۰۰)\n"
+        "اگر فاصله ورود تا حدضرر را هم بفرستید:\n"
+        "`سرمایه حدضرر٪ فاصله٪`\n"
+        "مثال: `1000 1 2`\n"
+        "حجم تقریبی = ریسک / فاصله٪"
+    )
+
+
+def calc_position_size(text: str) -> str:
+    t = (text or "").translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789"))
+    nums = re.findall(r"[\d]+(?:\.\d+)?", t)
+    if len(nums) < 2:
+        return "❌ فرمت: `1000 2` یا `1000 1 2`"
+    capital = float(nums[0])
+    risk_pct = float(nums[1])
+    risk_usd = capital * (risk_pct / 100.0)
+    lines = [
+        "📐 نتیجه سایز پوزیشن",
+        "────────────────────",
+        f"سرمایه: ${capital:,.2f}",
+        f"ریسک: {risk_pct}%",
+        f"حداکثر ضرر دلاری: **${risk_usd:,.2f}**",
+    ]
+    if len(nums) >= 3:
+        dist = float(nums[2])
+        if dist > 0:
+            size = risk_usd / (dist / 100.0)
+            lines.append(f"فاصله حدضرر: {dist}%")
+            lines.append(f"حجم تقریبی پوزیشن: **${size:,.2f}**")
+            lines.append("(فرض: حرکت خلاف جهت به اندازه فاصله٪)")
+    lines.append("")
+    lines.append("⚠️ این فقط محاسبه ریسک است، نه سیگنال ورود.")
+    return "\n".join(lines)
+
+
+async def entry_alert_text(symbol: str) -> str:
+    pair = _pair_from_symbol(symbol)
+    klines = await _fetch_klines_for_ta(pair, limit=80)
+    closes, highs, lows = [], [], []
+    for k in klines or []:
+        try:
+            highs.append(float(k[2])); lows.append(float(k[3])); closes.append(float(k[4]))
+        except Exception:
+            continue
+    cur = closes[-1] if closes else None
+    support, resistance = _support_resistance(closes, highs, lows, cur)
+    ta = _compute_ta(closes, highs, lows, [1] * len(closes)) if len(closes) >= 30 else {}
+    signal, _, _, _, _, _ = _derive_signal(ta, None, {})
+    level = support if "لانگ" in signal else resistance
+    if level is None:
+        level = cur
+
+    def f(v):
+        if v is None:
+            return "—"
+        return f"{v:,.2f}" if v >= 1 else f"{v:,.6f}"
+
+    return (
+        f"🔔 هشدار نقطه ورود — {pair}\n"
+        "────────────────────\n"
+        f"قیمت فعلی: ${f(cur)}\n"
+        f"سطح پیشنهادی ورود: **${f(level)}**\n"
+        f"حمایت: ${f(support)} | مقاومت: ${f(resistance)}\n\n"
+        "برای ثبت هشدار، قیمت هدف را بفرستید:\n"
+        f"مثال: `{f(level)}`\n\n"
+        "ربات وقتی نزدیک شد می‌تواند یادآوری ثبت کند.\n"
+        "⚠️ مانیتورینگ لحظه‌ای ۲۴ساعته تضمینی نیست."
+    )
+
+
+async def register_price_alert(user_id: int, symbol: str, price: float) -> str:
+    """ثبت یادآوری متنی برای قیمت هدف"""
+    pair = _pair_from_symbol(symbol)
+    try:
+        from bot.database import add_reminder
+        from datetime import datetime, timedelta
+        import pytz
+        # یادآوری ۱ ساعت بعد به‌عنوان یادآور بررسی قیمت (چون قیمت‌استریم نداریم)
+        tz = pytz.timezone("Asia/Tehran")
+        remind_at = (datetime.now(tz) + timedelta(hours=1)).strftime("%Y-%m-%d %H:%M")
+        text = f"🔔 بررسی قیمت {pair} — هدف شما: ${price:,.4f}"
+        add_reminder(user_id, text, remind_at, repeat_type="once", repeat_every=0)
+        return (
+            f"✅ هشدار ثبت شد\n"
+            f"{pair} → هدف ${price:,.4f}\n"
+            f"یادآوری بررسی حدود: {remind_at}\n"
+            "می‌توانید چند هدف دیگر هم بفرستید."
+        )
+    except Exception as e:
+        return f"⚠️ ثبت هشدار ناموفق: {e}\nهدف شما: ${price:,.4f} برای {pair}"
