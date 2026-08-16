@@ -617,8 +617,8 @@ def parse_currency_input(text: str):
 
 async def get_crypto_chart(symbol: str, days: int = 7) -> Tuple[Optional[bytes], str]:
     """
-    ساخت نمودار قیمت خطی از CoinGecko + fallback Binance.
-    برمی‌گرداند: (png_bytes یا None, متن توضیح)
+    ساخت نمودار قیمت خطی — چندمنبعی:
+    CoinGecko → Binance Vision → OKX
     """
     try:
         days = max(1, min(int(days or 7), 90))
@@ -626,54 +626,130 @@ async def get_crypto_chart(symbol: str, days: int = 7) -> Tuple[Optional[bytes],
         days = 7
 
     symbol_clean = (symbol or "").lower().strip().replace(" ", "").replace("‌", "")
-    # حذف کلمات اضافه
-    for junk in ("نمودار", "chart", "قیمت", "روز", "روزه"):
+    for junk in ("نمودار", "chart", "قیمت", "روز", "روزه", "price"):
         symbol_clean = symbol_clean.replace(junk, "")
     symbol_clean = symbol_clean.strip() or "btc"
 
     coin_id = await resolve_coin_id(symbol_clean)
-    if not coin_id:
-        return None, "❌ ارز پیدا نشد. مثال: btc یا eth یا sol"
+    # نماد صرافی
+    market_sym = (SYMBOL_TO_ID.get(symbol_clean) and symbol_clean) or symbol_clean
+    # اگر resolve شد، از symbol اصلی استفاده کن
+    binance_sym = symbol_clean.upper().replace("USDT", "").replace("-", "") + "USDT"
+    # نگاشت چند نماد خاص
+    _sym_map = {
+        "bitcoin": "BTC", "ethereum": "ETH", "tether": "USDT", "binancecoin": "BNB",
+        "solana": "SOL", "ripple": "XRP", "the-open-network": "TON", "dogecoin": "DOGE",
+        "cardano": "ADA", "tron": "TRX", "chainlink": "LINK", "litecoin": "LTC",
+        "polkadot": "DOT", "avalanche-2": "AVAX", "shiba-inu": "SHIB",
+        "matic-network": "MATIC", "near": "NEAR", "pepe": "PEPE", "sui": "SUI",
+    }
+    if coin_id and coin_id in _sym_map:
+        binance_sym = _sym_map[coin_id] + "USDT"
+    elif symbol_clean in _sym_map:
+        binance_sym = _sym_map[symbol_clean] + "USDT"
 
     headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
-    prices = []
+    prices = []  # list of [ts_ms, price]
+    source = ""
 
-    # 1) CoinGecko
-    try:
-        async with httpx.AsyncClient(timeout=18.0, headers=headers) as client:
-            r = await client.get(
-                f"https://api.coingecko.com/api/v3/coins/{coin_id}/market_chart",
-                params={"vs_currency": "usd", "days": str(days)},
-            )
-            if r.status_code == 200:
-                data = r.json() or {}
-                prices = data.get("prices") or []
-            elif r.status_code == 429:
-                logger.warning("coingecko rate limit on chart")
-    except Exception as e:
-        logger.error(f"chart market_chart: {e}")
-
-    # 2) Fallback Binance klines
-    if not prices or len(prices) < 2:
+    # ── 1) CoinGecko ──────────────────────────────────────────
+    if coin_id and not prices:
         try:
-            binance_sym = symbol_clean.upper().replace("USDT", "") + "USDT"
-            interval = "1h" if days <= 7 else ("4h" if days <= 30 else "1d")
-            limit = min(500, max(24, days * 24 if interval == "1h" else days * 6 if interval == "4h" else days))
-            async with httpx.AsyncClient(timeout=12.0) as client:
+            async with httpx.AsyncClient(timeout=15.0, headers=headers) as client:
                 r = await client.get(
-                    "https://api.binance.com/api/v3/klines",
-                    params={"symbol": binance_sym, "interval": interval, "limit": limit},
+                    f"https://api.coingecko.com/api/v3/coins/{coin_id}/market_chart",
+                    params={"vs_currency": "usd", "days": str(days)},
+                )
+                if r.status_code == 200:
+                    data = r.json() or {}
+                    prices = data.get("prices") or []
+                    if prices:
+                        source = "CoinGecko"
+                else:
+                    logger.warning(f"chart CG status {r.status_code}")
+        except Exception as e:
+            logger.warning(f"chart CG: {e}")
+
+    # ── 2) Binance Vision (بدون بلاک جغرافیایی) ───────────────
+    if len(prices) < 2:
+        try:
+            if days <= 2:
+                interval, limit = "15m", min(200, days * 96)
+            elif days <= 7:
+                interval, limit = "1h", min(200, days * 24)
+            elif days <= 30:
+                interval, limit = "4h", min(200, days * 6)
+            else:
+                interval, limit = "1d", min(200, days)
+            async with httpx.AsyncClient(timeout=15.0, headers=headers) as client:
+                r = await client.get(
+                    "https://data-api.binance.vision/api/v3/klines",
+                    params={"symbol": binance_sym, "interval": interval, "limit": int(limit)},
                 )
                 if r.status_code == 200:
                     klines = r.json() or []
-                    prices = [[int(k[0]), float(k[4])] for k in klines]  # close price
+                    if klines:
+                        prices = [[int(k[0]), float(k[4])] for k in klines]
+                        source = "Binance"
+                else:
+                    logger.warning(f"chart BN vision {binance_sym}: {r.status_code}")
         except Exception as e:
-            logger.warning(f"binance klines fallback: {e}")
+            logger.warning(f"chart BN vision: {e}")
+
+    # ── 3) OKX fallback ───────────────────────────────────────
+    if len(prices) < 2:
+        try:
+            okx_sym = binance_sym.replace("USDT", "-USDT")
+            if days <= 2:
+                bar, limit = "15m", "200"
+            elif days <= 7:
+                bar, limit = "1H", "168"
+            elif days <= 30:
+                bar, limit = "4H", "180"
+            else:
+                bar, limit = "1D", str(min(90, days))
+            async with httpx.AsyncClient(timeout=15.0, headers=headers) as client:
+                r = await client.get(
+                    "https://www.okx.com/api/v5/market/candles",
+                    params={"instId": okx_sym, "bar": bar, "limit": limit},
+                )
+                if r.status_code == 200:
+                    data = r.json() or {}
+                    candles = data.get("data") or []
+                    if candles:
+                        # OKX: newest first → reverse
+                        candles = list(reversed(candles))
+                        prices = [[int(c[0]), float(c[4])] for c in candles]
+                        source = "OKX"
+                else:
+                    logger.warning(f"chart OKX {okx_sym}: {r.status_code}")
+        except Exception as e:
+            logger.warning(f"chart OKX: {e}")
+
+    # ── 4) CoinGecko OHLC ساده (کمتر rate-limit حساس) ────────
+    if len(prices) < 2 and coin_id:
+        try:
+            async with httpx.AsyncClient(timeout=15.0, headers=headers) as client:
+                r = await client.get(
+                    f"https://api.coingecko.com/api/v3/coins/{coin_id}/ohlc",
+                    params={"vs_currency": "usd", "days": str(min(days, 30))},
+                )
+                if r.status_code == 200:
+                    ohlc = r.json() or []
+                    if ohlc:
+                        prices = [[int(row[0]), float(row[4])] for row in ohlc]
+                        source = "CoinGecko-OHLC"
+        except Exception as e:
+            logger.warning(f"chart CG ohlc: {e}")
 
     if not prices or len(prices) < 2:
-        return None, "❌ داده تاریخی برای این ارز در دسترس نیست. کمی بعد دوباره امتحان کنید."
+        return None, (
+            "❌ داده تاریخی برای این ارز در دسترس نیست.\n"
+            f"نماد امتحان‌شده: {symbol_clean.upper()} / {binance_sym}\n"
+            "مثال: btc ، eth ، sol ، ton ، pepe"
+        )
 
-    # نمونه‌برداری
+    # نمونه‌برداری برای خوانایی
     step = max(1, len(prices) // 48)
     sampled = prices[::step]
     if prices[-1] not in sampled:
@@ -684,11 +760,12 @@ async def get_crypto_chart(symbol: str, days: int = 7) -> Tuple[Optional[bytes],
     for item in sampled:
         try:
             ts, price = item[0], item[1]
+            # ts ممکن است ثانیه یا میلی‌ثانیه باشد
+            if ts < 1e12:
+                ts = ts * 1000
             dt = datetime.utcfromtimestamp(ts / 1000.0)
             if days <= 2:
                 labels.append(dt.strftime("%H:%M"))
-            elif days <= 14:
-                labels.append(dt.strftime("%m/%d"))
             else:
                 labels.append(dt.strftime("%m/%d"))
             values.append(float(price))
@@ -702,7 +779,6 @@ async def get_crypto_chart(symbol: str, days: int = 7) -> Tuple[Optional[bytes],
         import matplotlib
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
-        # جلوگیری از خطای فونت فارسی
         plt.rcParams["axes.unicode_minus"] = False
         plt.rcParams["font.family"] = "DejaVu Sans"
     except ImportError:
@@ -717,7 +793,8 @@ async def get_crypto_chart(symbol: str, days: int = 7) -> Tuple[Optional[bytes],
         tick_idx = [int(i * (len(labels) - 1) / max(1, n_ticks - 1)) for i in range(n_ticks)]
         ax.set_xticks(tick_idx)
         ax.set_xticklabels([labels[i] for i in tick_idx], rotation=25, fontsize=8)
-        ax.set_title(f"{symbol_clean.upper()} Price — last {days} days (USD)", fontsize=12, fontweight="bold")
+        title_sym = symbol_clean.upper()
+        ax.set_title(f"{title_sym} Price — last {days} days (USD) [{source}]", fontsize=11, fontweight="bold")
         ax.set_ylabel("USD")
         ax.grid(True, alpha=0.28, linestyle="--")
         ax.spines["top"].set_visible(False)
@@ -745,6 +822,7 @@ async def get_crypto_chart(symbol: str, days: int = 7) -> Tuple[Optional[bytes],
     low = min(values)
     caption = (
         f"📊 {symbol_clean.upper()} — {days} day chart\n"
+        f"Source: {source}\n"
         f"Start: ${first:,.4f}\n"
         f"End: ${last:,.4f}\n"
         f"High/Low: ${high:,.4f} / ${low:,.4f}\n"
