@@ -964,7 +964,7 @@ async def _h_currency(u, c, t, uid):
 
 
 async def _h_crypto_full(u, c, t, uid):
-    """نمودار + یک پیام تحلیل حرفه‌ای یکپارچه (بدون پیام جداگانه AI)"""
+    """یک پیام واحد: نمودار + تحلیل تکنیکال/فاندامنتال در کپشن"""
     c.user_data.pop("waiting_for", None)
     raw = (t or "").strip().translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789"))
     parts = [p for p in raw.replace(",", " ").split() if p]
@@ -989,56 +989,71 @@ async def _h_crypto_full(u, c, t, uid):
         )
         return
 
-    status = await u.message.reply_text(f"⏳ تحلیل حرفه‌ای {symbol.upper()} در حال آماده‌سازی...")
+    wait = await u.message.reply_text(f"⏳ در حال آماده‌سازی {symbol.upper()}...")
 
-    # نمودار
+    # موازی: نمودار + تحلیل
     png = None
-    caption = ""
+    report = ""
     try:
-        png, caption = await get_crypto_chart(symbol, days)
+        chart_task = get_crypto_chart(symbol, days)
+        # جمع‌بندی AI کوتاه (اختیاری)
+        ai_summary = ""
+        try:
+            base = await analyze_crypto(symbol, ai_summary="")
+            try:
+                from bot.services.ai_service import ask_ai
+                prompt = (
+                    "فقط ۲ تا ۴ جمله فارسی، بدون عنوان. "
+                    "روند، سیگنال لانگ/شورت/صبر، و یک نکته عملی. توصیه قطعی نده.\\n\\n"
+                    + base[:2000]
+                )
+                answer, _ = await ask_ai(uid, prompt)
+                ai_summary = (answer or "").strip().replace("\\n", " ")
+                if len(ai_summary) > 260:
+                    ai_summary = ai_summary[:260].rsplit(" ", 1)[0] + "…"
+            except Exception:
+                ai_summary = ""
+            report = await analyze_crypto(symbol, ai_summary=ai_summary) if ai_summary else base
+        except Exception as e:
+            report = f"⚠️ خطا در تحلیل: {e}"
+
+        try:
+            png, _cap = await chart_task
+        except Exception as e:
+            png, _cap = None, str(e)
     except Exception as e:
-        caption = f"⚠️ خطا در نمودار: {e}"
+        report = f"⚠️ خطا: {e}"
+
+    # یک پیام: عکس + کل تحلیل در کپشن
+    try:
+        await wait.delete()
+    except Exception:
+        pass
 
     if png:
         try:
             from io import BytesIO
             bio = BytesIO(png)
-            bio.name = f"{symbol}_chart.png"
-            await u.message.reply_photo(photo=bio, caption=(caption or "")[:900])
+            bio.name = f"{symbol}_analysis.png"
+            # کپشن حداکثر 1024
+            caption = (report or "تحلیل آماده شد.")[:1024]
+            await u.message.reply_photo(
+                photo=bio,
+                caption=caption,
+                reply_markup=get_market_keyboard(),
+            )
+            return
         except Exception as e:
-            await u.message.reply_text(f"⚠️ ارسال نمودار ناموفق: {e}")
-    elif caption:
-        await u.message.reply_text(caption)
+            await u.message.reply_text(
+                (report or "") + f"\\n\\n⚠️ نمودار ارسال نشد: {e}",
+                reply_markup=get_market_keyboard(),
+            )
+            return
 
-    # جمع‌بندی AI داخل همان پیام (اختیاری؛ اگر fail شد خلاصه محلی می‌آید)
-    ai_summary = ""
-    try:
-        from bot.services.ai_service import ask_ai
-        # اول داده خام کوتاه برای پرامپت
-        base_report = await analyze_crypto(symbol, ai_summary="")
-        prompt = (
-            "فقط یک پاراگراف ۳ تا ۵ جمله‌ای به فارسی بنویس؛ بدون عنوان و بدون بولت. "
-            "لحن مثل تحلیل‌گر حرفه‌ای: روند، مومنتوم، حمایت/مقاومت، و استراتژی (فروش در پولبک یا خرید در حمایت یا صبر). "
-            "اعداد مهم را ذکر کن. توصیه قطعی نده.\\n\\n" + base_report[:2800]
-        )
-        answer, _provider = await ask_ai(uid, prompt)
-        ai_summary = (answer or "").strip().replace("\n", " ")
-        # اگر AI زیاد طول داد کوتاه کن
-        if len(ai_summary) > 500:
-            ai_summary = ai_summary[:500].rsplit(" ", 1)[0] + "…"
-        report = await analyze_crypto(symbol, ai_summary=ai_summary)
-    except Exception:
-        try:
-            report = await analyze_crypto(symbol)
-        except Exception as e:
-            report = f"⚠️ خطا در تحلیل: {e}"
-
-    try:
-        await status.edit_text(report)
-    except Exception:
-        await u.message.reply_text(report)
-
-    await u.message.reply_text("📊", reply_markup=get_market_keyboard())
+    await u.message.reply_text(
+        report or "❌ داده در دسترس نیست.",
+        reply_markup=get_market_keyboard(),
+    )
 
 
 async def _h_crypto_chart(u, c, t, uid):
