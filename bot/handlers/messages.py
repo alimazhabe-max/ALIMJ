@@ -699,10 +699,10 @@ async def _text_handler_inner(update: Update, context: ContextTypes.DEFAULT_TYPE
         r = await full_market_prices()
         await m.edit_text(r)
         await update.message.reply_text("💰", reply_markup=get_market_keyboard()); return
-    if text in ("💎 ۲۰ ارز برتر کریپتو", "۲۰ ارز برتر کریپتو", "کریپتو"):
+    if text in ("💎 ۳۰۰ ارز برتر کریپتو", "۳۰۰ ارز برتر کریپتو", "کریپتو"):
         track_usage(user_id, "crypto_top")
         m = await update.message.reply_text("⏳ دریافت لیست کریپتو...")
-        r = await get_top_crypto(20)
+        r = await get_top_crypto(300)
         await m.edit_text(r)
         await update.message.reply_text("💎", reply_markup=get_market_keyboard()); return
     if text in ("🔄 تبدیل ارز", "تبدیل ارز", "🔄 تبدیل ارز / کریپتو", "تبدیل ارز / کریپتو"):
@@ -1039,10 +1039,16 @@ async def _h_crypto_analyze(u, c, t, uid):
         try:
             from bot.services.ai_service import ask_ai
             prompt = (
-                "تو یک تحلیل‌گر حرفه‌ای بازار رمزارز هستی. بر اساس داده‌های زیر، "
-                "یک تحلیل کوتاه و کاربردی به فارسی بنویس (حداکثر ۱۲ خط). "
-                "شامل: وضعیت فعلی، سیگنال احتمالی (خنثی/صعودی/نزولی)، ریسک‌ها و یک نکته عملی. "
-                "توصیه سرمایه‌گذاری قطعی نده. داده‌ها:\n\n" + report[:3500]
+                "تو تحلیل‌گر حرفه‌ای ترید رمزارز هستی (شبیه ربات‌های Algo Analyzer). "
+                "بر اساس داده‌های زیر یک جمع‌بندی نهایی به فارسی بنویس (۸ تا ۱۴ خط).\n"
+                "حتماً این موارد را پوشش بده:\n"
+                "• روند غالب و رفتار قیمت در تایم‌فریم ساعتی\n"
+                "• وضعیت میانگین‌ها / RSI / قدرت روند\n"
+                "• حمایت و مقاومت و سناریوی شکست یا برگشت\n"
+                "• نوع سیگنال (لانگ/شورت/صبر) و دلیل\n"
+                "• سطح ریسک و نکته مدیریت سرمایه\n"
+                "لحن حرفه‌ای و خلاصه. توصیه سرمایه‌گذاری قطعی نده.\n\n"
+                "داده‌ها:\n" + report[:3800]
             )
             answer, provider = await ask_ai(uid, prompt)
             ai_text = f"🤖 **تحلیل هوش مصنوعی** ({provider})\n────────────────────────\n{answer}"
