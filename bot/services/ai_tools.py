@@ -432,6 +432,21 @@ def _profile_summary(user_id: int = 0) -> str:
 # ── ثبت پیش‌فرض ─────────────────────────────────────────────────────────────
 
 
+
+async def _analyze_crypto(symbol: str = "") -> str:
+    from bot.features.market.finance import analyze_crypto
+    return await analyze_crypto(str(symbol or "btc"))
+
+
+async def _crypto_chart_info(symbol: str = "", days: int = 7) -> str:
+    """برای AI فقط متن توضیح می‌دهد (تصویر جدا از هندلر پیام است)"""
+    from bot.features.market.finance import get_crypto_chart
+    png, caption = await get_crypto_chart(str(symbol or "btc"), int(days or 7))
+    if png:
+        return caption + "\n\n(نمودار تصویری در بخش بازار ربات در دسترس است. بنویس: نمودار " + str(symbol) + ")"
+    return caption or "داده نمودار در دسترس نیست."
+
+
 async def _tool_web_search(query: str = "") -> str:
     from bot.services.ai_extras import web_search
     return await web_search(query)
@@ -528,7 +543,7 @@ def _register_builtin_tools() -> None:
     )
     register_tool(
         name="convert_crypto",
-        description="تبدیل رمزارز به تومان/دلار.",
+        description="تبدیل رمزارز به تومان/دلار. تقریباً همه ارزها پشتیبانی می‌شود.",
         parameters={
             "type": "object",
             "properties": {
@@ -538,6 +553,33 @@ def _register_builtin_tools() -> None:
             "required": ["amount", "symbol"],
         },
         handler=_convert_crypto,
+    )
+    register_tool(
+        name="analyze_crypto",
+        description="تحلیل جامع ارز دیجیتال از چند منبع (CoinGecko، Binance Futures شبیه Coinglass، Fear&Greed، CoinPaprika).",
+        parameters={
+            "type": "object",
+            "properties": {
+                "symbol": {"type": "string", "description": "نماد مثل btc یا eth"},
+            },
+            "required": ["symbol"],
+        },
+        handler=_analyze_crypto,
+        keywords=[r"تحلیل\s*(ارز|کریپتو|رمزارز)|analyze\s*crypto|تحلیل\s*بیت\s*کوین"],
+    )
+    register_tool(
+        name="crypto_chart_info",
+        description="اطلاعات نمودار قیمت ارز دیجیتال (روزهای اخیر).",
+        parameters={
+            "type": "object",
+            "properties": {
+                "symbol": {"type": "string"},
+                "days": {"type": "integer"},
+            },
+            "required": ["symbol"],
+        },
+        handler=_crypto_chart_info,
+        keywords=[r"نمودار\s*(قیمت|کریپتو|ارز)|chart\s*crypto"],
     )
     register_tool(
         name="calculator",
