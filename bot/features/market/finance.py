@@ -282,7 +282,7 @@ async def _top_from_paprika(limit: int = 20):
         return []
 
 
-async def get_top_crypto(limit: int = 300) -> str:
+async def get_top_crypto(limit: int = 20) -> str:
     key = f"top_crypto_{limit}"
     now = datetime.now().timestamp()
     if key in _cache and now - _cache_t.get(key, 0) < 90:
