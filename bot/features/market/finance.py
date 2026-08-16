@@ -937,8 +937,8 @@ async def _fetch_fear_greed():
 
 async def analyze_crypto(symbol: str, ai_summary: str = "") -> str:
     """
-    خروجی یک‌تکه و حرفه‌ای شبیه ربات‌های تحلیل:
-    خلاصه کلی + سیگنال + امتیاز + جمع‌بندی AI در همان پیام
+    خروجی فشرده و حرفه‌ای (تکنیکال + فاندامنتال) برای کپشن یک پیام.
+    حداکثر حدود 1000 کاراکتر تا در caption تلگرام جا شود.
     """
     symbol_clean = (symbol or "").lower().strip().replace(" ", "").replace("‌", "")
     for junk in ("تحلیل", "analyze", "ارز", "کریپتو"):
@@ -948,42 +948,69 @@ async def analyze_crypto(symbol: str, ai_summary: str = "") -> str:
 
     coin_id = await resolve_coin_id(symbol_clean)
     _sym_map = {
-        "bitcoin": "BTC", "ethereum": "ETH", "tether": "USDT", "binancecoin": "BNB",
-        "solana": "SOL", "ripple": "XRP", "the-open-network": "TON", "dogecoin": "DOGE",
-        "cardano": "ADA", "tron": "TRX", "chainlink": "LINK", "litecoin": "LTC",
-        "polkadot": "DOT", "avalanche-2": "AVAX", "shiba-inu": "SHIB",
-        "matic-network": "MATIC", "near": "NEAR", "pepe": "PEPE", "sui": "SUI",
+        "bitcoin": "BTC", "ethereum": "ETH", "binancecoin": "BNB", "solana": "SOL",
+        "ripple": "XRP", "the-open-network": "TON", "dogecoin": "DOGE", "cardano": "ADA",
+        "tron": "TRX", "chainlink": "LINK", "litecoin": "LTC", "polkadot": "DOT",
+        "avalanche-2": "AVAX", "shiba-inu": "SHIB", "matic-network": "MATIC",
+        "near": "NEAR", "pepe": "PEPE", "sui": "SUI",
     }
     pair = symbol_clean.upper().replace("USDT", "").replace("-", "") + "USDT"
     if coin_id and coin_id in _sym_map:
         pair = _sym_map[coin_id] + "USDT"
     base = pair.replace("USDT", "")
 
-    detail_t = _fetch_coingecko_detail(coin_id) if coin_id else _empty_detail()
+    async def _empty():
+        return {}
+
+    detail_t = _fetch_coingecko_detail(coin_id) if coin_id else _empty()
     binance_t = _fetch_binance_futures(symbol_clean)
     fg_t = _fetch_fear_greed()
     klines_t = _fetch_klines_for_ta(pair, limit=200)
+    fund_t = _fetch_fundamentals(coin_id, base)
 
-    detail, binance, fg, klines = await asyncio.gather(detail_t, binance_t, fg_t, klines_t)
+    detail, binance, fg, klines, fund = await asyncio.gather(
+        detail_t, binance_t, fg_t, klines_t, fund_t
+    )
 
     md = (detail.get("market_data") or {}) if isinstance(detail, dict) else {}
     current = md.get("current_price", {}).get("usd")
     mcap = md.get("market_cap", {}).get("usd")
     vol = md.get("total_volume", {}).get("usd")
-    chg_1h = md.get("price_change_percentage_1h_in_currency", {}).get("usd")
     chg_24 = md.get("price_change_percentage_24h")
     chg_7d = md.get("price_change_percentage_7d")
-    high_24 = md.get("high_24h", {}).get("usd")
-    low_24 = md.get("low_24h", {}).get("usd")
     rank = detail.get("market_cap_rank") if isinstance(detail, dict) else None
-    name = (detail.get("name") if isinstance(detail, dict) else None) or base
+    circ = md.get("circulating_supply")
+    max_sup = md.get("max_supply")
+    fdv = md.get("fully_diluted_valuation", {}).get("usd") if isinstance(md.get("fully_diluted_valuation"), dict) else None
+    cats = detail.get("categories") if isinstance(detail, dict) else None
+    category = ""
+    if cats:
+        category = cats[0] if isinstance(cats[0], str) else str(cats[0])
 
-    closes, highs, lows, opens, vols = [], [], [], [], []
+    # merge fund overrides
+    if isinstance(fund, dict):
+        rank = rank or fund.get("rank")
+        mcap = mcap or fund.get("mcap")
+        vol = vol or fund.get("vol")
+        circ = circ or fund.get("circ")
+        max_sup = max_sup if max_sup is not None else fund.get("max_sup")
+        fdv = fdv or fund.get("fdv")
+        category = category or fund.get("category") or ""
+        current = current or fund.get("price")
+        btc_dom = fund.get("btc_dom")
+        tvl = fund.get("tvl")
+        ath = fund.get("ath") or (md.get("ath", {}) or {}).get("usd")
+    else:
+        btc_dom = None
+        tvl = None
+        ath = (md.get("ath", {}) or {}).get("usd")
+
+    closes, highs, lows, vols = [], [], [], []
     if klines:
         for k in klines:
             try:
-                opens.append(float(k[1])); highs.append(float(k[2]))
-                lows.append(float(k[3])); closes.append(float(k[4])); vols.append(float(k[5]))
+                highs.append(float(k[2])); lows.append(float(k[3]))
+                closes.append(float(k[4])); vols.append(float(k[5]))
             except Exception:
                 continue
     if current is None and closes:
@@ -995,8 +1022,6 @@ async def analyze_crypto(symbol: str, ai_summary: str = "") -> str:
     trend_arrow = {"صعودی": "صعودی ↗️", "نزولی": "نزولی ↘️", "خنثی": "خنثی ↔️"}.get(trend, "خنثی ↔️")
     signal, signal_emoji, setup_score, rr_quality, risk_level, exec_status = _derive_signal(ta, chg_24, binance or {})
 
-    # سیگنال فارسی مثل نمونه
-    signal_fa = signal
     if "لانگ" in signal:
         signal_fa = f"لانگ {signal_emoji}"
     elif "شورت" in signal:
@@ -1007,122 +1032,189 @@ async def analyze_crypto(symbol: str, ai_summary: str = "") -> str:
     def fmt_p(v):
         if v is None:
             return "—"
+        try:
+            v = float(v)
+        except Exception:
+            return "—"
         if v >= 1000:
             return f"{v:,.2f}"
         if v >= 1:
             return f"{v:,.4f}"
         return f"{v:,.6f}"
 
-    # جمع‌بندی هوشمند محلی (اگر AI نداد)
+    def fmt_big(v):
+        if v is None:
+            return "—"
+        try:
+            v = float(v)
+        except Exception:
+            return "—"
+        if v >= 1e12:
+            return f"${v/1e12:.2f}T"
+        if v >= 1e9:
+            return f"${v/1e9:.2f}B"
+        if v >= 1e6:
+            return f"${v/1e6:.2f}M"
+        return f"${v:,.0f}"
+
     if not ai_summary:
         ai_summary = _build_smart_summary(
             pair, trend, ta, support, resistance, signal, setup_score, chg_24, binance or {}, current
         )
+    # کوتاه برای کپشن
+    if len(ai_summary) > 280:
+        ai_summary = ai_summary[:280].rsplit(" ", 1)[0] + "…"
 
     lines = [
         f"▎1. 📰 خلاصه کلی — {pair}",
         f"🧭 روند: {trend_arrow}",
-        f"🛡 حمایت کلیدی: {fmt_p(support)}",
-        f"🧱 مقاومت کلیدی: {fmt_p(resistance)}",
-        f"🎯 نوع سیگنال: {signal_fa}",
-        f"⭐️ امتیاز کیفیت ستاپ: {setup_score}.0" if isinstance(setup_score, int) else f"⭐️ امتیاز کیفیت ستاپ: {setup_score}",
-        f"⚖️ کیفیت ریوارد (R:R وزنی): {rr_quality}",
-        f"⚠️ سطح ریسک (حد ضرر): {risk_level}",
-        f"🔖 وضعیت اجرا: {exec_status}",
-        f"📝 جمع‌بندی: {ai_summary}",
+        f"🛡 حمایت: {fmt_p(support)}",
+        f"🧱 مقاومت: {fmt_p(resistance)}",
+        f"🎯 سیگنال: {signal_fa}",
+        f"⭐️ ستاپ: {setup_score}.0 | R:R: {rr_quality}",
+        f"⚠️ ریسک: {risk_level} | اجرا: {exec_status}",
+        f"📝 {ai_summary}",
         "",
-        "▎2. 💵 قیمت و بازار",
+        "▎2. 💵 بازار",
     ]
-    if current is not None:
-        lines.append(f"قیمت: ${fmt_p(current)}")
+    price_line = f"قیمت: ${fmt_p(current)}" if current is not None else "قیمت: —"
+    if chg_24 is not None:
+        em = "🟢" if chg_24 >= 0 else "🔴"
+        price_line += f" | ۲۴س {em}{chg_24:+.1f}%"
+    if chg_7d is not None:
+        em = "🟢" if chg_7d >= 0 else "🔴"
+        price_line += f" | ۷ر {em}{chg_7d:+.1f}%"
+    lines.append(price_line)
+
+    # اندیکاتور فشرده
+    ind_bits = []
+    if ta.get("rsi") is not None:
+        ind_bits.append(f"RSI {ta['rsi']:.0f}")
+    if ta.get("adx") is not None:
+        ind_bits.append(f"ADX {ta['adx']:.0f}")
+    if ind_bits:
+        lines.append("اندیکاتور: " + " | ".join(ind_bits))
+    if binance and binance.get("funding_rate") is not None:
+        lines.append(f"Funding: {binance['funding_rate']:+.4f}%")
+
+    # فاندامنتال
+    lines.append("")
+    lines.append("▎3. 🏛 فاندامنتال")
+    fund_bits = []
     if rank:
-        lines.append(f"رتبه: #{rank}")
-    if mcap:
-        lines.append(f"مارکت‌کپ: ${mcap:,.0f}")
-    if vol:
-        lines.append(f"حجم ۲۴س: ${vol:,.0f}")
-    bits = []
-    for label, val in [("۱س", chg_1h), ("۲۴س", chg_24), ("۷ر", chg_7d)]:
-        if val is not None:
-            em = "🟢" if val >= 0 else "🔴"
-            bits.append(f"{label} {em}{val:+.2f}%")
-    if bits:
-        lines.append("تغییرات: " + " | ".join(bits))
-    if high_24 is not None and low_24 is not None:
-        lines.append(f"سقف/کف ۲۴س: ${fmt_p(high_24)} / ${fmt_p(low_24)}")
-
-    if ta:
-        lines.append("")
-        lines.append("▎3. 📊 اندیکاتورها")
-        if ta.get("rsi") is not None:
-            rsi = ta["rsi"]
-            rsi_s = "اشباع خرید" if rsi >= 70 else ("اشباع فروش" if rsi <= 30 else "خنثی")
-            lines.append(f"RSI(14): {rsi:.1f} — {rsi_s}")
-        if ta.get("adx") is not None:
-            lines.append(f"ADX(14): {ta['adx']:.1f} {'قوی' if ta['adx'] >= 25 else 'ضعیف'}")
-        if ta.get("sma20") is not None:
-            lines.append(f"SMA20: ${fmt_p(ta['sma20'])}")
-        if ta.get("sma50") is not None:
-            lines.append(f"SMA50: ${fmt_p(ta['sma50'])}")
-
-    if binance:
-        lines.append("")
-        lines.append("▎4. 📉 فیوچرز")
-        if "funding_rate" in binance:
-            fr = binance["funding_rate"]
-            lines.append(f"Funding: {fr:+.4f}%")
-        if binance.get("open_interest"):
-            lines.append(f"OI: {binance['open_interest']:,.0f}")
-
+        fund_bits.append(f"رتبه #{rank}")
+    if category:
+        fund_bits.append(category[:28])
+    if fund_bits:
+        lines.append(" · ".join(fund_bits))
+    lines.append(f"مارکت‌کپ: {fmt_big(mcap)} | حجم۲۴س: {fmt_big(vol)}")
+    if fdv:
+        lines.append(f"FDV: {fmt_big(fdv)}")
+    if circ:
+        sup = f"{circ:,.0f}"
+        if max_sup:
+            pct = circ / max_sup * 100
+            sup += f" / {max_sup:,.0f} ({pct:.0f}%)"
+        lines.append(f"عرضه: {sup}")
+    if tvl:
+        lines.append(f"TVL: {fmt_big(tvl)}")
+    if btc_dom:
+        lines.append(f"BTC Dom: {btc_dom:.1f}%")
+    if ath:
+        lines.append(f"ATH: ${fmt_p(ath)}")
     if fg:
-        lines.append("")
-        lines.append(f"😱 Fear & Greed: {fg.get('value')} — {fg.get('value_classification')}")
+        lines.append(f"F&G: {fg.get('value')} ({fg.get('value_classification')})")
 
     lines.append("")
-    lines.append("⚠️ صرفاً تحلیلی/آموزشی است؛ توصیه سرمایه‌گذاری قطعی نیست.")
-    return "\n".join(lines)
+    lines.append("⚠️ آموزشی است؛ توصیه سرمایه‌گذاری نیست.")
+
+    text_out = "\n".join(lines)
+    # تلگرام کپشن حداکثر 1024
+    if len(text_out) > 1020:
+        text_out = text_out[:1010].rsplit("\n", 1)[0] + "\n…"
+    return text_out
 
 
-async def _empty_detail():
-    return {}
+async def _fetch_fundamentals(coin_id: str | None, base: str) -> dict:
+    """داده فاندامنتال از CoinGecko + DefiLlama + Global"""
+    out = {}
+    headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
+    try:
+        async with httpx.AsyncClient(timeout=12.0, headers=headers) as c:
+            # global dominance
+            try:
+                rg = await c.get("https://api.coingecko.com/api/v3/global")
+                if rg.status_code == 200:
+                    g = (rg.json() or {}).get("data") or {}
+                    out["btc_dom"] = (g.get("market_cap_percentage") or {}).get("btc")
+            except Exception:
+                pass
+            # DefiLlama TVL by protocol slug guess
+            slug_map = {
+                "BTC": None, "ETH": "ethereum", "SOL": "solana", "AVAX": "avalanche",
+                "DOT": "polkadot", "ADA": "cardano", "TRX": "tron", "NEAR": "near",
+                "MATIC": "polygon", "ARB": "arbitrum", "OP": "optimism", "SUI": "sui",
+                "TON": "ton", "LINK": "chainlink",
+            }
+            slug = slug_map.get(base.upper())
+            if slug:
+                try:
+                    rt = await c.get(f"https://api.llama.fi/tvl/{slug}")
+                    if rt.status_code == 200:
+                        val = rt.json()
+                        if isinstance(val, (int, float)) and val > 0:
+                            out["tvl"] = float(val)
+                except Exception:
+                    pass
+            # simple price fallback if needed
+            if coin_id:
+                try:
+                    rs = await c.get(
+                        "https://api.coingecko.com/api/v3/simple/price",
+                        params={
+                            "ids": coin_id,
+                            "vs_currencies": "usd",
+                            "include_market_cap": "true",
+                            "include_24hr_vol": "true",
+                        },
+                    )
+                    if rs.status_code == 200:
+                        row = (rs.json() or {}).get(coin_id) or {}
+                        out["price"] = row.get("usd")
+                        out["mcap"] = row.get("usd_market_cap")
+                        out["vol"] = row.get("usd_24h_vol")
+                except Exception:
+                    pass
+    except Exception as e:
+        logger.warning(f"fundamentals: {e}")
+    return out
 
 
 def _build_smart_summary(pair, trend, ta, support, resistance, signal, score, chg_24, binance, current) -> str:
-    """جمع‌بندی حرفه‌ای بدون نیاز به AI جدا"""
     parts = []
     if trend == "نزولی":
-        parts.append("بازار در تایم‌فریم اخیر زیر میانگین‌های متحرک و با مومنتوم نزولی حرکت می‌کند.")
+        parts.append("بازار زیر میانگین‌ها و با مومنتوم نزولی است.")
     elif trend == "صعودی":
-        parts.append("بازار بالای میانگین‌های متحرک قرار دارد و مومنتوم کوتاه‌مدت صعودی است.")
+        parts.append("بازار بالای میانگین‌ها و مومنتوم کوتاه‌مدت صعودی دارد.")
     else:
-        parts.append("بازار در وضعیت رنج/خنثی است و قدرت روند محدود به نظر می‌رسد.")
-
+        parts.append("بازار رنج/خنثی است و قدرت روند محدود است.")
     rsi = ta.get("rsi")
     adx = ta.get("adx")
     if rsi is not None:
         if rsi >= 70:
-            parts.append("RSI در ناحیه اشباع خرید است و احتمال اصلاح وجود دارد.")
+            parts.append("RSI اشباع خرید؛ احتمال اصلاح.")
         elif rsi <= 30:
-            parts.append("RSI در ناحیه اشباع فروش است و احتمال برگشت کوتاه‌مدت مطرح است.")
-        else:
-            parts.append(f"RSI در محدوده میانی ({rsi:.0f}) قرار دارد.")
-
-    if adx is not None:
-        if adx >= 25:
-            parts.append("ADX قدرت روند را تأیید می‌کند.")
-        else:
-            parts.append("ADX نشان‌دهنده روند ضعیف یا بازار رنج است.")
-
+            parts.append("RSI اشباع فروش؛ احتمال برگشت کوتاه‌مدت.")
+    if adx is not None and adx >= 25:
+        parts.append("ADX روند را تأیید می‌کند.")
+    elif adx is not None:
+        parts.append("ADX روند ضعیف را نشان می‌دهد.")
     if "شورت" in signal:
-        parts.append("استراتژی محتمل: فروش در پولبک به سمت مقاومت‌های نزدیک.")
+        parts.append("استراتژی: فروش در پولبک به مقاومت.")
     elif "لانگ" in signal:
-        parts.append("استراتژی محتمل: خرید در برگشت به حمایت‌های نزدیک.")
+        parts.append("استراتژی: خرید روی حمایت.")
     else:
-        parts.append("بهتر است تا شکست واضح حمایت/مقاومت صبر شود.")
-
-    if support and resistance:
-        parts.append(f"محدوده کلیدی حدود {support:,.0f} تا {resistance:,.0f} است." if support > 10 else f"محدوده کلیدی حدود {support:.4f} تا {resistance:.4f} است.")
-
+        parts.append("تا شکست واضح حمایت/مقاومت صبر بهتر است.")
     return " ".join(parts)
 
 
