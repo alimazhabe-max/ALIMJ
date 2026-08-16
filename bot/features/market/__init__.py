@@ -9,6 +9,7 @@ from .finance import (
     analyze_crypto,
     parse_currency_input,
     resolve_coin_id,
+    SYMBOL_TO_ID,
 )
 
 __all__ = [
@@ -22,4 +23,5 @@ __all__ = [
     "analyze_crypto",
     "parse_currency_input",
     "resolve_coin_id",
+    "SYMBOL_TO_ID",
 ]

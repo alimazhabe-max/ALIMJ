@@ -370,11 +370,12 @@ async def convert_crypto(amount: float, symbol: str) -> str:
     mcap = info.get("usd_market_cap")
     vol = info.get("usd_24h_vol")
 
+    price_str = f"${usd_price:,.8f}" if usd_price < 1 else (f"${usd_price:,.4f}" if usd_price < 1000 else f"${usd_price:,.2f}")
     lines = [
         "🔄 مبدل ارز دیجیتال",
         "────────────────────",
         f"از: {pn(amount)} {symbol.upper()}",
-        f"قیمت واحد: ${usd_price:,.8f}" if usd_price < 1 else f"قیمت واحد: ${usd_price:,.4f}",
+        f"قیمت واحد: {price_str}",
     ]
     if chg is not None:
         emoji = "🟢" if chg >= 0 else "🔴"
@@ -388,7 +389,15 @@ async def convert_crypto(amount: float, symbol: str) -> str:
         lines.append(f"🏛 مارکت‌کپ: ${mcap:,.0f}")
     if vol:
         lines.append(f"📈 حجم ۲۴س: ${vol:,.0f}")
-    return "\n".join(lines)
+    # معکوس تقریبی
+    if amount and total_usd:
+        lines.append("────────────────────")
+        lines.append(f"🔁 ۱ دلار ≈ {pn(f'{1/usd_price:,.6f}')} {symbol.upper()}" if usd_price else "")
+        if total_toman and amount:
+            per_toman = amount / total_toman if total_toman else 0
+            if per_toman:
+                lines.append(f"🔁 ۱ میلیون تومان ≈ {pn(f'{per_toman * 1_000_000:,.6f}')} {symbol.upper()}")
+    return "\n".join([x for x in lines if x])
 
 
 async def full_market_prices() -> str:
@@ -444,11 +453,32 @@ def rial_toman(amount: float, to_toman=True) -> str:
     return f"💵 {pn(f'{amount:,.0f}')} تومان = **{pn(f'{amount*10:,.0f}')} ریال**"
 
 
-async def convert_currency(amount: float, from_cur: str, to_cur: str = "") -> str:
-    """تبدیل ارز / کریپتو — ورودی انعطاف‌پذیر + پشتیبانی همه رمزارزها"""
-    from_cur = (from_cur or "").lower().strip()
-    to_cur = (to_cur or "").lower().strip()
+# نام‌های رایج فارسی برای ارز و کریپتو
+_FA_CURRENCY = {
+    "دلار": "usd", "دلارآمریکا": "usd", "usd": "usd", "dollar": "usd", "دلاری": "usd",
+    "یورو": "eur", "euro": "eur", "eur": "eur",
+    "پوند": "gbp", "pound": "gbp", "gbp": "gbp",
+    "تومان": "toman", "تومن": "toman", "tmn": "toman",
+    "ریال": "rial", "irr": "rial",
+    "درهم": "aed", "aed": "aed",
+    "لیر": "try", "try": "try",
+    "یوان": "cny", "cny": "cny",
+    "روبل": "rub", "rub": "rub",
+    "بیتکوین": "btc", "بیت‌کوین": "btc", "بیت کوین": "btc",
+    "اتریوم": "eth", "تتر": "usdt", "تون": "ton", "سولانا": "sol",
+    "کاردانو": "ada", "ریپل": "xrp", "دوج": "doge", "دوج‌کوین": "doge",
+}
 
+
+async def convert_currency(amount: float, from_cur: str, to_cur: str = "") -> str:
+    """تبدیل ارز / کریپتو هوشمند — پشتیبانی گسترده + تبدیل دوطرفه"""
+    from_cur = (from_cur or "").lower().strip().replace(" ", "").replace("‌", "")
+    to_cur = (to_cur or "").lower().strip().replace(" ", "").replace("‌", "")
+
+    from_cur = _FA_CURRENCY.get(from_cur, from_cur)
+    to_cur = _FA_CURRENCY.get(to_cur, to_cur)
+
+    # کریپتو → کریپتو یا کریپتو → فیات
     if from_cur in SYMBOL_TO_ID or re.match(r"^[a-zA-Z0-9]{2,15}$", from_cur):
         if to_cur and to_cur not in ("usd", "دلار", "toman", "تومان", "rial", "ریال", ""):
             id1 = await resolve_coin_id(from_cur)
@@ -459,10 +489,18 @@ async def convert_currency(amount: float, from_cur: str, to_cur: str = "") -> st
                 p2 = prices.get(id2, {}).get("usd")
                 if p1 and p2 and p2 > 0:
                     result = amount * p1 / p2
+                    usd_rial = await _get_usd_rial() or 0
+                    total_usd = amount * p1
+                    total_toman = total_usd * (usd_rial / 10) if usd_rial else 0
                     return (
-                        f"🔄 تبدیل کریپتو\n"
-                        f"{pn(amount)} {from_cur.upper()} = **{pn(f'{result:,.6f}')} {to_cur.upper()}**\n"
-                        f"(بر اساس قیمت دلاری)"
+                        f"🔄 تبدیل کریپتو به کریپتو\n"
+                        f"────────────────────\n"
+                        f"{pn(amount)} {from_cur.upper()} = **{result:,.8f} {to_cur.upper()}**\n"
+                        f"≈ ${total_usd:,.4f}\n"
+                        + (f"≈ {pn(f'{total_toman:,.0f}')} تومان\n" if total_toman else "")
+                        + f"────────────────────\n"
+                        f"قیمت {from_cur.upper()}: ${p1:,.6f}\n"
+                        f"قیمت {to_cur.upper()}: ${p2:,.6f}"
                     )
         return await convert_crypto(amount, from_cur)
 
@@ -474,14 +512,27 @@ async def convert_currency(amount: float, from_cur: str, to_cur: str = "") -> st
         return rial_toman(amount, False)
 
     if d:
-        if from_cur in ("usd", "دلار", "dollar") and to_cur in ("rial", "ریال", "toman", "تومان", ""):
+        if from_cur in ("usd",) and to_cur in ("rial", "toman", ""):
             rial = amount * d
-            return f"${amount:,.2f} = **{pn(f'{rial:,.0f}')} ریال** ({pn(f'{rial/10:,.0f}')} تومان)"
-        if from_cur in ("toman", "تومان") and to_cur in ("usd", "دلار"):
-            return f"{pn(f'{amount:,.0f}')} تومان = **${amount * 10 / d:,.2f}**"
-        if from_cur in ("rial", "ریال") and to_cur in ("usd", "دلار"):
-            return f"{pn(f'{amount:,.0f}')} ریال = **${amount / d:,.2f}**"
+            return (
+                f"💵 تبدیل دلار\n"
+                f"────────────────────\n"
+                f"${amount:,.2f} = **{pn(f'{rial:,.0f}')} ریال**\n"
+                f"≈ **{pn(f'{rial/10:,.0f}')} تومان**\n"
+                f"نرخ: {pn(f'{d/10:,.0f}')} تومان"
+            )
+        if from_cur in ("toman",) and to_cur in ("usd", "دلار", ""):
+            usd = amount * 10 / d
+            return (
+                f"🇮🇷 تبدیل تومان → دلار\n"
+                f"────────────────────\n"
+                f"{pn(f'{amount:,.0f}')} تومان = **${usd:,.4f}**\n"
+                f"نرخ: {pn(f'{d/10:,.0f}')} تومان"
+            )
+        if from_cur in ("rial",) and to_cur in ("usd",):
+            return f"{pn(f'{amount:,.0f}')} ریال = **${amount / d:,.4f}**"
 
+    # اگر from کریپتو-like بود
     if re.match(r"^[a-zA-Z]{2,15}$", from_cur):
         return await convert_crypto(amount, from_cur)
 
@@ -491,7 +542,8 @@ async def convert_currency(amount: float, from_cur: str, to_cur: str = "") -> st
         "• `50000 تومان دلار`\n"
         "• `20 ton` یا `1.5 btc` یا `100 pepe`\n"
         "• `1 btc eth` (تبدیل بین دو کریپتو)\n"
-        "• `1000000 ریال تومان`"
+        "• `1000000 ریال تومان`\n"
+        "• `50 تتر` یا `۲ بیتکوین`"
     )
 
 
@@ -527,97 +579,176 @@ def parse_profit(text: str):
 
 
 def parse_currency_input(text: str):
-    t = text.strip().translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789"))
-    t_lower = t.lower()
-    m = re.match(r"([\d.]+)\s*([a-zA-Zآ-ی‌]+)?\s*([a-zA-Zآ-ی‌]+)?", t_lower)
-    if not m:
+    """پارس هوشمند: عدد + ارز مبدا + ارز مقصد (فارسی/انگلیسی)"""
+    if not text:
         return None
-    amount = float(m.group(1))
-    a = (m.group(2) or "").strip()
-    b = (m.group(3) or "").strip()
-    return amount, a, b
+    t = text.strip().translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789"))
+    t = t.replace("،", "").replace(",", "")
+    t_lower = t.lower().replace("‌", " ").replace("  ", " ").strip()
+
+    # الگوهای رایج
+    # 1) 20 ton / 1.5 btc usdt / 100 دلار تومان
+    m = re.match(
+        r"^([\d.]+)\s*([a-zA-Zآ-ی]+)?\s*(?:به|to|=|→|->)?\s*([a-zA-Zآ-ی]+)?\s*$",
+        t_lower,
+    )
+    if m:
+        amount = float(m.group(1))
+        a = (m.group(2) or "").strip()
+        b = (m.group(3) or "").strip()
+        # نرمال‌سازی فارسی
+        a = _FA_CURRENCY.get(a, a)
+        b = _FA_CURRENCY.get(b, b)
+        return amount, a, b
+
+    # 2) فقط عدد و یک کلمه چسبیده: 100دلار
+    m2 = re.match(r"^([\d.]+)\s*([a-zA-Zآ-ی]+)\s*$", t_lower)
+    if m2:
+        amount = float(m2.group(1))
+        a = _FA_CURRENCY.get(m2.group(2).strip(), m2.group(2).strip())
+        return amount, a, ""
+
+    return None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# نمودار قیمت کریپتو
+# نمودار قیمت کریپتو (باگ‌فیکس‌شده)
 # ─────────────────────────────────────────────────────────────────────────────
 
 async def get_crypto_chart(symbol: str, days: int = 7) -> Tuple[Optional[bytes], str]:
     """
-    ساخت نمودار قیمت خطی از CoinGecko.
+    ساخت نمودار قیمت خطی از CoinGecko + fallback Binance.
     برمی‌گرداند: (png_bytes یا None, متن توضیح)
     """
-    days = max(1, min(int(days or 7), 90))
-    coin_id = await resolve_coin_id(symbol)
+    try:
+        days = max(1, min(int(days or 7), 90))
+    except Exception:
+        days = 7
+
+    symbol_clean = (symbol or "").lower().strip().replace(" ", "").replace("‌", "")
+    # حذف کلمات اضافه
+    for junk in ("نمودار", "chart", "قیمت", "روز", "روزه"):
+        symbol_clean = symbol_clean.replace(junk, "")
+    symbol_clean = symbol_clean.strip() or "btc"
+
+    coin_id = await resolve_coin_id(symbol_clean)
     if not coin_id:
         return None, "❌ ارز پیدا نشد. مثال: btc یا eth یا sol"
 
     headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
     prices = []
+
+    # 1) CoinGecko
     try:
-        async with httpx.AsyncClient(timeout=15.0, headers=headers) as client:
+        async with httpx.AsyncClient(timeout=18.0, headers=headers) as client:
             r = await client.get(
                 f"https://api.coingecko.com/api/v3/coins/{coin_id}/market_chart",
-                params={"vs_currency": "usd", "days": days},
+                params={"vs_currency": "usd", "days": str(days)},
             )
             if r.status_code == 200:
-                data = r.json()
+                data = r.json() or {}
                 prices = data.get("prices") or []
+            elif r.status_code == 429:
+                logger.warning("coingecko rate limit on chart")
     except Exception as e:
         logger.error(f"chart market_chart: {e}")
 
+    # 2) Fallback Binance klines
     if not prices or len(prices) < 2:
-        return None, "❌ داده تاریخی برای این ارز در دسترس نیست."
+        try:
+            binance_sym = symbol_clean.upper().replace("USDT", "") + "USDT"
+            interval = "1h" if days <= 7 else ("4h" if days <= 30 else "1d")
+            limit = min(500, max(24, days * 24 if interval == "1h" else days * 6 if interval == "4h" else days))
+            async with httpx.AsyncClient(timeout=12.0) as client:
+                r = await client.get(
+                    "https://api.binance.com/api/v3/klines",
+                    params={"symbol": binance_sym, "interval": interval, "limit": limit},
+                )
+                if r.status_code == 200:
+                    klines = r.json() or []
+                    prices = [[int(k[0]), float(k[4])] for k in klines]  # close price
+        except Exception as e:
+            logger.warning(f"binance klines fallback: {e}")
 
-    step = max(1, len(prices) // 40)
+    if not prices or len(prices) < 2:
+        return None, "❌ داده تاریخی برای این ارز در دسترس نیست. کمی بعد دوباره امتحان کنید."
+
+    # نمونه‌برداری
+    step = max(1, len(prices) // 48)
     sampled = prices[::step]
     if prices[-1] not in sampled:
         sampled.append(prices[-1])
 
     labels = []
     values = []
-    for ts, price in sampled:
-        dt = datetime.utcfromtimestamp(ts / 1000)
-        if days <= 2:
-            labels.append(dt.strftime("%H:%M"))
-        elif days <= 14:
-            labels.append(dt.strftime("%m/%d %H"))
-        else:
-            labels.append(dt.strftime("%m/%d"))
-        values.append(float(price))
+    for item in sampled:
+        try:
+            ts, price = item[0], item[1]
+            dt = datetime.utcfromtimestamp(ts / 1000.0)
+            if days <= 2:
+                labels.append(dt.strftime("%H:%M"))
+            elif days <= 14:
+                labels.append(dt.strftime("%m/%d"))
+            else:
+                labels.append(dt.strftime("%m/%d"))
+            values.append(float(price))
+        except Exception:
+            continue
+
+    if len(values) < 2:
+        return None, "❌ داده کافی برای رسم نمودار نیست."
 
     try:
         import matplotlib
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
+        # جلوگیری از خطای فونت فارسی
+        plt.rcParams["axes.unicode_minus"] = False
+        plt.rcParams["font.family"] = "DejaVu Sans"
     except ImportError:
         return None, "❌ matplotlib نصب نیست."
 
-    fig, ax = plt.subplots(figsize=(9, 4.8), dpi=140)
-    ax.plot(range(len(values)), values, color="#3b82f6", linewidth=2.2, marker="o", markersize=3)
-    ax.fill_between(range(len(values)), values, alpha=0.15, color="#3b82f6")
-    ax.set_xticks(range(0, len(labels), max(1, len(labels) // 8)))
-    ax.set_xticklabels([labels[i] for i in range(0, len(labels), max(1, len(labels) // 8))], rotation=30, fontsize=8)
-    ax.set_title(f"نمودار قیمت {symbol.upper()} — {days} روز اخیر (USD)", fontsize=12, fontweight="bold")
-    ax.set_ylabel("قیمت (دلار)")
-    ax.grid(True, alpha=0.3)
-    fig.tight_layout()
+    try:
+        fig, ax = plt.subplots(figsize=(9, 4.8), dpi=130)
+        color = "#22c55e" if values[-1] >= values[0] else "#ef4444"
+        ax.plot(range(len(values)), values, color=color, linewidth=2.0)
+        ax.fill_between(range(len(values)), values, alpha=0.18, color=color)
+        n_ticks = min(8, len(labels))
+        tick_idx = [int(i * (len(labels) - 1) / max(1, n_ticks - 1)) for i in range(n_ticks)]
+        ax.set_xticks(tick_idx)
+        ax.set_xticklabels([labels[i] for i in tick_idx], rotation=25, fontsize=8)
+        ax.set_title(f"{symbol_clean.upper()} Price — last {days} days (USD)", fontsize=12, fontweight="bold")
+        ax.set_ylabel("USD")
+        ax.grid(True, alpha=0.28, linestyle="--")
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+        fig.tight_layout()
 
-    buf = io.BytesIO()
-    fig.savefig(buf, format="png", bbox_inches="tight")
-    plt.close(fig)
-    buf.seek(0)
-    png = buf.read()
+        buf = io.BytesIO()
+        fig.savefig(buf, format="png", bbox_inches="tight", facecolor="white")
+        plt.close(fig)
+        buf.seek(0)
+        png = buf.read()
+    except Exception as e:
+        logger.error(f"matplotlib chart error: {e}")
+        try:
+            plt.close("all")
+        except Exception:
+            pass
+        return None, f"❌ خطا در رسم نمودار: {e}"
 
     first = values[0]
     last = values[-1]
     chg = ((last - first) / first * 100) if first else 0
     emoji = "🟢" if chg >= 0 else "🔴"
+    high = max(values)
+    low = min(values)
     caption = (
-        f"📊 نمودار {symbol.upper()} ({days} روز)\n"
-        f"شروع: ${first:,.4f}\n"
-        f"پایان: ${last:,.4f}\n"
-        f"تغییر: {emoji} {chg:+.2f}%"
+        f"📊 {symbol_clean.upper()} — {days} day chart\n"
+        f"Start: ${first:,.4f}\n"
+        f"End: ${last:,.4f}\n"
+        f"High/Low: ${high:,.4f} / ${low:,.4f}\n"
+        f"Change: {emoji} {chg:+.2f}%"
     )
     return png, caption
 
@@ -708,23 +839,22 @@ async def _fetch_coinpaprika_ticker(coin_id: str) -> dict:
 async def analyze_crypto(symbol: str) -> str:
     """
     تحلیل جامع ارز دیجیتال از چند منبع:
-    - CoinGecko (قیمت، مارکت‌کپ، تغییرات، community)
-    - Binance Futures (Funding Rate، Open Interest — داده شبیه Coinglass)
-    - CoinPaprika
-    - Fear & Greed Index
+    - CoinGecko, Binance Futures, CoinPaprika, Fear & Greed
     """
     symbol_clean = (symbol or "").lower().strip().replace(" ", "").replace("‌", "")
+    for junk in ("تحلیل", "analyze", "ارز", "کریپتو"):
+        symbol_clean = symbol_clean.replace(junk, "")
+    symbol_clean = symbol_clean.strip() or "btc"
+
     coin_id = await resolve_coin_id(symbol_clean)
     if not coin_id:
         return "❌ ارز پیدا نشد. مثال: btc ، eth ، sol ، pepe"
 
-    detail_task = _fetch_coingecko_detail(coin_id)
-    binance_task = _fetch_binance_futures(symbol_clean)
-    fg_task = _fetch_fear_greed()
-    paprika_task = _fetch_coinpaprika_ticker(coin_id)
-
     detail, binance, fg, paprika = await asyncio.gather(
-        detail_task, binance_task, fg_task, paprika_task
+        _fetch_coingecko_detail(coin_id),
+        _fetch_binance_futures(symbol_clean),
+        _fetch_fear_greed(),
+        _fetch_coinpaprika_ticker(coin_id),
     )
 
     md = (detail.get("market_data") or {}) if detail else {}
