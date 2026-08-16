@@ -483,7 +483,7 @@ async def _text_handler_inner(update: Update, context: ContextTypes.DEFAULT_TYPE
                 "date_diff": _h_date_diff, "age_diff": _h_age_diff,
                 "event_search": _h_event_search, "countdown": _h_countdown,
                 "calc": _h_calc,
-                "profit": _h_profit, "currency": _h_currency, "distance": _h_distance, "crypto_chart": _h_crypto_chart, "crypto_analyze": _h_crypto_analyze,
+                "profit": _h_profit, "currency": _h_currency, "distance": _h_distance, "crypto_chart": _h_crypto_full, "crypto_analyze": _h_crypto_full, "crypto_full": _h_crypto_full,
                 "birth_save": _h_birth_save,
                 "count_text": _h_count_text,
                 "font_text": _h_font_text, "font_all": _h_font_all,
@@ -725,31 +725,26 @@ async def _text_handler_inner(update: Update, context: ContextTypes.DEFAULT_TYPE
         context.user_data["waiting_for"] = "profit"; track_usage(user_id, "profit")
         await update.message.reply_text("📈 `1000 1200` یا `1000 1200 5`", reply_markup=get_market_keyboard()); return
 
-    if text in ("📊 نمودار قیمت کریپتو", "نمودار قیمت کریپتو", "نمودار کریپتو"):
-        context.user_data["waiting_for"] = "crypto_chart"
-        track_usage(user_id, "crypto_chart")
+    if text in (
+        "📊 نمودار و تحلیل ارز دیجیتال",
+        "نمودار و تحلیل ارز دیجیتال",
+        "📊 نمودار قیمت کریپتو",
+        "نمودار قیمت کریپتو",
+        "نمودار کریپتو",
+        "🔍 تحلیل ارز دیجیتال",
+        "تحلیل ارز دیجیتال",
+        "تحلیل کریپتو",
+    ):
+        context.user_data["waiting_for"] = "crypto_full"
+        track_usage(user_id, "crypto_full")
         await update.message.reply_text(
-            "📊 نمودار قیمت کریپتو\n\n"
-            "نماد ارز و تعداد روز را بفرستید:\n"
+            "📊 نمودار + تحلیل حرفه‌ای ارز دیجیتال\n\n"
+            "نماد را بفرستید (اختیاری: تعداد روز):\n"
             "• btc\n"
             "• eth 30\n"
-            "• sol 14\n"
-            "• pepe 7",
-            reply_markup=get_market_keyboard(),
-        )
-        return
-
-    if text in ("🔍 تحلیل ارز دیجیتال", "تحلیل ارز دیجیتال", "تحلیل کریپتو"):
-        context.user_data["waiting_for"] = "crypto_analyze"
-        track_usage(user_id, "crypto_analyze")
-        await update.message.reply_text(
-            "🔍 تحلیل جامع ارز دیجیتال\n\n"
-            "نماد ارز را بفرستید:\n"
-            "• btc\n"
-            "• eth\n"
-            "• sol\n"
+            "• sol 7\n"
             "• ton\n\n"
-            "تحلیل از CoinGecko + Binance Futures + Fear&Greed + CoinPaprika",
+            "خروجی: نمودار چندپنلی + خلاصه تکنیکال + نظر AI (لانگ/شورت)",
             reply_markup=get_market_keyboard(),
         )
         return
@@ -968,107 +963,102 @@ async def _h_currency(u, c, t, uid):
         await u.message.reply_text(f"⚠️ خطا در تبدیل: {e}", reply_markup=get_market_keyboard())
 
 
-async def _h_crypto_chart(u, c, t, uid):
-    """نمودار قیمت: btc یا eth 30"""
+async def _h_crypto_full(u, c, t, uid):
+    """نمودار چندپنلی + تحلیل تکنیکال + AI لانگ/شورت"""
     c.user_data.pop("waiting_for", None)
     raw = (t or "").strip().translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789"))
     parts = [p for p in raw.replace(",", " ").split() if p]
     symbol = ""
-    days = 7
+    days = 30
     for p in parts:
-        if p.replace(".", "", 1).isdigit():
+        pl = p.lower()
+        if pl.replace(".", "", 1).isdigit():
             try:
                 days = int(float(p))
             except Exception:
                 pass
-        elif p.lower() not in ("روز", "day", "days", "نمودار", "chart"):
-            symbol = p
-            break
+        elif pl not in ("روز", "day", "days", "نمودار", "chart", "تحلیل", "analyze", "ارز"):
+            if not symbol:
+                symbol = p
     if not symbol and parts:
         symbol = parts[0]
     if not symbol:
-        await u.message.reply_text("❌ نماد را بفرستید. مثال: btc یا eth 30", reply_markup=get_market_keyboard())
+        await u.message.reply_text(
+            "❌ نماد را بفرستید. مثال: `btc` یا `eth 30`",
+            reply_markup=get_market_keyboard(),
+        )
         return
-    m = await u.message.reply_text("⏳ در حال رسم نمودار...")
+
+    status = await u.message.reply_text(f"⏳ در حال آماده‌سازی نمودار و تحلیل {symbol.upper()}...")
+
+    # 1) Chart
+    png = None
+    caption = ""
     try:
         png, caption = await get_crypto_chart(symbol, days)
-        if png:
+    except Exception as e:
+        caption = f"⚠️ خطا در نمودار: {e}"
+
+    if png:
+        try:
             from io import BytesIO
             bio = BytesIO(png)
             bio.name = f"{symbol}_chart.png"
-            await u.message.reply_photo(photo=bio, caption=caption[:1000], reply_markup=get_market_keyboard())
-            try:
-                await m.delete()
-            except Exception:
-                pass
-        else:
-            await m.edit_text(caption or "❌ خطا در ساخت نمودار")
-            await u.message.reply_text("📊", reply_markup=get_market_keyboard())
+            await u.message.reply_photo(photo=bio, caption=(caption or "")[:1000])
+        except Exception as e:
+            await u.message.reply_text(f"⚠️ ارسال نمودار ناموفق: {e}\n{caption}")
+    else:
+        await u.message.reply_text(caption or "❌ نمودار ساخته نشد.")
+
+    # 2) Technical report
+    try:
+        report = await analyze_crypto(symbol)
+        try:
+            await status.edit_text(report)
+        except Exception:
+            await u.message.reply_text(report)
+    except Exception as e:
+        report = ""
+        try:
+            await status.edit_text(f"⚠️ خطا در تحلیل: {e}")
+        except Exception:
+            await u.message.reply_text(f"⚠️ خطا در تحلیل: {e}")
+
+    # 3) AI decision LONG/SHORT
+    wait_ai = await u.message.reply_text("🤖 نظر نهایی هوش مصنوعی (لانگ / شورت)...")
+    try:
+        from bot.services.ai_service import ask_ai
+        prompt = (
+            "تو یک تریدر حرفه‌ای مشتقه کریپتو هستی. بر اساس داده زیر، "
+            "یک تصمیم واضح بده.\\n\\n"
+            "الزامات خروجی:\\n"
+            "1) در خط اول فقط یکی از این‌ها را بنویس: 🟢 LONG یا 🔴 SHORT یا ⚪ WAIT\\n"
+            "2) بعد ۳ تا ۶ خط دلیل کوتاه به فارسی\\n"
+            "3) یک خط برای حد ضرر تقریبی و یک خط برای هدف تقریبی (اگر WAIT بود بگو صبر)\\n"
+            "4) توصیه سرمایه‌گذاری قطعی و تضمینی نده؛ فقط تحلیل احتمالی\\n\\n"
+            f"نماد: {symbol}\\nروز نمودار: {days}\\n\\nداده‌ها:\\n{(report or caption)[:3500]}"
+        )
+        answer, provider = await ask_ai(uid, prompt)
+        ai_text = f"🤖 **تصمیم AI** ({provider})\n────────────────────────\n{answer}"
+        try:
+            await wait_ai.edit_text(ai_text)
+        except Exception:
+            await u.message.reply_text(ai_text)
     except Exception as e:
         try:
-            await m.edit_text(f"⚠️ خطا: {e}")
+            await wait_ai.edit_text(f"⚠️ AI در دسترس نیست: {e}")
         except Exception:
-            await u.message.reply_text(f"⚠️ خطا: {e}")
-        await u.message.reply_text("📊", reply_markup=get_market_keyboard())
+            pass
+
+    await u.message.reply_text("📊", reply_markup=get_market_keyboard())
+
+
+async def _h_crypto_chart(u, c, t, uid):
+    return await _h_crypto_full(u, c, t, uid)
 
 
 async def _h_crypto_analyze(u, c, t, uid):
-    """تحلیل جامع ارز + نظر هوش مصنوعی"""
-    c.user_data.pop("waiting_for", None)
-    raw = (t or "").strip()
-    symbol = raw.split()[0] if raw else ""
-    for junk in ("تحلیل", "analyze", "ارز", "کریپتو"):
-        if symbol.lower() == junk:
-            parts = raw.split()
-            symbol = parts[1] if len(parts) > 1 else ""
-            break
-    if not symbol:
-        await u.message.reply_text("❌ نماد را بفرستید. مثال: btc", reply_markup=get_market_keyboard())
-        return
-    m = await u.message.reply_text("⏳ در حال تحلیل چندمنبعی...")
-    try:
-        report = await analyze_crypto(symbol)
-        # پیام اول: داده خام
-        try:
-            await m.edit_text(report)
-        except Exception:
-            await u.message.reply_text(report)
-
-        # پیام دوم: تحلیل AI
-        wait_ai = await u.message.reply_text("🤖 در حال تحلیل هوش مصنوعی...")
-        try:
-            from bot.services.ai_service import ask_ai
-            prompt = (
-                "تو تحلیل‌گر حرفه‌ای ترید رمزارز هستی (شبیه ربات‌های Algo Analyzer). "
-                "بر اساس داده‌های زیر یک جمع‌بندی نهایی به فارسی بنویس (۸ تا ۱۴ خط).\n"
-                "حتماً این موارد را پوشش بده:\n"
-                "• روند غالب و رفتار قیمت در تایم‌فریم ساعتی\n"
-                "• وضعیت میانگین‌ها / RSI / قدرت روند\n"
-                "• حمایت و مقاومت و سناریوی شکست یا برگشت\n"
-                "• نوع سیگنال (لانگ/شورت/صبر) و دلیل\n"
-                "• سطح ریسک و نکته مدیریت سرمایه\n"
-                "لحن حرفه‌ای و خلاصه. توصیه سرمایه‌گذاری قطعی نده.\n\n"
-                "داده‌ها:\n" + report[:3800]
-            )
-            answer, provider = await ask_ai(uid, prompt)
-            ai_text = f"🤖 **تحلیل هوش مصنوعی** ({provider})\n────────────────────────\n{answer}"
-            try:
-                await wait_ai.edit_text(ai_text)
-            except Exception:
-                await u.message.reply_text(ai_text)
-        except Exception as e:
-            try:
-                await wait_ai.edit_text(f"⚠️ تحلیل AI در دسترس نیست: {e}")
-            except Exception:
-                pass
-        await u.message.reply_text("🔍", reply_markup=get_market_keyboard())
-    except Exception as e:
-        try:
-            await m.edit_text(f"⚠️ خطا در تحلیل: {e}")
-        except Exception:
-            await u.message.reply_text(f"⚠️ خطا در تحلیل: {e}")
-        await u.message.reply_text("🔍", reply_markup=get_market_keyboard())
-
+    return await _h_crypto_full(u, c, t, uid)
 
 
 async def _h_distance(u, c, t, uid):
