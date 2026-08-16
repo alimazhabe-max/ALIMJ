@@ -27,7 +27,7 @@ from bot.features.date.date_tools import (
 )
 from bot.features.date.converters import calculate_age, parse_birth_datetime
 from bot.features.religious import qibla_direction, daily_adhkar, daily_verse_hadith, religious_countdown, istikhara, istikhara_intro
-from bot.features.market.finance import full_market_prices, convert_currency, profit_loss, parse_profit, get_top_crypto, convert_crypto
+from bot.features.market.finance import full_market_prices, convert_currency, profit_loss, parse_profit, get_top_crypto, convert_crypto, get_crypto_chart, analyze_crypto, parse_currency_input
 from bot.features.tools.app_tools import calculator, generate_password, count_text, world_distance
 from bot.features.fun.fun_tools import hafez_fal, joke_of_day, fact_of_day, daily_challenge, random_joke, get_joke_categories
 from bot.features.weather.weather_extra import weather_forecast, air_quality
@@ -483,7 +483,7 @@ async def _text_handler_inner(update: Update, context: ContextTypes.DEFAULT_TYPE
                 "date_diff": _h_date_diff, "age_diff": _h_age_diff,
                 "event_search": _h_event_search, "countdown": _h_countdown,
                 "calc": _h_calc,
-                "profit": _h_profit, "currency": _h_currency, "distance": _h_distance,
+                "profit": _h_profit, "currency": _h_currency, "distance": _h_distance, "crypto_chart": _h_crypto_chart, "crypto_analyze": _h_crypto_analyze,
                 "birth_save": _h_birth_save,
                 "count_text": _h_count_text,
                 "font_text": _h_font_text, "font_all": _h_font_all,
@@ -722,6 +722,35 @@ async def _text_handler_inner(update: Update, context: ContextTypes.DEFAULT_TYPE
         context.user_data["waiting_for"] = "profit"; track_usage(user_id, "profit")
         await update.message.reply_text("📈 `1000 1200` یا `1000 1200 5`", reply_markup=get_market_keyboard()); return
 
+    if text in ("📊 نمودار قیمت کریپتو", "نمودار قیمت کریپتو", "نمودار کریپتو"):
+        context.user_data["waiting_for"] = "crypto_chart"
+        track_usage(user_id, "crypto_chart")
+        await update.message.reply_text(
+            "📊 نمودار قیمت کریپتو\n\n"
+            "نماد ارز و تعداد روز را بفرستید:\n"
+            "• btc\n"
+            "• eth 30\n"
+            "• sol 14\n"
+            "• pepe 7",
+            reply_markup=get_market_keyboard(),
+        )
+        return
+
+    if text in ("🔍 تحلیل ارز دیجیتال", "تحلیل ارز دیجیتال", "تحلیل کریپتو"):
+        context.user_data["waiting_for"] = "crypto_analyze"
+        track_usage(user_id, "crypto_analyze")
+        await update.message.reply_text(
+            "🔍 تحلیل جامع ارز دیجیتال\n\n"
+            "نماد ارز را بفرستید:\n"
+            "• btc\n"
+            "• eth\n"
+            "• sol\n"
+            "• ton\n\n"
+            "تحلیل از CoinGecko + Binance Futures + Fear&Greed + CoinPaprika",
+            reply_markup=get_market_keyboard(),
+        )
+        return
+
     # هوا
     if text in ("🌤 پیش‌بینی هوا", "پیش‌بینی هوا"):
         track_usage(user_id, "forecast")
@@ -928,6 +957,54 @@ async def _h_currency(u, c, t, uid):
         await u.message.reply_text(await convert_crypto(amount, a), reply_markup=get_market_keyboard())
         return
     await u.message.reply_text(await convert_currency(amount, a or "usd", b or "toman"), reply_markup=get_market_keyboard())
+
+
+async def _h_crypto_chart(u, c, t, uid):
+    """نمودار قیمت: btc یا eth 30"""
+    t = (t or "").strip().translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789"))
+    parts = t.split()
+    symbol = parts[0] if parts else ""
+    days = 7
+    if len(parts) >= 2:
+        try:
+            days = int(float(parts[1]))
+        except Exception:
+            days = 7
+    if not symbol:
+        await u.message.reply_text("❌ نماد را بفرستید. مثال: btc یا eth 30", reply_markup=get_market_keyboard())
+        return
+    m = await u.message.reply_text("⏳ در حال رسم نمودار...")
+    try:
+        png, caption = await get_crypto_chart(symbol, days)
+        if png:
+            from io import BytesIO
+            bio = BytesIO(png)
+            bio.name = f"{symbol}_chart.png"
+            await u.message.reply_photo(photo=bio, caption=caption, reply_markup=get_market_keyboard())
+            await m.delete()
+        else:
+            await m.edit_text(caption or "❌ خطا در ساخت نمودار")
+            await u.message.reply_text("📊", reply_markup=get_market_keyboard())
+    except Exception as e:
+        await m.edit_text(f"⚠️ خطا: {e}")
+        await u.message.reply_text("📊", reply_markup=get_market_keyboard())
+
+
+async def _h_crypto_analyze(u, c, t, uid):
+    """تحلیل جامع ارز"""
+    symbol = (t or "").strip().split()[0] if t else ""
+    if not symbol:
+        await u.message.reply_text("❌ نماد را بفرستید. مثال: btc", reply_markup=get_market_keyboard())
+        return
+    m = await u.message.reply_text("⏳ در حال تحلیل چندمنبعی...")
+    try:
+        report = await analyze_crypto(symbol)
+        await m.edit_text(report)
+        await u.message.reply_text("🔍", reply_markup=get_market_keyboard())
+    except Exception as e:
+        await m.edit_text(f"⚠️ خطا در تحلیل: {e}")
+        await u.message.reply_text("🔍", reply_markup=get_market_keyboard())
+
 
 
 async def _h_distance(u, c, t, uid):
