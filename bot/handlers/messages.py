@@ -964,7 +964,7 @@ async def _h_currency(u, c, t, uid):
 
 
 async def _h_crypto_full(u, c, t, uid):
-    """نمودار چندپنلی + تحلیل تکنیکال + AI لانگ/شورت"""
+    """نمودار + یک پیام تحلیل حرفه‌ای یکپارچه (بدون پیام جداگانه AI)"""
     c.user_data.pop("waiting_for", None)
     raw = (t or "").strip().translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789"))
     parts = [p for p in raw.replace(",", " ").split() if p]
@@ -989,9 +989,9 @@ async def _h_crypto_full(u, c, t, uid):
         )
         return
 
-    status = await u.message.reply_text(f"⏳ در حال آماده‌سازی نمودار و تحلیل {symbol.upper()}...")
+    status = await u.message.reply_text(f"⏳ تحلیل حرفه‌ای {symbol.upper()} در حال آماده‌سازی...")
 
-    # 1) Chart
+    # نمودار
     png = None
     caption = ""
     try:
@@ -1004,51 +1004,39 @@ async def _h_crypto_full(u, c, t, uid):
             from io import BytesIO
             bio = BytesIO(png)
             bio.name = f"{symbol}_chart.png"
-            await u.message.reply_photo(photo=bio, caption=(caption or "")[:1000])
+            await u.message.reply_photo(photo=bio, caption=(caption or "")[:900])
         except Exception as e:
-            await u.message.reply_text(f"⚠️ ارسال نمودار ناموفق: {e}\n{caption}")
-    else:
-        await u.message.reply_text(caption or "❌ نمودار ساخته نشد.")
+            await u.message.reply_text(f"⚠️ ارسال نمودار ناموفق: {e}")
+    elif caption:
+        await u.message.reply_text(caption)
 
-    # 2) Technical report
-    try:
-        report = await analyze_crypto(symbol)
-        try:
-            await status.edit_text(report)
-        except Exception:
-            await u.message.reply_text(report)
-    except Exception as e:
-        report = ""
-        try:
-            await status.edit_text(f"⚠️ خطا در تحلیل: {e}")
-        except Exception:
-            await u.message.reply_text(f"⚠️ خطا در تحلیل: {e}")
-
-    # 3) AI decision LONG/SHORT
-    wait_ai = await u.message.reply_text("🤖 نظر نهایی هوش مصنوعی (لانگ / شورت)...")
+    # جمع‌بندی AI داخل همان پیام (اختیاری؛ اگر fail شد خلاصه محلی می‌آید)
+    ai_summary = ""
     try:
         from bot.services.ai_service import ask_ai
+        # اول داده خام کوتاه برای پرامپت
+        base_report = await analyze_crypto(symbol, ai_summary="")
         prompt = (
-            "تو یک تریدر حرفه‌ای مشتقه کریپتو هستی. بر اساس داده زیر، "
-            "یک تصمیم واضح بده.\\n\\n"
-            "الزامات خروجی:\\n"
-            "1) در خط اول فقط یکی از این‌ها را بنویس: 🟢 LONG یا 🔴 SHORT یا ⚪ WAIT\\n"
-            "2) بعد ۳ تا ۶ خط دلیل کوتاه به فارسی\\n"
-            "3) یک خط برای حد ضرر تقریبی و یک خط برای هدف تقریبی (اگر WAIT بود بگو صبر)\\n"
-            "4) توصیه سرمایه‌گذاری قطعی و تضمینی نده؛ فقط تحلیل احتمالی\\n\\n"
-            f"نماد: {symbol}\\nروز نمودار: {days}\\n\\nداده‌ها:\\n{(report or caption)[:3500]}"
+            "فقط یک پاراگراف ۳ تا ۵ جمله‌ای به فارسی بنویس؛ بدون عنوان و بدون بولت. "
+            "لحن مثل تحلیل‌گر حرفه‌ای: روند، مومنتوم، حمایت/مقاومت، و استراتژی (فروش در پولبک یا خرید در حمایت یا صبر). "
+            "اعداد مهم را ذکر کن. توصیه قطعی نده.\\n\\n" + base_report[:2800]
         )
-        answer, provider = await ask_ai(uid, prompt)
-        ai_text = f"🤖 **تصمیم AI** ({provider})\n────────────────────────\n{answer}"
+        answer, _provider = await ask_ai(uid, prompt)
+        ai_summary = (answer or "").strip().replace("\n", " ")
+        # اگر AI زیاد طول داد کوتاه کن
+        if len(ai_summary) > 500:
+            ai_summary = ai_summary[:500].rsplit(" ", 1)[0] + "…"
+        report = await analyze_crypto(symbol, ai_summary=ai_summary)
+    except Exception:
         try:
-            await wait_ai.edit_text(ai_text)
-        except Exception:
-            await u.message.reply_text(ai_text)
-    except Exception as e:
-        try:
-            await wait_ai.edit_text(f"⚠️ AI در دسترس نیست: {e}")
-        except Exception:
-            pass
+            report = await analyze_crypto(symbol)
+        except Exception as e:
+            report = f"⚠️ خطا در تحلیل: {e}"
+
+    try:
+        await status.edit_text(report)
+    except Exception:
+        await u.message.reply_text(report)
 
     await u.message.reply_text("📊", reply_markup=get_market_keyboard())
 
