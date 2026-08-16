@@ -282,7 +282,7 @@ async def _top_from_paprika(limit: int = 20):
         return []
 
 
-async def get_top_crypto(limit: int = 20) -> str:
+async def get_top_crypto(limit: int = 300) -> str:
     key = f"top_crypto_{limit}"
     now = datetime.now().timestamp()
     if key in _cache and now - _cache_t.get(key, 0) < 90:
@@ -293,25 +293,33 @@ async def get_top_crypto(limit: int = 20) -> str:
     headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
 
     try:
-        async with httpx.AsyncClient(timeout=12.0, headers=headers) as client:
-            r = await client.get(
-                "https://api.coingecko.com/api/v3/coins/markets",
-                params={
-                    "vs_currency": "usd",
-                    "order": "market_cap_desc",
-                    "per_page": limit,
-                    "page": 1,
-                    "sparkline": "false",
-                    "price_change_percentage": "24h",
-                },
-            )
-            if r.status_code == 200:
-                for coin in r.json():
+        async with httpx.AsyncClient(timeout=20.0, headers=headers) as client:
+            pages = max(1, (min(limit, 300) + 249) // 250)
+            for page in range(1, pages + 1):
+                r = await client.get(
+                    "https://api.coingecko.com/api/v3/coins/markets",
+                    params={
+                        "vs_currency": "usd",
+                        "order": "market_cap_desc",
+                        "per_page": min(250, limit - len(coins)),
+                        "page": page,
+                        "sparkline": "false",
+                        "price_change_percentage": "24h",
+                    },
+                )
+                if r.status_code != 200:
+                    break
+                batch = r.json() or []
+                if not batch:
+                    break
+                for coin in batch:
                     coins.append({
                         "symbol": (coin.get("symbol") or "").upper(),
                         "price": coin.get("current_price") or 0,
                         "chg": coin.get("price_change_percentage_24h") or 0,
                     })
+                if len(coins) >= limit:
+                    break
     except Exception as e:
         logger.error(f"coingecko markets: {e}")
 
@@ -323,7 +331,7 @@ async def get_top_crypto(limit: int = 20) -> str:
     if not coins:
         return "❌ لیست کریپتو موقتاً در دسترس نیست.\nکمی بعد دوباره امتحان کنید."
 
-    lines = ["💎 ۲۰ ارز برتر کریپتو", "(دلار + تومان)", ""]
+    lines = [f"💎 {limit} ارز برتر کریپتو", "(دلار + تومان)", ""]
     for i, coin in enumerate(coins[:limit], 1):
         sym = coin.get("symbol") or "?"
         price = float(coin.get("price") or 0)
@@ -916,138 +924,389 @@ async def _fetch_coinpaprika_ticker(coin_id: str) -> dict:
 
 async def analyze_crypto(symbol: str) -> str:
     """
-    تحلیل جامع ارز دیجیتال از چند منبع:
-    - CoinGecko, Binance Futures, CoinPaprika, Fear & Greed
+    تحلیل حرفه‌ای مشابه بات‌های ترید:
+    روند، حمایت/مقاومت، سیگنال، امتیاز، ریسک، RSI/ADX تقریبی + داده بازار
     """
     symbol_clean = (symbol or "").lower().strip().replace(" ", "").replace("‌", "")
+    for junk in ("تحلیل", "analyze", "ارز", "کریپتو", "btc", "usdt"):
+        pass
     for junk in ("تحلیل", "analyze", "ارز", "کریپتو"):
-        symbol_clean = symbol_clean.replace(junk, "")
-    symbol_clean = symbol_clean.strip() or "btc"
+        if symbol_clean.startswith(junk):
+            symbol_clean = symbol_clean[len(junk):].strip()
+    symbol_clean = symbol_clean.replace("usdt", "").strip() or "btc"
 
     coin_id = await resolve_coin_id(symbol_clean)
-    if not coin_id:
-        return "❌ ارز پیدا نشد. مثال: btc ، eth ، sol ، pepe"
+    _sym_map = {
+        "bitcoin": "BTC", "ethereum": "ETH", "tether": "USDT", "binancecoin": "BNB",
+        "solana": "SOL", "ripple": "XRP", "the-open-network": "TON", "dogecoin": "DOGE",
+        "cardano": "ADA", "tron": "TRX", "chainlink": "LINK", "litecoin": "LTC",
+        "polkadot": "DOT", "avalanche-2": "AVAX", "shiba-inu": "SHIB",
+        "matic-network": "MATIC", "near": "NEAR", "pepe": "PEPE", "sui": "SUI",
+    }
+    pair = (symbol_clean.upper().replace("USDT", "") + "USDT")
+    if coin_id and coin_id in _sym_map:
+        pair = _sym_map[coin_id] + "USDT"
+    base = pair.replace("USDT", "")
 
-    detail, binance, fg, paprika = await asyncio.gather(
-        _fetch_coingecko_detail(coin_id),
-        _fetch_binance_futures(symbol_clean),
-        _fetch_fear_greed(),
-        _fetch_coinpaprika_ticker(coin_id),
-    )
+    # ── داده بازار موازی ──
+    async def _empty_dict():
+        return {}
+    detail_t = _fetch_coingecko_detail(coin_id) if coin_id else _empty_dict()
+    binance_t = _fetch_binance_futures(symbol_clean)
+    fg_t = _fetch_fear_greed()
+    klines_t = _fetch_klines_for_ta(pair, limit=200)
 
-    md = (detail.get("market_data") or {}) if detail else {}
+    detail, binance, fg, klines = await asyncio.gather(detail_t, binance_t, fg_t, klines_t)
+
+    md = (detail.get("market_data") or {}) if isinstance(detail, dict) else {}
     current = md.get("current_price", {}).get("usd")
     mcap = md.get("market_cap", {}).get("usd")
     vol = md.get("total_volume", {}).get("usd")
-    ath = md.get("ath", {}).get("usd")
-    ath_change = md.get("ath_change_percentage", {}).get("usd")
-    high_24 = md.get("high_24h", {}).get("usd")
-    low_24 = md.get("low_24h", {}).get("usd")
     chg_1h = md.get("price_change_percentage_1h_in_currency", {}).get("usd")
     chg_24 = md.get("price_change_percentage_24h")
     chg_7d = md.get("price_change_percentage_7d")
     chg_30d = md.get("price_change_percentage_30d")
-    supply = md.get("circulating_supply")
-    max_supply = md.get("max_supply")
-    rank = detail.get("market_cap_rank") if detail else None
-    name = detail.get("name") if detail else symbol_clean.upper()
-    symbol_up = (detail.get("symbol") or symbol_clean).upper() if detail else symbol_clean.upper()
+    high_24 = md.get("high_24h", {}).get("usd")
+    low_24 = md.get("low_24h", {}).get("usd")
+    ath = md.get("ath", {}).get("usd")
+    ath_change = md.get("ath_change_percentage", {}).get("usd")
+    rank = detail.get("market_cap_rank") if isinstance(detail, dict) else None
+    name = (detail.get("name") if isinstance(detail, dict) else None) or base
+    symbol_up = ((detail.get("symbol") if isinstance(detail, dict) else None) or base).upper()
+
+    # قیمت از kline اگر CG نبود
+    closes = []
+    highs = []
+    lows = []
+    opens = []
+    vols = []
+    if klines:
+        for k in klines:
+            try:
+                opens.append(float(k[1]))
+                highs.append(float(k[2]))
+                lows.append(float(k[3]))
+                closes.append(float(k[4]))
+                vols.append(float(k[5]))
+            except Exception:
+                continue
+    if current is None and closes:
+        current = closes[-1]
+
+    # ── اندیکاتورهای تکنیکال ساده ──
+    ta = _compute_ta(closes, highs, lows, vols) if len(closes) >= 30 else {}
+
+    # حمایت / مقاومت از سوئیینگ‌ها
+    support, resistance = _support_resistance(closes, highs, lows, current)
+
+    # روند
+    trend = ta.get("trend", "خنثی")
+    trend_emoji = {"صعودی": "🟢", "نزولی": "🔴", "خنثی": "⚪"}.get(trend, "⚪")
+
+    # سیگنال
+    signal, signal_emoji, setup_score, rr_quality, risk_level, exec_status = _derive_signal(ta, chg_24, binance)
+
+    # فرمت قیمت
+    def fmt_p(v):
+        if v is None:
+            return "—"
+        if v >= 1000:
+            return f"{v:,.2f}"
+        if v >= 1:
+            return f"{v:,.4f}"
+        return f"{v:,.6f}"
 
     lines = [
-        f"🔍 **تحلیل جامع {name} ({symbol_up})**",
+        f"🔍 **شروع تحلیل {pair} توسط هوش مصنوعی**",
         "────────────────────────",
-        "📡 منابع: CoinGecko • Binance Futures • CoinPaprika • Fear&Greed",
+        "",
+        "📋 **۱. خلاصه کلی**",
+        f"📉 روند: {trend_emoji} {trend}",
+        f"🛡 حمایت کلیدی: {fmt_p(support)}",
+        f"🧱 مقاومت کلیدی: {fmt_p(resistance)}",
+        f"🎯 نوع سیگنال: {signal_emoji} {signal}",
+        f"⭐ امتیاز کیفیت ستاپ: {setup_score}/10",
+        f"⚖️ کیفیت ریوارد (R:R): {rr_quality}",
+        f"⚠️ سطح ریسک: {risk_level}",
+        f"✅ وضعیت اجرا: {exec_status}",
         "",
     ]
 
+    # قیمت و تغییرات
+    lines.append("💵 **قیمت و بازار**")
     if current is not None:
-        lines.append(f"💵 قیمت فعلی: **${current:,.6f}**" if current < 1 else f"💵 قیمت فعلی: **${current:,.2f}**")
+        lines.append(f"  قیمت فعلی: **${fmt_p(current)}**")
     if rank:
-        lines.append(f"🏆 رتبه مارکت‌کپ: #{rank}")
+        lines.append(f"  رتبه مارکت‌کپ: #{rank}")
     if mcap:
-        lines.append(f"🏛 مارکت‌کپ: ${mcap:,.0f}")
+        lines.append(f"  مارکت‌کپ: ${mcap:,.0f}")
     if vol:
-        lines.append(f"📊 حجم ۲۴س: ${vol:,.0f}")
-
-    lines.append("")
-    lines.append("📈 **تغییرات قیمت**")
-    for label, val in [("۱ ساعت", chg_1h), ("۲۴ ساعت", chg_24), ("۷ روز", chg_7d), ("۳۰ روز", chg_30d)]:
+        lines.append(f"  حجم ۲۴س: ${vol:,.0f}")
+    for label, val in [("۱س", chg_1h), ("۲۴س", chg_24), ("۷ر", chg_7d), ("۳۰ر", chg_30d)]:
         if val is not None:
-            emoji = "🟢" if val >= 0 else "🔴"
-            lines.append(f"  {label}: {emoji} {val:+.2f}%")
-
+            em = "🟢" if val >= 0 else "🔴"
+            lines.append(f"  تغییر {label}: {em} {val:+.2f}%")
     if high_24 is not None and low_24 is not None:
-        lines.append(f"  سقف/کف ۲۴س: ${high_24:,.4f} / ${low_24:,.4f}")
-
+        lines.append(f"  سقف/کف ۲۴س: ${fmt_p(high_24)} / ${fmt_p(low_24)}")
     if ath is not None:
-        lines.append(f"  ATH: ${ath:,.2f} ({ath_change:+.1f}% از اوج)" if ath_change is not None else f"  ATH: ${ath:,.2f}")
+        extra = f" ({ath_change:+.1f}% از اوج)" if ath_change is not None else ""
+        lines.append(f"  ATH: ${fmt_p(ath)}{extra}")
 
+    # اندیکاتورها
+    if ta:
+        lines.append("")
+        lines.append("📊 **اندیکاتورها**")
+        if ta.get("rsi") is not None:
+            rsi = ta["rsi"]
+            rsi_s = "اشباع خرید" if rsi >= 70 else ("اشباع فروش" if rsi <= 30 else "خنثی")
+            lines.append(f"  RSI(14): {rsi:.1f} — {rsi_s}")
+        if ta.get("adx") is not None:
+            lines.append(f"  ADX(14): {ta['adx']:.1f} {'(روند قوی)' if ta['adx'] >= 25 else '(روند ضعیف)'}")
+        if ta.get("sma20") is not None:
+            lines.append(f"  SMA20: ${fmt_p(ta['sma20'])}")
+        if ta.get("sma50") is not None:
+            lines.append(f"  SMA50: ${fmt_p(ta['sma50'])}")
+        if ta.get("vol_ratio") is not None:
+            lines.append(f"  حجم نسبت به میانگین: {ta['vol_ratio']:.2f}x")
+
+    # فیوچرز
     if binance:
         lines.append("")
-        lines.append("📉 **داده فیوچرز (Binance — نزدیک به Coinglass)**")
+        lines.append("📉 **فیوچرز (Binance)**")
         if "funding_rate" in binance:
             fr = binance["funding_rate"]
-            fr_emoji = "🟢" if fr > 0 else "🔴" if fr < 0 else "⚪"
-            lines.append(f"  Funding Rate: {fr_emoji} {fr:.4f}%")
-            if fr > 0.01:
-                lines.append("    → تمایل لانگ قوی (ممکن است اصلاح کوتاه‌مدت)")
-            elif fr < -0.01:
-                lines.append("    → تمایل شورت قوی (ممکن است شورت‌اسکوییز)")
-        if "open_interest" in binance and binance["open_interest"]:
-            lines.append(f"  Open Interest: {binance['open_interest']:,.0f} قرارداد")
-        if "volume_24h" in binance and binance["volume_24h"]:
+            fr_em = "🟢" if fr > 0 else "🔴" if fr < 0 else "⚪"
+            lines.append(f"  Funding: {fr_em} {fr:.4f}%")
+        if binance.get("open_interest"):
+            lines.append(f"  Open Interest: {binance['open_interest']:,.0f}")
+        if binance.get("volume_24h"):
             lines.append(f"  حجم فیوچرز ۲۴س: ${binance['volume_24h']:,.0f}")
-        if "price_change_pct" in binance:
-            lines.append(f"  تغییر فیوچرز ۲۴س: {binance['price_change_pct']:+.2f}%")
-
-    if supply:
-        lines.append("")
-        lines.append("🪙 **عرضه**")
-        lines.append(f"  در گردش: {supply:,.0f}")
-        if max_supply:
-            pct = supply / max_supply * 100
-            lines.append(f"  حداکثر: {max_supply:,.0f} ({pct:.1f}% عرضه شده)")
 
     if fg:
         lines.append("")
-        lines.append("😱 **شاخص ترس و طمع بازار**")
-        val = fg.get("value")
-        cls = fg.get("value_classification")
-        lines.append(f"  عدد: {val} — {cls}")
+        lines.append(f"😱 Fear & Greed: {fg.get('value')} — {fg.get('value_classification')}")
+
+    # جمع‌بندی متنی کوتاه (قبل از AI)
+    lines.append("")
+    lines.append("📝 **جمع‌بندی اولیه**")
+    summary_bits = []
+    if trend == "نزولی":
+        summary_bits.append("بازار در تایم‌فریم اخیر روند نزولی دارد.")
+    elif trend == "صعودی":
+        summary_bits.append("بازار در تایم‌فریم اخیر روند صعودی دارد.")
+    else:
+        summary_bits.append("بازار در وضعیت خنثی/رنج است.")
+    if ta.get("rsi") is not None:
+        if ta["rsi"] >= 70:
+            summary_bits.append("RSI در ناحیه اشباع خرید است.")
+        elif ta["rsi"] <= 30:
+            summary_bits.append("RSI در ناحیه اشباع فروش است.")
+    if support and resistance and current:
+        summary_bits.append(f"محدوده کلیدی بین {fmt_p(support)} تا {fmt_p(resistance)} است.")
+    summary_bits.append(f"سیگنال پیشنهادی سیستم: {signal} با امتیاز {setup_score}/10.")
+    lines.append("  " + " ".join(summary_bits))
 
     lines.append("")
-    lines.append("🧠 **جمع‌بندی سریع**")
-    signals = []
-    if chg_24 is not None:
-        if chg_24 > 5:
-            signals.append("رشد قوی ۲۴ساعته")
-        elif chg_24 < -5:
-            signals.append("افت قابل توجه ۲۴ساعته")
-    if binance.get("funding_rate") is not None:
-        fr = binance["funding_rate"]
-        if fr > 0.03:
-            signals.append("فاندینگ خیلی مثبت (احتیاط لانگ)")
-        elif fr < -0.03:
-            signals.append("فاندینگ خیلی منفی (احتمال اسکوییز)")
-    if fg and fg.get("value"):
-        try:
-            v = int(fg["value"])
-            if v <= 25:
-                signals.append("بازار در ترس شدید")
-            elif v >= 75:
-                signals.append("بازار در طمع شدید")
-        except Exception:
-            pass
-    if not signals:
-        signals.append("وضعیت نسبتاً متعادل — نیاز به بررسی بیشتر")
-    for s in signals:
-        lines.append(f"  • {s}")
-
-    lines.append("")
-    lines.append("⚠️ این تحلیل صرفاً اطلاعاتی است و توصیه سرمایه‌گذاری نیست.")
-    lines.append("💡 برای نمودار: «نمودار btc» یا «نمودار eth 30»")
+    lines.append("⚠️ این تحلیل صرفاً آموزشی/اطلاعاتی است و توصیه سرمایه‌گذاری نیست.")
+    lines.append("💡 برای نمودار: «نمودار " + base.lower() + "»")
 
     return "\n".join(lines)
+
+
+async def _fetch_klines_for_ta(pair: str, limit: int = 200) -> list:
+    """OHLCV از Binance Vision برای تحلیل تکنیکال"""
+    try:
+        async with httpx.AsyncClient(timeout=15.0, headers={"User-Agent": "Mozilla/5.0"}) as c:
+            r = await c.get(
+                "https://data-api.binance.vision/api/v3/klines",
+                params={"symbol": pair, "interval": "1h", "limit": limit},
+            )
+            if r.status_code == 200:
+                return r.json() or []
+            # OKX fallback
+            okx = pair.replace("USDT", "-USDT")
+            r2 = await c.get(
+                "https://www.okx.com/api/v5/market/candles",
+                params={"instId": okx, "bar": "1H", "limit": str(min(limit, 300))},
+            )
+            if r2.status_code == 200:
+                data = (r2.json() or {}).get("data") or []
+                # OKX newest first → reverse; map to binance-like
+                out = []
+                for row in reversed(data):
+                    out.append([int(row[0]), row[1], row[2], row[3], row[4], row[5]])
+                return out
+    except Exception as e:
+        logger.warning(f"klines ta: {e}")
+    return []
+
+
+def _sma(arr: list, n: int):
+    if len(arr) < n:
+        return None
+    return sum(arr[-n:]) / n
+
+
+def _rsi(closes: list, period: int = 14) -> float | None:
+    if len(closes) < period + 1:
+        return None
+    gains, losses = [], []
+    for i in range(-period, 0):
+        d = closes[i] - closes[i - 1]
+        gains.append(max(d, 0))
+        losses.append(max(-d, 0))
+    avg_gain = sum(gains) / period
+    avg_loss = sum(losses) / period
+    if avg_loss == 0:
+        return 100.0
+    rs = avg_gain / avg_loss
+    return 100 - (100 / (1 + rs))
+
+
+def _adx_approx(highs: list, lows: list, closes: list, period: int = 14) -> float | None:
+    """تقریب ساده ADX"""
+    if len(closes) < period * 2:
+        return None
+    trs = []
+    dms_p, dms_m = [], []
+    for i in range(1, len(closes)):
+        tr = max(highs[i] - lows[i], abs(highs[i] - closes[i - 1]), abs(lows[i] - closes[i - 1]))
+        trs.append(tr)
+        up = highs[i] - highs[i - 1]
+        dn = lows[i - 1] - lows[i]
+        dms_p.append(up if up > dn and up > 0 else 0)
+        dms_m.append(dn if dn > up and dn > 0 else 0)
+    if len(trs) < period:
+        return None
+    atr = sum(trs[-period:]) / period
+    if atr == 0:
+        return 0.0
+    di_p = 100 * (sum(dms_p[-period:]) / period) / atr
+    di_m = 100 * (sum(dms_m[-period:]) / period) / atr
+    denom = di_p + di_m
+    if denom == 0:
+        return 0.0
+    dx = 100 * abs(di_p - di_m) / denom
+    return dx
+
+
+def _compute_ta(closes, highs, lows, vols) -> dict:
+    out = {}
+    out["sma20"] = _sma(closes, 20)
+    out["sma50"] = _sma(closes, 50) if len(closes) >= 50 else _sma(closes, 30)
+    out["rsi"] = _rsi(closes, 14)
+    out["adx"] = _adx_approx(highs, lows, closes, 14)
+    if vols and len(vols) >= 20:
+        avg_vol = sum(vols[-20:]) / 20
+        out["vol_ratio"] = (vols[-1] / avg_vol) if avg_vol else 1.0
+    # روند
+    sma20, sma50 = out.get("sma20"), out.get("sma50")
+    price = closes[-1]
+    if sma20 and sma50:
+        if price > sma20 > sma50:
+            out["trend"] = "صعودی"
+        elif price < sma20 < sma50:
+            out["trend"] = "نزولی"
+        else:
+            out["trend"] = "خنثی"
+    elif sma20:
+        out["trend"] = "صعودی" if price > sma20 else "نزولی"
+    else:
+        out["trend"] = "خنثی"
+    # شیب اخیر
+    if len(closes) >= 24:
+        chg = (closes[-1] - closes[-24]) / closes[-24] * 100
+        out["chg_24h_bar"] = chg
+        if out["trend"] == "خنثی":
+            if chg > 2:
+                out["trend"] = "صعودی"
+            elif chg < -2:
+                out["trend"] = "نزولی"
+    return out
+
+
+def _support_resistance(closes, highs, lows, current):
+    if not closes:
+        return None, None
+    window = closes[-48:] if len(closes) >= 48 else closes
+    hi_w = highs[-48:] if len(highs) >= 48 else highs
+    lo_w = lows[-48:] if len(lows) >= 48 else lows
+    resistance = max(hi_w) if hi_w else max(window)
+    support = min(lo_w) if lo_w else min(window)
+    # نزدیک‌تر کردن به قیمت فعلی با pivot ساده
+    if current:
+        # حمایت: بالاترین low زیر قیمت
+        below = [x for x in lo_w if x < current * 0.999]
+        above = [x for x in hi_w if x > current * 1.001]
+        if below:
+            support = max(below)
+        if above:
+            resistance = min(above)
+    return support, resistance
+
+
+def _derive_signal(ta: dict, chg_24, binance: dict):
+    """سیگنال، امتیاز، R:R، ریسک، وضعیت اجرا"""
+    trend = ta.get("trend", "خنثی")
+    rsi = ta.get("rsi")
+    adx = ta.get("adx") or 0
+    score = 5
+    signal = "خنثی"
+    signal_emoji = "⚪"
+
+    if trend == "صعودی":
+        signal, signal_emoji = "لانگ", "🟢"
+        score += 1
+    elif trend == "نزولی":
+        signal, signal_emoji = "شورت", "🔴"
+        score += 1
+
+    if rsi is not None:
+        if signal == "لانگ" and rsi < 40:
+            score += 2
+        elif signal == "شورت" and rsi > 60:
+            score += 2
+        elif signal == "لانگ" and rsi > 70:
+            score -= 2
+            signal = "خنثی / احتیاط"
+            signal_emoji = "🟡"
+        elif signal == "شورت" and rsi < 30:
+            score -= 2
+            signal = "خنثی / احتیاط"
+            signal_emoji = "🟡"
+
+    if adx >= 25:
+        score += 1
+    elif adx < 15:
+        score -= 1
+
+    fr = (binance or {}).get("funding_rate")
+    if fr is not None:
+        if signal == "لانگ" and fr < 0:
+            score += 1
+        elif signal == "شورت" and fr > 0:
+            score += 1
+        elif signal == "لانگ" and fr > 0.03:
+            score -= 1
+        elif signal == "شورت" and fr < -0.03:
+            score -= 1
+
+    score = max(1, min(10, score))
+
+    if score >= 8:
+        rr = "🟢 خوب"
+        risk = "🟡 متوسط"
+        status = "✅ قابل معامله"
+    elif score >= 5:
+        rr = "🟡 متوسط"
+        risk = "🟡 متوسط"
+        status = "⚠️ با احتیاط"
+    else:
+        rr = "🔴 ضعیف"
+        risk = "🔴 بالا"
+        status = "❌ صبر کنید"
+
+    return signal, signal_emoji, score, rr, risk, status
 
 
 async def get_crypto_analysis_short(symbol: str) -> str:
