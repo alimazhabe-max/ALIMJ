@@ -5,6 +5,10 @@ from .finance import (
     parse_profit,
     get_top_crypto,
     convert_crypto,
+    get_crypto_chart,
+    analyze_crypto,
+    parse_currency_input,
+    resolve_coin_id,
 )
 
 __all__ = [
@@ -14,4 +18,8 @@ __all__ = [
     "parse_profit",
     "get_top_crypto",
     "convert_crypto",
+    "get_crypto_chart",
+    "analyze_crypto",
+    "parse_currency_input",
+    "resolve_coin_id",
 ]

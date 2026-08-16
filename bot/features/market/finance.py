@@ -1,10 +1,12 @@
 """
-مالی و بازار — ارز، فلزات، سکه (بدون کریپتو در قیمت اصلی)
-کریپتو جدا + تبدیل سریع + سود/ضرر حرفه‌ای
+مالی و بازار — ارز، فلزات، سکه + کریپتو کامل
+نمودار قیمت + مبدل همه ارزهای دیجیتال + تحلیل چندمنبعی (CoinGecko + Binance + CoinPaprika + Fear&Greed + تلاش Coinglass)
 """
 import re
+import io
 import asyncio
-from datetime import datetime
+from datetime import datetime, timedelta
+from typing import Optional, Tuple, List, Dict, Any
 import httpx
 from bs4 import BeautifulSoup
 from bot.config import config
@@ -26,7 +28,7 @@ TGJU_SLUGS = {
     "afghani": "price_afn",
     "dinar_iq": "price_iqd",
     "gold18": "geram18",
-    "silver": "silver_999",  # نقره ۹۹۹ به ریال
+    "silver": "silver_999",
     "copper": "copper",
     "coin_emami": "sekee",
     "coin_bahar": "sekeb",
@@ -34,22 +36,37 @@ TGJU_SLUGS = {
     "coin_quarter": "rob",
 }
 
-# یک درخواست برای همه قیمت‌ها
 _AJAX_URLS = (
     "https://call1.tgju.org/ajax.json",
     "https://call2.tgju.org/ajax.json",
 )
 _BULK_CACHE_KEY = "tgju_bulk"
-_BULK_TTL = 90  # ثانیه
+_BULK_TTL = 90
 
+# نقشه نماد → شناسه CoinGecko (گسترده)
 SYMBOL_TO_ID = {
     "btc": "bitcoin", "bitcoin": "bitcoin", "بیتکوین": "bitcoin", "بیت‌کوین": "bitcoin",
     "eth": "ethereum", "ethereum": "ethereum", "اتریوم": "ethereum",
     "usdt": "tether", "tether": "tether", "تتر": "tether",
+    "usdc": "usd-coin", "busd": "binance-usd",
     "ton": "the-open-network", "toncoin": "the-open-network", "تون": "the-open-network",
     "bnb": "binancecoin", "sol": "solana", "xrp": "ripple", "ada": "cardano",
-    "doge": "dogecoin", "dot": "polkadot", "matic": "matic-network", "avax": "avalanche-2",
-    "link": "chainlink", "trx": "tron", "shib": "shiba-inu", "ltc": "litecoin",
+    "doge": "dogecoin", "dot": "polkadot", "matic": "matic-network", "polygon": "matic-network",
+    "avax": "avalanche-2", "link": "chainlink", "trx": "tron", "shib": "shiba-inu",
+    "ltc": "litecoin", "bch": "bitcoin-cash", "atom": "cosmos", "uni": "uniswap",
+    "near": "near", "apt": "aptos", "arb": "arbitrum", "op": "optimism",
+    "fil": "filecoin", "icp": "internet-computer", "vet": "vechain", "algo": "algorand",
+    "xlm": "stellar", "eos": "eos", "xtz": "tezos", "aave": "aave",
+    "mkr": "maker", "comp": "compound-governance-token", "snx": "havven",
+    "crv": "curve-dao-token", "sushi": "sushi", "1inch": "1inch",
+    "pepe": "pepe", "floki": "floki", "bonk": "bonk", "wif": "dogwifcoin",
+    "sui": "sui", "sei": "sei-network", "inj": "injective-protocol",
+    "tia": "celestia", "render": "render-token", "fet": "fetch-ai",
+    "rndr": "render-token", "imx": "immutable-x", "gala": "gala",
+    "sand": "the-sandbox", "mana": "decentraland", "axs": "axie-infinity",
+    "theta": "theta-token", "ftm": "fantom", "hbar": "hedera-hashgraph",
+    "egld": "elrond-erd-2", "kas": "kaspa", "rune": "thorchain",
+    "stx": "blockstack", "ordi": "ordinals", "sats": "sats-ordinals",
 }
 
 
@@ -58,7 +75,6 @@ def pn(n):
 
 
 def _parse_price(raw) -> int | None:
-    """تبدیل رشته قیمت TGJU به عدد صحیح (ریال)"""
     if raw is None:
         return None
     if isinstance(raw, (int, float)):
@@ -73,7 +89,6 @@ def _parse_price(raw) -> int | None:
 
 
 async def _fetch_tgju_bulk() -> dict:
-    """یک درخواست JSON برای همه قیمت‌ها — خیلی سریع"""
     now = datetime.now().timestamp()
     if _BULK_CACHE_KEY in _cache and now - _cache_t.get(_BULK_CACHE_KEY, 0) < _BULK_TTL:
         return _cache[_BULK_CACHE_KEY]
@@ -98,7 +113,6 @@ async def _fetch_tgju_bulk() -> dict:
 
 
 async def _tgju_price(slug: str):
-    """قیمت یک اسلاگ از کش bulk (بدون اسکرپ صفحه جدا)"""
     key = f"tgju_{slug}"
     now = datetime.now().timestamp()
     if key in _cache and now - _cache_t.get(key, 0) < _BULK_TTL:
@@ -116,7 +130,6 @@ async def _tgju_price(slug: str):
         _cache_t[key] = now
         return val
 
-    # fallback قدیمی: فقط برای یک اسلاگ اگر bulk نبود
     try:
         url = f"https://www.tgju.org/profile/{slug}"
         async with httpx.AsyncClient(timeout=5.0, headers=HEADERS, follow_redirects=True) as c:
@@ -139,6 +152,38 @@ async def _get_usd_rial():
     return await _tgju_price("price_dollar_rl")
 
 
+async def resolve_coin_id(symbol: str) -> Optional[str]:
+    """پیدا کردن شناسه CoinGecko از نماد یا نام — پشتیبانی تقریباً همه ارزها"""
+    symbol = (symbol or "").lower().strip().replace(" ", "").replace("‌", "")
+    if not symbol:
+        return None
+    if symbol in SYMBOL_TO_ID:
+        return SYMBOL_TO_ID[symbol]
+
+    cache_key = f"resolve_{symbol}"
+    now = datetime.now().timestamp()
+    if cache_key in _cache and now - _cache_t.get(cache_key, 0) < 3600:
+        return _cache[cache_key]
+
+    try:
+        async with httpx.AsyncClient(timeout=8.0, headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"}) as c:
+            r = await c.get("https://api.coingecko.com/api/v3/search", params={"query": symbol})
+            if r.status_code == 200:
+                coins = r.json().get("coins") or []
+                if coins:
+                    for coin in coins:
+                        if (coin.get("symbol") or "").lower() == symbol:
+                            cid = coin.get("id")
+                            _cache[cache_key] = cid
+                            _cache_t[cache_key] = now
+                            return cid
+                    cid = coins[0].get("id")
+                    _cache[cache_key] = cid
+                    _cache_t[cache_key] = now
+                    return cid
+    except Exception as e:
+        logger.warning(f"resolve_coin_id {symbol}: {e}")
+    return None
 
 
 async def _crypto_simple(ids: list):
@@ -147,12 +192,17 @@ async def _crypto_simple(ids: list):
     if key in _cache and now - _cache_t.get(key, 0) < 60:
         return _cache[key]
     headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
-    # CoinGecko
     try:
         async with httpx.AsyncClient(timeout=12.0, headers=headers) as client:
             r = await client.get(
                 "https://api.coingecko.com/api/v3/simple/price",
-                params={"ids": ",".join(ids), "vs_currencies": "usd"},
+                params={
+                    "ids": ",".join(ids),
+                    "vs_currencies": "usd",
+                    "include_24hr_change": "true",
+                    "include_market_cap": "true",
+                    "include_24hr_vol": "true",
+                },
             )
             if r.status_code == 200:
                 data = r.json()
@@ -161,12 +211,13 @@ async def _crypto_simple(ids: list):
                 return data
     except Exception as e:
         logger.error(f"coingecko simple: {e}")
-    # CoinPaprika fallback for known ids
+
     mapping = {
         "bitcoin": "btc-bitcoin", "ethereum": "eth-ethereum", "tether": "usdt-tether",
         "binancecoin": "bnb-binance-coin", "solana": "sol-solana", "ripple": "xrp-xrp",
         "the-open-network": "ton-toncoin", "dogecoin": "doge-dogecoin", "cardano": "ada-cardano",
         "tron": "trx-tron", "chainlink": "link-chainlink", "litecoin": "ltc-litecoin",
+        "polkadot": "dot-polkadot", "avalanche-2": "avax-avalanche", "shiba-inu": "shib-shiba-inu",
     }
     out = {}
     try:
@@ -216,7 +267,6 @@ async def _top_from_paprika(limit: int = 20):
             if r.status_code != 200:
                 return []
             data = r.json() or []
-            # sort by rank
             data = sorted(data, key=lambda x: x.get("rank") or 9999)[:limit]
             out = []
             for row in data:
@@ -242,7 +292,6 @@ async def get_top_crypto(limit: int = 20) -> str:
     coins = []
     headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
 
-    # 1) CoinGecko
     try:
         async with httpx.AsyncClient(timeout=12.0, headers=headers) as client:
             r = await client.get(
@@ -266,11 +315,8 @@ async def get_top_crypto(limit: int = 20) -> str:
     except Exception as e:
         logger.error(f"coingecko markets: {e}")
 
-    # 2) CoinLore
     if not coins:
         coins = await _top_from_coinlore(limit)
-
-    # 3) CoinPaprika
     if not coins:
         coins = await _top_from_paprika(limit)
 
@@ -299,38 +345,50 @@ async def get_top_crypto(limit: int = 20) -> str:
 
 
 async def convert_crypto(amount: float, symbol: str) -> str:
+    """تبدیل هر ارز دیجیتال به دلار و تومان — پشتیبانی تقریباً همه کوین‌ها"""
     symbol = symbol.lower().strip().replace(" ", "").replace("‌", "")
-    coin_id = SYMBOL_TO_ID.get(symbol)
+    coin_id = await resolve_coin_id(symbol)
     if not coin_id:
-        try:
-            async with httpx.AsyncClient(timeout=6.0) as c:
-                r = await c.get("https://api.coingecko.com/api/v3/search", params={"query": symbol})
-                coins = r.json().get("coins", [])
-                if coins:
-                    coin_id = coins[0].get("id")
-        except Exception:
-            pass
-    if not coin_id:
-        return "❌ ارز پیدا نشد." + chr(10)*2 + "مثال: 20 ton یا 1.5 btc یا 100 usdt"
+        return (
+            "❌ ارز پیدا نشد.\n\n"
+            "مثال‌ها:\n"
+            "• 1.5 btc\n"
+            "• 20 ton\n"
+            "• 100 pepe\n"
+            "• 50 sol\n"
+            "• 10 sui"
+        )
     prices = await _crypto_simple([coin_id])
-    usd_price = prices.get(coin_id, {}).get("usd")
+    info = prices.get(coin_id) or {}
+    usd_price = info.get("usd")
     if not usd_price:
         return "❌ قیمت این ارز در دسترس نیست."
     total_usd = amount * usd_price
     usd_rial = await _get_usd_rial() or 0
     total_toman = total_usd * (usd_rial / 10) if usd_rial else 0
+    chg = info.get("usd_24h_change")
+    mcap = info.get("usd_market_cap")
+    vol = info.get("usd_24h_vol")
+
     lines = [
-        "🔄 مبدل ارز",
+        "🔄 مبدل ارز دیجیتال",
         "────────────────────",
         f"از: {pn(amount)} {symbol.upper()}",
-        f"قیمت واحد: ${usd_price:,.6f}",
-        "────────────────────",
-        f"💵 دلار: ${total_usd:,.4f}",
-        f"🇮🇷 تومان: {pn(f'{total_toman:,.0f}')}",
+        f"قیمت واحد: ${usd_price:,.8f}" if usd_price < 1 else f"قیمت واحد: ${usd_price:,.4f}",
     ]
+    if chg is not None:
+        emoji = "🟢" if chg >= 0 else "🔴"
+        lines.append(f"تغییر ۲۴س: {emoji} {chg:+.2f}%")
+    lines.append("────────────────────")
+    lines.append(f"💵 دلار: ${total_usd:,.4f}")
+    lines.append(f"🇮🇷 تومان: {pn(f'{total_toman:,.0f}')}")
     if usd_rial:
         lines.append(f"📊 نرخ دلار: {pn(f'{usd_rial/10:,.0f}')} تومان")
-    return chr(10).join(lines)
+    if mcap:
+        lines.append(f"🏛 مارکت‌کپ: ${mcap:,.0f}")
+    if vol:
+        lines.append(f"📈 حجم ۲۴س: ${vol:,.0f}")
+    return "\n".join(lines)
 
 
 async def full_market_prices() -> str:
@@ -343,11 +401,9 @@ async def full_market_prices() -> str:
             data[key] = _parse_price(item.get("p"))
         else:
             data[key] = _parse_price(item)
-        # fallback نقره اگر silver_999 نبود
         if key == "silver" and data[key] is None:
             alt = bulk.get("silver")
             if isinstance(alt, dict):
-                # نقره جهانی دلاری — رد کن
                 p = _parse_price(alt.get("p"))
                 if p and p > 1000:
                     data[key] = p
@@ -378,7 +434,7 @@ async def full_market_prices() -> str:
     ]:
         lines.append(fmt(label, key))
 
-    lines.append("\n💡 کریپتو: از دکمه «۲۰ ارز برتر» یا تبدیل استفاده کنید.")
+    lines.append("\n💡 کریپتو: از دکمه «۲۰ ارز برتر» یا تبدیل / نمودار / تحلیل استفاده کنید.")
     return "\n".join(lines)
 
 
@@ -389,17 +445,29 @@ def rial_toman(amount: float, to_toman=True) -> str:
 
 
 async def convert_currency(amount: float, from_cur: str, to_cur: str = "") -> str:
-    """تبدیل ارز / کریپتو — ورودی انعطاف‌پذیر"""
+    """تبدیل ارز / کریپتو — ورودی انعطاف‌پذیر + پشتیبانی همه رمزارزها"""
     from_cur = (from_cur or "").lower().strip()
     to_cur = (to_cur or "").lower().strip()
 
-    # اگر فقط یک نماد کریپتو
-    if from_cur in SYMBOL_TO_ID or from_cur in ("btc", "eth", "ton", "usdt", "bnb", "sol"):
+    if from_cur in SYMBOL_TO_ID or re.match(r"^[a-zA-Z0-9]{2,15}$", from_cur):
+        if to_cur and to_cur not in ("usd", "دلار", "toman", "تومان", "rial", "ریال", ""):
+            id1 = await resolve_coin_id(from_cur)
+            id2 = await resolve_coin_id(to_cur)
+            if id1 and id2:
+                prices = await _crypto_simple([id1, id2])
+                p1 = prices.get(id1, {}).get("usd")
+                p2 = prices.get(id2, {}).get("usd")
+                if p1 and p2 and p2 > 0:
+                    result = amount * p1 / p2
+                    return (
+                        f"🔄 تبدیل کریپتو\n"
+                        f"{pn(amount)} {from_cur.upper()} = **{pn(f'{result:,.6f}')} {to_cur.upper()}**\n"
+                        f"(بر اساس قیمت دلاری)"
+                    )
         return await convert_crypto(amount, from_cur)
 
     d = await _get_usd_rial()
 
-    # ریال/تومان
     if from_cur in ("rial", "ریال", "irr") and to_cur in ("toman", "تومان", "tmn", ""):
         return rial_toman(amount, True)
     if from_cur in ("toman", "تومان", "tmn") and to_cur in ("rial", "ریال", "irr"):
@@ -414,28 +482,26 @@ async def convert_currency(amount: float, from_cur: str, to_cur: str = "") -> st
         if from_cur in ("rial", "ریال") and to_cur in ("usd", "دلار"):
             return f"{pn(f'{amount:,.0f}')} ریال = **${amount / d:,.2f}**"
 
-    # تلاش کریپتو با نام
-    if re.match(r"^[a-zA-Z]{2,10}$", from_cur):
+    if re.match(r"^[a-zA-Z]{2,15}$", from_cur):
         return await convert_crypto(amount, from_cur)
 
     return (
         "❌ فرمت درست:\n"
         "• `100 دلار` یا `100 usd`\n"
         "• `50000 تومان دلار`\n"
-        "• `20 ton` یا `1.5 btc`\n"
+        "• `20 ton` یا `1.5 btc` یا `100 pepe`\n"
+        "• `1 btc eth` (تبدیل بین دو کریپتو)\n"
         "• `1000000 ریال تومان`"
     )
 
 
 def profit_loss(buy: float, sell: float, qty: float = 1.0) -> str:
-    """سود/ضرر حرفه‌ای با کارمزد اختیاری"""
     if buy <= 0:
         return "❌ قیمت خرید باید بزرگ‌تر از صفر باشد."
     gross = (sell - buy) * qty
     pct = (sell - buy) / buy * 100
     emoji = "📈" if gross >= 0 else "📉"
     status = "سود" if gross >= 0 else "ضرر"
-    # پیشنهاد کارمزد تقریبی ۰.۵٪
     fee_est = (buy + sell) * qty * 0.005 / 2
     net = gross - fee_est
     return (
@@ -461,7 +527,6 @@ def parse_profit(text: str):
 
 
 def parse_currency_input(text: str):
-    """پارس ورودی تبدیل: '20 ton' یا '100 دلار' یا '50 usdt تومان'"""
     t = text.strip().translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789"))
     t_lower = t.lower()
     m = re.match(r"([\d.]+)\s*([a-zA-Zآ-ی‌]+)?\s*([a-zA-Zآ-ی‌]+)?", t_lower)
@@ -471,3 +536,312 @@ def parse_currency_input(text: str):
     a = (m.group(2) or "").strip()
     b = (m.group(3) or "").strip()
     return amount, a, b
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# نمودار قیمت کریپتو
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def get_crypto_chart(symbol: str, days: int = 7) -> Tuple[Optional[bytes], str]:
+    """
+    ساخت نمودار قیمت خطی از CoinGecko.
+    برمی‌گرداند: (png_bytes یا None, متن توضیح)
+    """
+    days = max(1, min(int(days or 7), 90))
+    coin_id = await resolve_coin_id(symbol)
+    if not coin_id:
+        return None, "❌ ارز پیدا نشد. مثال: btc یا eth یا sol"
+
+    headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
+    prices = []
+    try:
+        async with httpx.AsyncClient(timeout=15.0, headers=headers) as client:
+            r = await client.get(
+                f"https://api.coingecko.com/api/v3/coins/{coin_id}/market_chart",
+                params={"vs_currency": "usd", "days": days},
+            )
+            if r.status_code == 200:
+                data = r.json()
+                prices = data.get("prices") or []
+    except Exception as e:
+        logger.error(f"chart market_chart: {e}")
+
+    if not prices or len(prices) < 2:
+        return None, "❌ داده تاریخی برای این ارز در دسترس نیست."
+
+    step = max(1, len(prices) // 40)
+    sampled = prices[::step]
+    if prices[-1] not in sampled:
+        sampled.append(prices[-1])
+
+    labels = []
+    values = []
+    for ts, price in sampled:
+        dt = datetime.utcfromtimestamp(ts / 1000)
+        if days <= 2:
+            labels.append(dt.strftime("%H:%M"))
+        elif days <= 14:
+            labels.append(dt.strftime("%m/%d %H"))
+        else:
+            labels.append(dt.strftime("%m/%d"))
+        values.append(float(price))
+
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except ImportError:
+        return None, "❌ matplotlib نصب نیست."
+
+    fig, ax = plt.subplots(figsize=(9, 4.8), dpi=140)
+    ax.plot(range(len(values)), values, color="#3b82f6", linewidth=2.2, marker="o", markersize=3)
+    ax.fill_between(range(len(values)), values, alpha=0.15, color="#3b82f6")
+    ax.set_xticks(range(0, len(labels), max(1, len(labels) // 8)))
+    ax.set_xticklabels([labels[i] for i in range(0, len(labels), max(1, len(labels) // 8))], rotation=30, fontsize=8)
+    ax.set_title(f"نمودار قیمت {symbol.upper()} — {days} روز اخیر (USD)", fontsize=12, fontweight="bold")
+    ax.set_ylabel("قیمت (دلار)")
+    ax.grid(True, alpha=0.3)
+    fig.tight_layout()
+
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", bbox_inches="tight")
+    plt.close(fig)
+    buf.seek(0)
+    png = buf.read()
+
+    first = values[0]
+    last = values[-1]
+    chg = ((last - first) / first * 100) if first else 0
+    emoji = "🟢" if chg >= 0 else "🔴"
+    caption = (
+        f"📊 نمودار {symbol.upper()} ({days} روز)\n"
+        f"شروع: ${first:,.4f}\n"
+        f"پایان: ${last:,.4f}\n"
+        f"تغییر: {emoji} {chg:+.2f}%"
+    )
+    return png, caption
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# تحلیل جامع کریپتو (چندمنبعی)
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def _fetch_coingecko_detail(coin_id: str) -> dict:
+    try:
+        async with httpx.AsyncClient(timeout=12.0, headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"}) as c:
+            r = await c.get(
+                f"https://api.coingecko.com/api/v3/coins/{coin_id}",
+                params={
+                    "localization": "false",
+                    "tickers": "false",
+                    "market_data": "true",
+                    "community_data": "true",
+                    "developer_data": "false",
+                },
+            )
+            if r.status_code == 200:
+                return r.json() or {}
+    except Exception as e:
+        logger.warning(f"cg detail: {e}")
+    return {}
+
+
+async def _fetch_binance_futures(symbol: str) -> dict:
+    """داده فیوچرز بایننس (جایگزین تقریبی بخشی از Coinglass): funding + OI"""
+    sym = (symbol or "").upper().replace("USDT", "") + "USDT"
+    out = {}
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as c:
+            r = await c.get("https://fapi.binance.com/fapi/v1/premiumIndex", params={"symbol": sym})
+            if r.status_code == 200:
+                d = r.json()
+                out["funding_rate"] = float(d.get("lastFundingRate") or 0) * 100
+                out["mark_price"] = float(d.get("markPrice") or 0)
+            r2 = await c.get("https://fapi.binance.com/fapi/v1/openInterest", params={"symbol": sym})
+            if r2.status_code == 200:
+                out["open_interest"] = float(r2.json().get("openInterest") or 0)
+            r3 = await c.get("https://fapi.binance.com/fapi/v1/ticker/24hr", params={"symbol": sym})
+            if r3.status_code == 200:
+                t = r3.json()
+                out["volume_24h"] = float(t.get("quoteVolume") or 0)
+                out["price_change_pct"] = float(t.get("priceChangePercent") or 0)
+    except Exception as e:
+        logger.warning(f"binance futures {sym}: {e}")
+    return out
+
+
+async def _fetch_fear_greed() -> Optional[dict]:
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as c:
+            r = await c.get("https://api.alternative.me/fng/?limit=1")
+            if r.status_code == 200:
+                data = (r.json() or {}).get("data") or []
+                if data:
+                    return data[0]
+    except Exception as e:
+        logger.warning(f"fear greed: {e}")
+    return None
+
+
+async def _fetch_coinpaprika_ticker(coin_id: str) -> dict:
+    mapping = {
+        "bitcoin": "btc-bitcoin", "ethereum": "eth-ethereum", "tether": "usdt-tether",
+        "binancecoin": "bnb-binance-coin", "solana": "sol-solana", "ripple": "xrp-xrp",
+        "the-open-network": "ton-toncoin", "dogecoin": "doge-dogecoin", "cardano": "ada-cardano",
+        "tron": "trx-tron", "chainlink": "link-chainlink", "litecoin": "ltc-litecoin",
+        "polkadot": "dot-polkadot", "avalanche-2": "avax-avalanche", "shiba-inu": "shib-shiba-inu",
+        "matic-network": "matic-polygon", "near": "near-near-protocol",
+    }
+    pid = mapping.get(coin_id)
+    if not pid:
+        return {}
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as c:
+            r = await c.get(f"https://api.coinpaprika.com/v1/tickers/{pid}")
+            if r.status_code == 200:
+                return r.json() or {}
+    except Exception as e:
+        logger.warning(f"paprika ticker: {e}")
+    return {}
+
+
+async def analyze_crypto(symbol: str) -> str:
+    """
+    تحلیل جامع ارز دیجیتال از چند منبع:
+    - CoinGecko (قیمت، مارکت‌کپ، تغییرات، community)
+    - Binance Futures (Funding Rate، Open Interest — داده شبیه Coinglass)
+    - CoinPaprika
+    - Fear & Greed Index
+    """
+    symbol_clean = (symbol or "").lower().strip().replace(" ", "").replace("‌", "")
+    coin_id = await resolve_coin_id(symbol_clean)
+    if not coin_id:
+        return "❌ ارز پیدا نشد. مثال: btc ، eth ، sol ، pepe"
+
+    detail_task = _fetch_coingecko_detail(coin_id)
+    binance_task = _fetch_binance_futures(symbol_clean)
+    fg_task = _fetch_fear_greed()
+    paprika_task = _fetch_coinpaprika_ticker(coin_id)
+
+    detail, binance, fg, paprika = await asyncio.gather(
+        detail_task, binance_task, fg_task, paprika_task
+    )
+
+    md = (detail.get("market_data") or {}) if detail else {}
+    current = md.get("current_price", {}).get("usd")
+    mcap = md.get("market_cap", {}).get("usd")
+    vol = md.get("total_volume", {}).get("usd")
+    ath = md.get("ath", {}).get("usd")
+    ath_change = md.get("ath_change_percentage", {}).get("usd")
+    high_24 = md.get("high_24h", {}).get("usd")
+    low_24 = md.get("low_24h", {}).get("usd")
+    chg_1h = md.get("price_change_percentage_1h_in_currency", {}).get("usd")
+    chg_24 = md.get("price_change_percentage_24h")
+    chg_7d = md.get("price_change_percentage_7d")
+    chg_30d = md.get("price_change_percentage_30d")
+    supply = md.get("circulating_supply")
+    max_supply = md.get("max_supply")
+    rank = detail.get("market_cap_rank") if detail else None
+    name = detail.get("name") if detail else symbol_clean.upper()
+    symbol_up = (detail.get("symbol") or symbol_clean).upper() if detail else symbol_clean.upper()
+
+    lines = [
+        f"🔍 **تحلیل جامع {name} ({symbol_up})**",
+        "────────────────────────",
+        "📡 منابع: CoinGecko • Binance Futures • CoinPaprika • Fear&Greed",
+        "",
+    ]
+
+    if current is not None:
+        lines.append(f"💵 قیمت فعلی: **${current:,.6f}**" if current < 1 else f"💵 قیمت فعلی: **${current:,.2f}**")
+    if rank:
+        lines.append(f"🏆 رتبه مارکت‌کپ: #{rank}")
+    if mcap:
+        lines.append(f"🏛 مارکت‌کپ: ${mcap:,.0f}")
+    if vol:
+        lines.append(f"📊 حجم ۲۴س: ${vol:,.0f}")
+
+    lines.append("")
+    lines.append("📈 **تغییرات قیمت**")
+    for label, val in [("۱ ساعت", chg_1h), ("۲۴ ساعت", chg_24), ("۷ روز", chg_7d), ("۳۰ روز", chg_30d)]:
+        if val is not None:
+            emoji = "🟢" if val >= 0 else "🔴"
+            lines.append(f"  {label}: {emoji} {val:+.2f}%")
+
+    if high_24 is not None and low_24 is not None:
+        lines.append(f"  سقف/کف ۲۴س: ${high_24:,.4f} / ${low_24:,.4f}")
+
+    if ath is not None:
+        lines.append(f"  ATH: ${ath:,.2f} ({ath_change:+.1f}% از اوج)" if ath_change is not None else f"  ATH: ${ath:,.2f}")
+
+    if binance:
+        lines.append("")
+        lines.append("📉 **داده فیوچرز (Binance — نزدیک به Coinglass)**")
+        if "funding_rate" in binance:
+            fr = binance["funding_rate"]
+            fr_emoji = "🟢" if fr > 0 else "🔴" if fr < 0 else "⚪"
+            lines.append(f"  Funding Rate: {fr_emoji} {fr:.4f}%")
+            if fr > 0.01:
+                lines.append("    → تمایل لانگ قوی (ممکن است اصلاح کوتاه‌مدت)")
+            elif fr < -0.01:
+                lines.append("    → تمایل شورت قوی (ممکن است شورت‌اسکوییز)")
+        if "open_interest" in binance and binance["open_interest"]:
+            lines.append(f"  Open Interest: {binance['open_interest']:,.0f} قرارداد")
+        if "volume_24h" in binance and binance["volume_24h"]:
+            lines.append(f"  حجم فیوچرز ۲۴س: ${binance['volume_24h']:,.0f}")
+        if "price_change_pct" in binance:
+            lines.append(f"  تغییر فیوچرز ۲۴س: {binance['price_change_pct']:+.2f}%")
+
+    if supply:
+        lines.append("")
+        lines.append("🪙 **عرضه**")
+        lines.append(f"  در گردش: {supply:,.0f}")
+        if max_supply:
+            pct = supply / max_supply * 100
+            lines.append(f"  حداکثر: {max_supply:,.0f} ({pct:.1f}% عرضه شده)")
+
+    if fg:
+        lines.append("")
+        lines.append("😱 **شاخص ترس و طمع بازار**")
+        val = fg.get("value")
+        cls = fg.get("value_classification")
+        lines.append(f"  عدد: {val} — {cls}")
+
+    lines.append("")
+    lines.append("🧠 **جمع‌بندی سریع**")
+    signals = []
+    if chg_24 is not None:
+        if chg_24 > 5:
+            signals.append("رشد قوی ۲۴ساعته")
+        elif chg_24 < -5:
+            signals.append("افت قابل توجه ۲۴ساعته")
+    if binance.get("funding_rate") is not None:
+        fr = binance["funding_rate"]
+        if fr > 0.03:
+            signals.append("فاندینگ خیلی مثبت (احتیاط لانگ)")
+        elif fr < -0.03:
+            signals.append("فاندینگ خیلی منفی (احتمال اسکوییز)")
+    if fg and fg.get("value"):
+        try:
+            v = int(fg["value"])
+            if v <= 25:
+                signals.append("بازار در ترس شدید")
+            elif v >= 75:
+                signals.append("بازار در طمع شدید")
+        except Exception:
+            pass
+    if not signals:
+        signals.append("وضعیت نسبتاً متعادل — نیاز به بررسی بیشتر")
+    for s in signals:
+        lines.append(f"  • {s}")
+
+    lines.append("")
+    lines.append("⚠️ این تحلیل صرفاً اطلاعاتی است و توصیه سرمایه‌گذاری نیست.")
+    lines.append("💡 برای نمودار: «نمودار btc» یا «نمودار eth 30»")
+
+    return "\n".join(lines)
+
+
+async def get_crypto_analysis_short(symbol: str) -> str:
+    """نسخه کوتاه‌تر برای ابزار AI"""
+    return await analyze_crypto(symbol)
