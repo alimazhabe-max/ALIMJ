@@ -347,7 +347,7 @@ def get_religious_keyboard():
 def get_market_keyboard():
     return ReplyKeyboardMarkup(
         [
-            [KeyboardButton("💵 قیمت کامل بازار"), KeyboardButton("💎 ۲۰ ارز برتر کریپتو")],
+            [KeyboardButton("💵 قیمت کامل بازار"), KeyboardButton("💎 ۳۰۰ ارز برتر کریپتو")],
             [KeyboardButton("🔄 تبدیل ارز / کریپتو"), KeyboardButton("📈 سود و ضرر")],
             [KeyboardButton("📊 نمودار قیمت کریپتو"), KeyboardButton("🔍 تحلیل ارز دیجیتال")],
             [KeyboardButton("🔙 بازگشت به بیشتر")],
