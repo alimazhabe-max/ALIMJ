@@ -987,17 +987,73 @@ async def _fetch_binance_futures(symbol: str) -> dict:
     return out
 
 
-async def _fetch_fear_greed():
+async def _fetch_fear_greed(limit: int = 7):
+    """شاخص ترس و طمع — امروز + میانگین چند روز"""
     try:
-        async with httpx.AsyncClient(timeout=8.0) as c:
-            r = await c.get("https://api.alternative.me/fng/?limit=1")
+        async with httpx.AsyncClient(timeout=10.0) as c:
+            r = await c.get("https://api.alternative.me/fng/", params={"limit": str(limit)})
             if r.status_code == 200:
                 data = (r.json() or {}).get("data") or []
-                if data:
-                    return data[0]
+                if not data:
+                    return None
+                today = data[0]
+                vals = []
+                for d in data:
+                    try:
+                        vals.append(int(d.get("value")))
+                    except Exception:
+                        pass
+                out = {
+                    "value": today.get("value"),
+                    "value_classification": today.get("value_classification"),
+                    "timestamp": today.get("timestamp"),
+                    "history": data,
+                    "avg_7": (sum(vals) / len(vals)) if vals else None,
+                    "prev": int(data[1]["value"]) if len(data) > 1 else None,
+                }
+                return out
     except Exception as e:
         logger.warning(f"fear greed: {e}")
     return None
+
+
+def _format_fear_greed(fg) -> list:
+    """خطوط فارسی کامل برای F&G"""
+    if not fg:
+        return ["😨 ترس و طمع: در دسترس نیست"]
+    try:
+        val = int(fg.get("value") or 0)
+    except Exception:
+        val = 0
+    cls = (fg.get("value_classification") or "").strip()
+    # نقشه فارسی + ایموجی
+    if val <= 24:
+        fa, em = "ترس شدید", "😱"
+    elif val <= 44:
+        fa, em = "ترس", "😨"
+    elif val <= 55:
+        fa, em = "خنثی", "😐"
+    elif val <= 74:
+        fa, em = "طمع", "😊"
+    else:
+        fa, em = "طمع شدید", "🤑"
+    lines = [f"😨 شاخص ترس و طمع: {val}/100 — {fa} {em}"]
+    if cls:
+        lines.append(f"   طبقه انگلیسی: {cls}")
+    prev = fg.get("prev")
+    avg7 = fg.get("avg_7")
+    if prev is not None:
+        delta = val - int(prev)
+        arrow = "↑" if delta > 0 else ("↓" if delta < 0 else "→")
+        lines.append(f"   تغییر روزانه: {arrow} {delta:+d}")
+    if avg7 is not None:
+        lines.append(f"   میانگین ۷روز: {avg7:.0f}")
+    # تفسیر معاملاتی کوتاه
+    if val <= 25:
+        lines.append("   تفسیر: ترس افراطی — احتمال فرصت خرید میان‌مدت (نه سیگنال ورود فوری)")
+    elif val >= 75:
+        lines.append("   تفسیر: طمع افراطی — احتیاط در لانگ‌های جدید")
+    return lines
 
 
 async def analyze_crypto(symbol: str, ai_summary: str = "", ai_guide: str = "", timeframe: str = "4h") -> str:
@@ -1054,24 +1110,54 @@ async def analyze_crypto(symbol: str, ai_summary: str = "", ai_guide: str = "", 
     if isinstance(fund, dict):
         current = current or fund.get("price")
 
-    closes, highs, lows, vols = [], [], [], []
+    closes, highs, lows, vols, opens = [], [], [], [], []
     if klines:
         for k in klines:
             try:
-                highs.append(float(k[2])); lows.append(float(k[3]))
-                closes.append(float(k[4])); vols.append(float(k[5]))
+                opens.append(float(k[1])); highs.append(float(k[2]))
+                lows.append(float(k[3])); closes.append(float(k[4])); vols.append(float(k[5]))
             except Exception:
                 continue
     if current is None and closes:
         current = closes[-1]
 
     ta = _compute_ta(closes, highs, lows, vols) if len(closes) >= 30 else {}
+    if len(closes) >= 30:
+        ta["atr"] = _atr(highs, lows, closes, 14)
+        ta["patterns"] = _detect_candle_patterns(opens, highs, lows, closes)
     support, resistance = _support_resistance(closes, highs, lows, current)
+
+    # MTF موازی
+    mtf = await _mtf_bundle(pair)
+    # فیلتر ADX روزانه
+    if mtf.get("force_wait"):
+        ta["trend"] = "خنثی"
+    # اگر تضاد شدید و تایم فعلی با روزانه مخالف
+    primary_dir = (mtf.get("dirs") or {}).get(
+        "1H" if tf == "1h" else ("1D" if tf == "1d" else "4H"), ""
+    )
+    daily_dir = (mtf.get("dirs") or {}).get("1D", "")
+    if mtf.get("conflict") and primary_dir in ("صعودی", "نزولی") and daily_dir in ("صعودی", "نزولی") and primary_dir != daily_dir:
+        # کاهش اطمینان
+        pass
+
     trend = ta.get("trend", "خنثی")
+    if mtf.get("force_wait"):
+        trend = "خنثی"
     trend_arrow = {"صعودی": "صعودی ↗️", "نزولی": "نزولی ↘️", "خنثی": "خنثی ↔️"}.get(trend, "خنثی ↔️")
     signal, signal_emoji, setup_score, rr_quality, risk_level, exec_status = _derive_signal(
         ta, chg_24, binance or {}, current=current, support=support, resistance=resistance
     )
+    # اجبار صبر اگر ADX روزانه ضعیف
+    if mtf.get("force_wait"):
+        signal, signal_emoji = "خنثی / احتیاط", "🟡"
+        setup_score = min(setup_score, 5)
+        exec_status = "صبر کنید ❌ — ADX روزانه ضعیف (بازار رنج)"
+        risk_level = "متوسط 🟡"
+    # امتیاز MTF این تایم
+    tf_key = "1H" if tf == "1h" else ("1D" if tf == "1d" else "4H")
+    if mtf.get("scores", {}).get(tf_key):
+        setup_score = mtf["scores"][tf_key]
 
     if "لانگ" in signal:
         signal_fa = f"لانگ {signal_emoji}"
@@ -1132,8 +1218,40 @@ async def analyze_crypto(symbol: str, ai_summary: str = "", ai_guide: str = "", 
         f"ℹ️ راهنما: {ai_guide}",
     ]
 
-    # داده خام کوتاه برای AI بعدی (نه برای نمایش کاربر در حالت فشرده)
-    # اگر جا بود قیمت لحظه
+    # چندتایم‌فریم
+    lines.append("")
+    lines.append("▎2. ⏱ امتیاز تایم‌فریم‌ها")
+    sc = mtf.get("scores") or {}
+    di = mtf.get("dirs") or {}
+    for k in ("1H", "4H", "1D"):
+        s = sc.get(k)
+        d = di.get(k, "—")
+        arrow = {"صعودی": "↗️", "نزولی": "↘️", "رنج/ضعیف": "↔️"}.get(d, "·")
+        lines.append(f"• {k}: {s if s is not None else '—'}/10 | {d} {arrow}")
+    if mtf.get("force_wait"):
+        try:
+            lines.append(f"⚠️ ADX روزانه: {float(mtf.get('daily_adx') or 0):.0f} < 18 → فیلتر صبر فعال")
+        except Exception:
+            lines.append("⚠️ ADX روزانه ضعیف → فیلتر صبر فعال")
+    if mtf.get("conflict"):
+        lines.append("⚠️ تضاد تایم‌فریم‌ها — اولویت با روزانه / حجم کمتر")
+
+    pats = list(ta.get("patterns") or [])
+    pats += list((mtf.get("1d") or {}).get("patterns") or [])
+    pats = list(dict.fromkeys(pats))
+    if pats:
+        lines.append("")
+        lines.append("▎3. 🕯 الگوهای کندلی")
+        for p in pats[:4]:
+            lines.append(f"• {p}")
+
+    atr_v = ta.get("atr")
+    if atr_v is not None:
+        lines.append(f"📐 ATR(14): {atr_v:,.4f}" if atr_v < 10 else f"📐 ATR(14): {atr_v:,.2f}")
+
+    lines.append("")
+    lines.extend(_format_fear_greed(fg))
+
     if current is not None:
         lines.append("")
         lines.append(f"💵 قیمت لحظه‌ای: ${fmt_p(current)}")
@@ -1407,6 +1525,170 @@ def _compute_ta(closes, highs, lows, vols) -> dict:
     return out
 
 
+
+def _atr(highs, lows, closes, period: int = 14) -> float | None:
+    """Average True Range"""
+    if len(closes) < period + 1:
+        return None
+    trs = []
+    for i in range(1, len(closes)):
+        tr = max(
+            highs[i] - lows[i],
+            abs(highs[i] - closes[i - 1]),
+            abs(lows[i] - closes[i - 1]),
+        )
+        trs.append(tr)
+    if len(trs) < period:
+        return None
+    return sum(trs[-period:]) / period
+
+
+def _detect_candle_patterns(opens, highs, lows, closes) -> list:
+    """تشخیص ساده Engulfing و Pin Bar روی آخرین کندل‌ها"""
+    patterns = []
+    n = len(closes)
+    if n < 3 or len(opens) < n:
+        return patterns
+    o, h, l, c = opens[-1], highs[-1], lows[-1], closes[-1]
+    po, ph, pl, pc = opens[-2], highs[-2], lows[-2], closes[-2]
+    body = abs(c - o)
+    range_ = max(h - l, 1e-12)
+    upper = h - max(c, o)
+    lower = min(c, o) - l
+    prev_body = abs(pc - po)
+
+    # Bullish Engulfing
+    if pc < po and c > o and c >= po and o <= pc and body > prev_body * 0.9:
+        patterns.append("پوششی صعودی (Bullish Engulfing) 🟢")
+    # Bearish Engulfing
+    if pc > po and c < o and c <= po and o >= pc and body > prev_body * 0.9:
+        patterns.append("پوششی نزولی (Bearish Engulfing) 🔴")
+
+    # Pin Bar / Hammer (سایه پایین بلند)
+    if lower >= body * 2 and upper <= body * 0.5 and body / range_ < 0.35:
+        if c >= o:
+            patterns.append("پین‌بار صعودی / چکش 🟢")
+        else:
+            patterns.append("پین‌بار با بدنه منفی (احتیاط) 🟡")
+    # Shooting Star (سایه بالا بلند)
+    if upper >= body * 2 and lower <= body * 0.5 and body / range_ < 0.35:
+        if c <= o:
+            patterns.append("ستاره دنباله‌دار (Shooting Star) 🔴")
+        else:
+            patterns.append("پین‌بار معکوس (احتیاط) 🟡")
+
+    return patterns
+
+
+def _score_timeframe(ta: dict) -> tuple:
+    """امتیاز 1-10 و جهت برای یک تایم‌فریم"""
+    score = 5
+    trend = ta.get("trend") or "خنثی"
+    rsi = ta.get("rsi")
+    adx = ta.get("adx") or 0
+    direction = "خنثی"
+
+    if trend == "صعودی":
+        score += 2
+        direction = "صعودی"
+    elif trend == "نزولی":
+        score += 2
+        direction = "نزولی"
+
+    if rsi is not None:
+        if direction == "صعودی" and 40 <= rsi <= 68:
+            score += 1
+        elif direction == "نزولی" and 32 <= rsi <= 60:
+            score += 1
+        elif direction == "صعودی" and rsi >= 75:
+            score -= 2
+        elif direction == "نزولی" and rsi <= 25:
+            score -= 2
+
+    if adx >= 25:
+        score += 1
+    elif adx < 18:
+        score -= 2
+        direction = "رنج/ضعیف"
+
+    # الگوها
+    for p in ta.get("patterns") or []:
+        if "صعودی" in p or "چکش" in p:
+            if direction != "نزولی":
+                score += 1
+        if "نزولی" in p or "دنباله‌دار" in p:
+            if direction != "صعودی":
+                score += 1
+
+    score = max(1, min(10, score))
+    return score, direction, adx
+
+
+async def _mtf_bundle(pair: str) -> dict:
+    """تحلیل موازی 1H / 4H / 1D + تضاد"""
+    k1, k4, kd = await asyncio.gather(
+        _fetch_klines_interval(pair, "1h", 120),
+        _fetch_klines_interval(pair, "4h", 120),
+        _fetch_klines_interval(pair, "1d", 120),
+    )
+
+    def pack(klines):
+        opens, highs, lows, closes, vols = [], [], [], [], []
+        for k in klines or []:
+            try:
+                opens.append(float(k[1])); highs.append(float(k[2]))
+                lows.append(float(k[3])); closes.append(float(k[4]))
+                vols.append(float(k[5]))
+            except Exception:
+                continue
+        if len(closes) < 30:
+            return {}, opens, highs, lows, closes
+        ta = _compute_ta(closes, highs, lows, vols)
+        ta["atr"] = _atr(highs, lows, closes, 14)
+        ta["patterns"] = _detect_candle_patterns(opens, highs, lows, closes)
+        score, direction, adx = _score_timeframe(ta)
+        ta["tf_score"] = score
+        ta["tf_dir"] = direction
+        return ta, opens, highs, lows, closes
+
+    t1, *_ = pack(k1)
+    t4, *_ = pack(k4)
+    td, o_d, h_d, l_d, c_d = pack(kd)
+
+    dirs = {
+        "1H": (t1 or {}).get("tf_dir", "—"),
+        "4H": (t4 or {}).get("tf_dir", "—"),
+        "1D": (td or {}).get("tf_dir", "—"),
+    }
+    scores = {
+        "1H": (t1 or {}).get("tf_score"),
+        "4H": (t4 or {}).get("tf_score"),
+        "1D": (td or {}).get("tf_score"),
+    }
+
+    # تضاد
+    conflict = False
+    bull = sum(1 for d in dirs.values() if d == "صعودی")
+    bear = sum(1 for d in dirs.values() if d == "نزولی")
+    if bull >= 1 and bear >= 1:
+        conflict = True
+
+    daily_adx = (td or {}).get("adx") or 0
+    force_wait = daily_adx < 18 if td else False
+
+    return {
+        "1h": t1 or {},
+        "4h": t4 or {},
+        "1d": td or {},
+        "dirs": dirs,
+        "scores": scores,
+        "conflict": conflict,
+        "force_wait": force_wait,
+        "daily_adx": daily_adx,
+        "daily_klines": (o_d, h_d, l_d, c_d),
+    }
+
+
 def _support_resistance(closes, highs, lows, current):
     if not closes:
         return None, None
@@ -1596,58 +1878,115 @@ def _pair_from_symbol(symbol: str) -> str:
 
 
 async def trading_recommendation(symbol: str) -> str:
-    """توصیه معاملاتی ساخت‌یافته"""
-    report = await analyze_crypto(symbol, ai_summary="")
+    """توصیه معاملاتی + حد ضرر پویا بر اساس ATR + فیلتر MTF"""
     pair = _pair_from_symbol(symbol)
-    klines = await _fetch_klines_for_ta(pair, limit=100)
-    closes, highs, lows, vols = [], [], [], []
+    mtf = await _mtf_bundle(pair)
+    binance = await _fetch_binance_futures(symbol)
+    fg = await _fetch_fear_greed(7)
+
+    ta = mtf.get("4h") or mtf.get("1h") or {}
+    klines = await _fetch_klines_interval(pair, "4h", 120)
+    opens, highs, lows, closes, vols = [], [], [], [], []
     for k in klines or []:
         try:
-            highs.append(float(k[2])); lows.append(float(k[3]))
-            closes.append(float(k[4])); vols.append(float(k[5]))
+            opens.append(float(k[1]))
+            highs.append(float(k[2]))
+            lows.append(float(k[3]))
+            closes.append(float(k[4]))
+            vols.append(float(k[5]))
         except Exception:
             continue
-    ta = _compute_ta(closes, highs, lows, vols) if len(closes) >= 30 else {}
+    if len(closes) >= 30 and not ta:
+        ta = _compute_ta(closes, highs, lows, vols)
+        ta["atr"] = _atr(highs, lows, closes, 14)
+        ta["patterns"] = _detect_candle_patterns(opens, highs, lows, closes)
+
     cur = closes[-1] if closes else None
     support, resistance = _support_resistance(closes, highs, lows, cur)
-    signal, sem, score, rr, risk, status = _derive_signal(ta, None, await _fetch_binance_futures(symbol))
+    signal, sem, score, rr, risk, status = _derive_signal(
+        ta, None, binance or {}, current=cur, support=support, resistance=resistance
+    )
 
-    entry = support if "لانگ" in signal else resistance
-    stop = (support * 0.985) if support and "لانگ" in signal else ((resistance * 1.015) if resistance else None)
-    if "شورت" in signal and resistance:
-        entry = resistance
-        stop = resistance * 1.015 if resistance else None
-        tp1 = support
-    elif "لانگ" in signal and support:
+    if mtf.get("force_wait"):
+        signal, sem = "خنثی / احتیاط", "🟡"
+        status = "صبر کنید ❌ — ADX روزانه ضعیف"
+        score = min(score, 5)
+
+    atr = ta.get("atr") or (_atr(highs, lows, closes, 14) if len(closes) > 20 else None)
+    atr_mult = 1.5
+    tp2 = None
+    if "لانگ" in signal and support:
         entry = support
-        stop = support * 0.985
-        tp1 = resistance
+        stop = (entry - atr_mult * atr) if atr else entry * 0.985
+        tp1 = resistance or ((entry + 2 * atr_mult * atr) if atr else entry * 1.03)
+        tp2 = (entry + 3 * atr_mult * atr) if atr else None
+    elif "شورت" in signal and resistance:
+        entry = resistance
+        stop = (entry + atr_mult * atr) if atr else entry * 1.015
+        tp1 = support or ((entry - 2 * atr_mult * atr) if atr else entry * 0.97)
+        tp2 = (entry - 3 * atr_mult * atr) if atr else None
     else:
         entry = cur
-        stop = (cur * 0.98) if cur else None
-        tp1 = (cur * 1.02) if cur else None
+        stop = (cur - atr_mult * atr) if (cur and atr) else (cur * 0.98 if cur else None)
+        tp1 = (cur + 2 * atr_mult * atr) if (cur and atr) else (cur * 1.02 if cur else None)
 
     def f(v):
         if v is None:
             return "—"
-        return f"{v:,.2f}" if v >= 1 else f"{v:,.6f}"
+        try:
+            v = float(v)
+        except Exception:
+            return "—"
+        return f"{v:,.2f}" if abs(v) >= 1 else f"{v:,.6f}"
 
-    lines = [
+    rr_txt = rr
+    try:
+        if entry and stop and tp1 and entry != stop:
+            risk_d = abs(float(entry) - float(stop))
+            reward = abs(float(tp1) - float(entry))
+            if risk_d > 0:
+                rr_txt = f"{reward / risk_d:.1f} : 1"
+    except Exception:
+        pass
+
+    out = [
         f"🎯 توصیه معاملاتی — {pair}",
         "────────────────────",
         f"سیگنال: {signal} {sem}",
         f"امتیاز ستاپ: {score}/10",
         f"وضعیت: {status}",
-        f"ریسک: {risk} | R:R: {rr}",
+        f"ریسک: {risk} | R:R: {rr_txt}",
         "",
-        f"📍 نقطه ورود تقریبی: {f(entry)}",
-        f"🛑 حد ضرر پیشنهادی: {f(stop)}",
-        f"🎯 هدف ۱: {f(tp1)}",
-        "",
-        "نکته: ورود پله‌ای و حجم کم در شرایط نامطمئن بهتر است.",
-        "⚠️ توصیه قطعی نیست؛ مسئولیت معامله با خودتان است.",
+        "⏱ تایم‌فریم‌ها:",
     ]
-    return "\n".join(lines)
+    for k in ("1H", "4H", "1D"):
+        out.append(
+            f"  {k}: {(mtf.get('scores') or {}).get(k, '—')}/10 | {(mtf.get('dirs') or {}).get(k, '—')}"
+        )
+    if mtf.get("conflict"):
+        out.append("⚠️ تضاد تایم‌فریم — حجم را کم کنید")
+    if mtf.get("force_wait"):
+        out.append("⚠️ فیلتر ADX روزانه: صبر اولویت دارد")
+
+    out += [
+        "",
+        f"📍 ورود تقریبی: {f(entry)}",
+        f"🛑 حد ضرر (ATR×{atr_mult}): {f(stop)}",
+        f"🎯 هدف ۱: {f(tp1)}",
+    ]
+    if tp2:
+        out.append(f"🎯 هدف ۲: {f(tp2)}")
+    if atr:
+        out.append(f"📐 ATR(14): {f(atr)}")
+    pats = ta.get("patterns") or []
+    if pats:
+        out.append("🕯 الگو: " + " | ".join(pats[:2]))
+    out.append("")
+    out.extend(_format_fear_greed(fg))
+    out.append("")
+    out.append("نکته: ورود پله‌ای؛ حد ضرر را جابه‌جا نکنید.")
+    out.append("⚠️ آموزشی است؛ توصیه سرمایه‌گذاری قطعی نیست.")
+    return chr(10).join(out)
 
 
 async def derivatives_radar(symbol: str) -> str:
