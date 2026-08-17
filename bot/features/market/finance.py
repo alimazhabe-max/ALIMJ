@@ -1000,7 +1000,7 @@ async def _fetch_fear_greed():
     return None
 
 
-async def analyze_crypto(symbol: str, ai_summary: str = "", ai_guide: str = "") -> str:
+async def analyze_crypto(symbol: str, ai_summary: str = "", ai_guide: str = "", timeframe: str = "4h") -> str:
     """
     خلاصه کلی دقیقاً به سبک تحلیل‌گر حرفه‌ای:
     روند، حمایت/مقاومت، سیگنال، ستاپ، R:R، ریسک، وضعیت اجرا، جمع‌بندی AI، راهنما
@@ -1027,10 +1027,19 @@ async def analyze_crypto(symbol: str, ai_summary: str = "", ai_guide: str = "") 
     async def _empty():
         return {}
 
+    # تایم‌فریم تحلیل: 1h / 4h / 1d
+    tf = (timeframe or "4h").lower().strip()
+    if tf in ("1h", "h", "hour", "hourly", "ساعتی"):
+        tf, tf_label, klimit = "1h", "ساعتی (1H)", 168
+    elif tf in ("1d", "d", "day", "daily", "روزانه"):
+        tf, tf_label, klimit = "1d", "روزانه (1D)", 120
+    else:
+        tf, tf_label, klimit = "4h", "میان‌مدت (4H)", 180
+
     detail_t = _fetch_coingecko_detail(coin_id) if coin_id else _empty()
     binance_t = _fetch_binance_futures(symbol_clean)
     fg_t = _fetch_fear_greed()
-    klines_t = _fetch_klines_for_ta(pair, limit=200)
+    klines_t = _fetch_klines_interval(pair, tf, klimit)
     fund_t = _fetch_fundamentals(coin_id, base)
 
     detail, binance, fg, klines, fund = await asyncio.gather(
@@ -1110,7 +1119,7 @@ async def analyze_crypto(symbol: str, ai_summary: str = "", ai_guide: str = "") 
         ai_guide = ai_guide[:220].rsplit(" ", 1)[0] + "…"
 
     lines = [
-        "▎1. 📰 خلاصه کلی",
+        f"▎1. 📰 خلاصه کلی — {tf_label}",
         f"🧭 روند: {trend_arrow}",
         f"🛡 حمایت کلیدی: {fmt_p(support)}",
         f"🧱 مقاومت کلیدی: {fmt_p(resistance)}",
@@ -1548,10 +1557,10 @@ def get_crypto_analysis_keyboard(symbol: str) -> "InlineKeyboardMarkup":
         [
             [
                 InlineKeyboardButton("1️⃣ خلاصه کلی", callback_data=f"cx:sum:{s}"),
-                InlineKeyboardButton("2️⃣ نمودار روزانه", callback_data=f"cx:day:{s}"),
+                InlineKeyboardButton("2️⃣ تحلیل و نمودار روزانه", callback_data=f"cx:day:{s}"),
             ],
             [
-                InlineKeyboardButton("3️⃣ نمودار ساعتی", callback_data=f"cx:hr:{s}"),
+                InlineKeyboardButton("3️⃣ تحلیل و نمودار ساعتی", callback_data=f"cx:hr:{s}"),
                 InlineKeyboardButton("4️⃣ توصیه معاملاتی", callback_data=f"cx:rec:{s}"),
             ],
             [
