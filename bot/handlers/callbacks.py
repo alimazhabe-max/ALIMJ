@@ -492,7 +492,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             from bot.features.market.finance import (
                 analyze_crypto, get_crypto_chart, get_crypto_analysis_keyboard,
                 trading_recommendation, derivatives_radar, risk_scenarios,
-                position_size_guide, entry_alert_text,
+                position_size_guide, entry_alert_text, market_scanner,
             )
             from io import BytesIO
             from telegram import InputMediaPhoto
@@ -574,13 +574,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     except Exception:
                         pass
 
-            if action == "sum":
-                base = await analyze_crypto(symbol, timeframe="4h")
-                s, g = await _smart_ai(base, "4H میان‌مدت")
-                txt = await analyze_crypto(symbol, ai_summary=s, ai_guide=g, timeframe="4h") if (s or g) else base
-                await _edit_text(txt)
-
-            elif action == "day":
+            if action == "day":
                 # تحلیل روزانه + نمودار روزانه روی همان پیام
                 base = await analyze_crypto(symbol, timeframe="1d")
                 s, g = await _smart_ai(base, "روزانه 1D")
@@ -616,6 +610,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             elif action == "al":
                 context.user_data["waiting_for"] = "crypto_alert"
                 txt = await entry_alert_text(symbol)
+                await _edit_text(txt)
+
+            elif action == "scan":
+                txt = await market_scanner(10)
                 await _edit_text(txt)
 
             elif action == "ref":
