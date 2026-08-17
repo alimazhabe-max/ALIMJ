@@ -999,22 +999,39 @@ async def _h_crypto_full(u, c, t, uid):
         import asyncio as _aio
         chart_task = _aio.create_task(get_crypto_chart(symbol, days))
         try:
-            base = await analyze_crypto(symbol, ai_summary="")
+            base = await analyze_crypto(symbol, ai_summary="", ai_guide="")
             ai_summary = ""
+            ai_guide = ""
             try:
                 from bot.services.ai_service import ask_ai
                 prompt = (
-                    "فقط ۲ تا ۴ جمله فارسی بدون عنوان. "
-                    "روند، سیگنال لانگ/شورت/صبر و یک نکته عملی. توصیه قطعی نده.\n\n"
-                    + base[:2000]
+                    "تو تحلیل‌گر حرفه‌ای بازار کریپتو هستی. همه داده‌های زیر را بخوان و دقیقاً با این قالب جواب بده:\n"
+                    "جمع‌بندی: (۲ تا ۴ جمله فارسی؛ روند تایم‌فریم، پولبک/شکست، مومنتوم، سیگنال)\n"
+                    "راهنما: (۱ تا ۲ جمله؛ آیا ورود الان به‌صرفه است یا فرصت گذشته یا صبر)\n\n"
+                    "قوانین: بدون بولت اضافه، بدون عنوان انگلیسی، توصیه تضمینی نده.\n\n"
+                    + base[:3200]
                 )
                 answer, _ = await ask_ai(uid, prompt)
-                ai_summary = (answer or "").strip().replace("\n", " ")
-                if len(ai_summary) > 260:
-                    ai_summary = ai_summary[:260].rsplit(" ", 1)[0] + "…"
+                raw = (answer or "").strip()
+                if "راهنما:" in raw:
+                    a, b = raw.split("راهنما:", 1)
+                    ai_summary = a.replace("جمع‌بندی:", "").strip().replace("\n", " ")
+                    ai_guide = b.strip().replace("\n", " ")
+                elif "جمع‌بندی:" in raw:
+                    ai_summary = raw.split("جمع‌بندی:", 1)[-1].strip().replace("\n", " ")
+                else:
+                    ai_summary = raw.replace("\n", " ")
+                if len(ai_summary) > 340:
+                    ai_summary = ai_summary[:340].rsplit(" ", 1)[0] + "…"
+                if len(ai_guide) > 240:
+                    ai_guide = ai_guide[:240].rsplit(" ", 1)[0] + "…"
             except Exception:
                 pass
-            report = await analyze_crypto(symbol, ai_summary=ai_summary) if ai_summary else base
+            report = (
+                await analyze_crypto(symbol, ai_summary=ai_summary, ai_guide=ai_guide)
+                if (ai_summary or ai_guide)
+                else base
+            )
         except Exception as e:
             report = f"⚠️ خطا در تحلیل: {e}"
         try:
@@ -1030,20 +1047,17 @@ async def _h_crypto_full(u, c, t, uid):
         pass
 
     menu = get_crypto_analysis_keyboard(symbol)
-    footer = "\n\n✅ پایان بخش خلاصه — از منوی زیر استفاده کنید:"
-    caption = ((report or "تحلیل آماده شد.") + footer)[:1024]
-
+    # نمودار جدا + متن کامل تحلیل (فرمت حرفه‌ای بدون برش کپشن)
     if png:
         try:
             from io import BytesIO
             bio = BytesIO(png)
             bio.name = f"{symbol}_analysis.png"
-            await u.message.reply_photo(photo=bio, caption=caption, reply_markup=menu)
+            await u.message.reply_photo(photo=bio, caption=f"📊 {symbol.upper()} — نمودار تحلیل")
         except Exception as e:
-            await u.message.reply_text((report or "") + f"\n⚠️ نمودار: {e}" + footer, reply_markup=menu)
-    else:
-        await u.message.reply_text((report or "❌ داده نبود.") + footer, reply_markup=menu)
-
+            await u.message.reply_text(f"⚠️ نمودار: {e}")
+    body = (report or "❌ داده نبود.") + "\n\n✅ پایان تحلیل هوش مصنوعی — از منوی زیر استفاده کنید:"
+    await u.message.reply_text(body[:4000], reply_markup=menu)
     await u.message.reply_text("📊 منوی تحلیل فعال است.", reply_markup=get_market_keyboard())
 
 
