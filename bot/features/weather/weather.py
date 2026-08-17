@@ -47,6 +47,37 @@ MET_SYMBOLS = {
     "lightrainandthunder": "باران خفیف و رعد ⛈",
 }
 
+
+MET_SYMBOLS_DAY = dict(MET_SYMBOLS)
+MET_SYMBOLS_NIGHT = dict(MET_SYMBOLS)
+MET_SYMBOLS_NIGHT.update({
+    "clearsky": "آسمان صاف (شب) 🌙",
+    "fair": "تقریباً صاف (شب) 🌙",
+    "partlycloudy": "نیمه‌ابری (شب) ☁️",
+})
+
+
+def _is_night_tehran() -> bool:
+    """شب در ایران: از ۱۹ تا ۵ صبح"""
+    try:
+        from zoneinfo import ZoneInfo
+        now = datetime.now(ZoneInfo("Asia/Tehran"))
+    except Exception:
+        from datetime import timezone, timedelta
+        now = datetime.now(timezone(timedelta(hours=3, minutes=30)))
+    return now.hour >= 19 or now.hour < 5
+
+
+def _met_condition(symbol_code: str) -> str:
+    sym = (symbol_code or "").lower().strip()
+    is_night = ("night" in sym) or ("polartwilight" in sym)
+    if not is_night and "day" not in sym:
+        is_night = _is_night_tehran()
+    base = sym.split("_")[0] if sym else ""
+    table = MET_SYMBOLS_NIGHT if is_night else MET_SYMBOLS_DAY
+    return table.get(base, base or "نامشخص")
+
+
 EN2FA = {
     "Sunny": "آفتابی ☀️", "Clear": "صاف ☀️", "Partly cloudy": "نیمه‌ابری ⛅",
     "Cloudy": "ابری ☁️", "Overcast": "ابری کامل ☁️", "Mist": "مه 🌫", "Fog": "مه 🌫",
@@ -157,7 +188,14 @@ def get_weather(city):
         result = _from_wttr(city, lat, lon)
 
     if result:
-        result["condition"] = translate_condition(result.get("condition"))
+        cond = translate_condition(result.get("condition"))
+        if _is_night_tehran():
+            c = str(cond)
+            if any(x in c for x in ("آفتابی", "☀️")) and "ابری" not in c and "باران" not in c:
+                cond = "آسمان صاف (شب) 🌙"
+            elif c in ("صاف ☀️", "Clear", "Sunny"):
+                cond = "آسمان صاف (شب) 🌙"
+        result["condition"] = cond
         _cache_data[city] = result
         _cache_time[city] = now
     return result
@@ -187,8 +225,7 @@ def _from_metno(lat, lon):
                 symbol = s["symbol_code"]
                 break
         # حذف پسوند day/night/_polartwilight
-        base_sym = symbol.split("_")[0] if symbol else ""
-        condition = MET_SYMBOLS.get(base_sym, symbol or "نامشخص")
+        condition = _met_condition(symbol)
 
         # min/max تقریبی از ۱۲ ساعت آینده
         temps = []
@@ -236,10 +273,13 @@ def _from_open_meteo(lat, lon):
         cur = data.get("current") or {}
         daily = data.get("daily") or {}
         code = int(cur.get("weather_code") or 0)
+        cond = WEATHER_CODES.get(code, "نامشخص")
+        if _is_night_tehran() and code in (0, 1):
+            cond = "آسمان صاف (شب) 🌙" if code == 0 else "تقریباً صاف (شب) 🌙"
         return {
             "temp": _num(cur.get("temperature_2m")),
             "feels_like": _num(cur.get("apparent_temperature")),
-            "condition": WEATHER_CODES.get(code, "نامشخص"),
+            "condition": cond,
             "humidity": _num(cur.get("relative_humidity_2m")),
             "wind": _num(cur.get("wind_speed_10m")),
             "pressure": _num(cur.get("surface_pressure")),
