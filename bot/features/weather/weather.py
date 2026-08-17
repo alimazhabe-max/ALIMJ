@@ -43,6 +43,40 @@ EN2FA = {
     "Blizzard": "کولاک ❄️", "Haze": "غبار 🌫",
 }
 
+def translate_condition(desc) -> str:
+    """هر وضعیت انگلیسی را به فارسی تبدیل می‌کند."""
+    if not desc:
+        return "نامشخص"
+    s = str(desc).strip()
+    # اگر از قبل فارسی است
+    if any("\u0600" <= ch <= "\u06FF" for ch in s):
+        return s
+    # match exact
+    if s in EN2FA:
+        return EN2FA[s]
+    # case-insensitive exact
+    low = s.lower()
+    for en, fa in EN2FA.items():
+        if en.lower() == low:
+            return fa
+    # partial
+    for en, fa in sorted(EN2FA.items(), key=lambda x: -len(x[0])):
+        if en.lower() in low:
+            return fa
+    # common leftovers
+    extra = {
+        "cloud": "ابری ☁️", "rain": "بارانی 🌧", "clear": "صاف ☀️",
+        "sun": "آفتابی ☀️", "snow": "برفی ❄️", "fog": "مه 🌫",
+        "mist": "مه 🌫", "thunder": "رعدوبرق ⛈", "overcast": "ابری کامل ☁️",
+        "drizzle": "باران ریز 🌦", "haze": "غبار 🌫", "smoke": "دود 🌫",
+    }
+    for k, v in extra.items():
+        if k in low:
+            return v
+    return s
+
+
+
 
 def _norm_city(city: str) -> str:
     return (city or "").strip().replace("ي", "ی").replace("ك", "ک") or "تهران"
@@ -89,6 +123,7 @@ def get_weather(city):
         result = _from_wttr(city)
 
     if result:
+        result["condition"] = translate_condition(result.get("condition"))
         _cache_data[key] = result
         _cache_time[key] = now
     return result
