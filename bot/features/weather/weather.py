@@ -1,4 +1,4 @@
-"""آب و هوای لحظه‌ای — Open-Meteo (پایدار) + wttr پشتیبان — وضعیت فارسی"""
+"""آب و هوای لحظه‌ای — اولویت: MET Norway → Open-Meteo → wttr"""
 import requests
 from datetime import datetime
 from bot.logger import logger
@@ -7,7 +7,6 @@ from bot.config import config
 _cache_data = {}
 _cache_time = {}
 
-# مختصات شهرهای پرتکرار (هم‌راستا با weather_extra)
 CITY_COORDS = {
     "تهران": (35.6892, 51.3890), "مشهد": (36.2970, 59.6062), "اصفهان": (32.6546, 51.6680),
     "شیراز": (29.5918, 52.5837), "تبریز": (38.0962, 46.2738), "قم": (34.6416, 50.8746),
@@ -24,6 +23,7 @@ CITY_COORDS = {
     "بغداد": (33.3152, 44.3661),
 }
 
+# WMO / Open-Meteo weather codes
 WEATHER_CODES = {
     0: "آفتابی ☀️", 1: "عمدتاً صاف 🌤", 2: "نیمه‌ابری ⛅", 3: "ابری ☁️",
     45: "مه 🌫", 48: "مه یخی 🌫", 51: "باران ریز 🌦", 53: "باران متوسط 🌧",
@@ -32,50 +32,57 @@ WEATHER_CODES = {
     81: "رگبار متوسط 🌧", 82: "رگبار شدید ⛈", 95: "رعدوبرق ⛈", 96: "تگرگ 🌨",
 }
 
+# MET Norway symbol_code → فارسی
+MET_SYMBOLS = {
+    "clearsky": "آفتابی ☀️", "fair": "عمدتاً صاف 🌤", "partlycloudy": "نیمه‌ابری ⛅",
+    "cloudy": "ابری ☁️", "fog": "مه 🌫",
+    "lightrain": "باران خفیف 🌦", "rain": "بارانی 🌧", "heavyrain": "باران شدید 🌧",
+    "lightrainshowers": "رگبار خفیف 🌦", "rainshowers": "رگبار 🌧",
+    "heavyrainshowers": "رگبار شدید ⛈",
+    "lightsnow": "برف خفیف ❄️", "snow": "برفی ❄️", "heavysnow": "برف سنگین ❄️",
+    "lightsnowshowers": "رگبار برف ❄️", "snowshowers": "رگبار برف ❄️",
+    "sleet": "باران‌برف 🌨", "sleetshowers": "رگبار باران‌برف 🌨",
+    "rainandthunder": "باران و رعدوبرق ⛈", "snowandthunder": "برف و رعدوبرق ⛈",
+    "rainshowersandthunder": "رگبار و رعدوبرق ⛈",
+    "lightrainandthunder": "باران خفیف و رعد ⛈",
+}
+
 EN2FA = {
     "Sunny": "آفتابی ☀️", "Clear": "صاف ☀️", "Partly cloudy": "نیمه‌ابری ⛅",
-    "Cloudy": "ابری ☁️", "Overcast": "ابری کامل ☁️", "Mist": "مه 🌫",
-    "Fog": "مه 🌫", "Patchy rain possible": "احتمال باران 🌦",
+    "Cloudy": "ابری ☁️", "Overcast": "ابری کامل ☁️", "Mist": "مه 🌫", "Fog": "مه 🌫",
+    "Patchy rain possible": "احتمال باران 🌦", "Patchy rain nearby": "باران پراکنده 🌦",
     "Light rain": "باران خفیف 🌦", "Moderate rain": "باران متوسط 🌧",
     "Heavy rain": "باران شدید 🌧", "Rain": "بارانی 🌧",
     "Thundery outbreaks possible": "رعدوبرق ⛈", "Thunderstorm": "رعدوبرق ⛈",
     "Snow": "برفی ❄️", "Light snow": "برف خفیف ❄️", "Heavy snow": "برف سنگین ❄️",
-    "Blizzard": "کولاک ❄️", "Haze": "غبار 🌫",
+    "Haze": "غبار 🌫",
 }
 
+
 def translate_condition(desc) -> str:
-    """هر وضعیت انگلیسی را به فارسی تبدیل می‌کند."""
     if not desc:
         return "نامشخص"
     s = str(desc).strip()
-    # اگر از قبل فارسی است
     if any("\u0600" <= ch <= "\u06FF" for ch in s):
         return s
-    # match exact
     if s in EN2FA:
         return EN2FA[s]
-    # case-insensitive exact
     low = s.lower()
     for en, fa in EN2FA.items():
         if en.lower() == low:
             return fa
-    # partial
     for en, fa in sorted(EN2FA.items(), key=lambda x: -len(x[0])):
         if en.lower() in low:
             return fa
-    # common leftovers
     extra = {
-        "cloud": "ابری ☁️", "rain": "بارانی 🌧", "clear": "صاف ☀️",
-        "sun": "آفتابی ☀️", "snow": "برفی ❄️", "fog": "مه 🌫",
-        "mist": "مه 🌫", "thunder": "رعدوبرق ⛈", "overcast": "ابری کامل ☁️",
-        "drizzle": "باران ریز 🌦", "haze": "غبار 🌫", "smoke": "دود 🌫",
+        "cloud": "ابری ☁️", "rain": "بارانی 🌧", "clear": "صاف ☀️", "sun": "آفتابی ☀️",
+        "snow": "برفی ❄️", "fog": "مه 🌫", "mist": "مه 🌫", "thunder": "رعدوبرق ⛈",
+        "overcast": "ابری کامل ☁️", "drizzle": "باران ریز 🌦", "haze": "غبار 🌫",
     }
     for k, v in extra.items():
         if k in low:
             return v
     return s
-
-
 
 
 def _norm_city(city: str) -> str:
@@ -89,7 +96,22 @@ def _coords(city: str):
     for k, v in CITY_COORDS.items():
         if c in k or k in c:
             return v
-    # geocode
+    try:
+        r = requests.get(
+            "https://geocoding-api.open-meteo.com/v1/search",
+            params={"name": c, "count": 3, "language": "fa"},
+            timeout=8,
+        )
+        if r.status_code == 200:
+            for item in r.json().get("results") or []:
+                # ترجیح ایران
+                if (item.get("country_code") or "").upper() in ("IR", "IQ", ""):
+                    return float(item["latitude"]), float(item["longitude"])
+            results = r.json().get("results") or []
+            if results:
+                return float(results[0]["latitude"]), float(results[0]["longitude"])
+    except Exception as e:
+        logger.warning(f"geocode: {e}")
     try:
         r = requests.get(
             "https://nominatim.openstreetmap.org/search",
@@ -101,37 +123,98 @@ def _coords(city: str):
             item = r.json()[0]
             return float(item["lat"]), float(item["lon"])
     except Exception as e:
-        logger.warning(f"weather geocode: {e}")
+        logger.warning(f"nominatim: {e}")
     return CITY_COORDS["تهران"]
 
 
+def _num(v):
+    if v is None or v == "":
+        return None
+    try:
+        f = float(v)
+        return int(round(f)) if abs(f - round(f)) < 0.05 else round(f, 1)
+    except Exception:
+        return v
+
+
 def get_weather(city):
-    """
-    خروجی dict:
-      temp, feels_like, condition, humidity, wind, pressure, visibility, high, low
-    """
+    """dict: temp, condition, humidity, feels_like, wind, ..."""
     city = _norm_city(city)
-    key = city
     now = datetime.now().timestamp()
     ttl = getattr(config, "CACHE_TTL", 300)
+    if city in _cache_data and now - _cache_time.get(city, 0) < ttl:
+        return _cache_data[city]
 
-    if key in _cache_data and now - _cache_time.get(key, 0) < ttl:
-        return _cache_data[key]
-
-    result = _from_open_meteo(city)
+    lat, lon = _coords(city)
+    result = None
+    # 1) MET Norway — دقیق و رایگان
+    result = _from_metno(lat, lon)
+    # 2) Open-Meteo
     if not result:
-        result = _from_wttr(city)
+        result = _from_open_meteo(lat, lon)
+    # 3) wttr — فقط اگر معقول باشد
+    if not result:
+        result = _from_wttr(city, lat, lon)
 
     if result:
         result["condition"] = translate_condition(result.get("condition"))
-        _cache_data[key] = result
-        _cache_time[key] = now
+        _cache_data[city] = result
+        _cache_time[city] = now
     return result
 
 
-def _from_open_meteo(city: str):
+def _from_metno(lat, lon):
     try:
-        lat, lon = _coords(city)
+        r = requests.get(
+            "https://api.met.no/weatherapi/locationforecast/2.0/compact",
+            params={"lat": lat, "lon": lon},
+            headers={"User-Agent": "ALIMJBot/2.0 (telegram-bot; contact@local)"},
+            timeout=12,
+        )
+        if r.status_code != 200:
+            logger.warning(f"met.no status {r.status_code}")
+            return None
+        series = (r.json().get("properties") or {}).get("timeseries") or []
+        if not series:
+            return None
+        now_data = series[0]
+        details = ((now_data.get("data") or {}).get("instant") or {}).get("details") or {}
+        # symbol از next_1_hours یا next_6_hours
+        symbol = ""
+        for key in ("next_1_hours", "next_6_hours", "next_12_hours"):
+            s = ((now_data.get("data") or {}).get(key) or {}).get("summary") or {}
+            if s.get("symbol_code"):
+                symbol = s["symbol_code"]
+                break
+        # حذف پسوند day/night/_polartwilight
+        base_sym = symbol.split("_")[0] if symbol else ""
+        condition = MET_SYMBOLS.get(base_sym, symbol or "نامشخص")
+
+        # min/max تقریبی از ۱۲ ساعت آینده
+        temps = []
+        for item in series[:12]:
+            t = (((item.get("data") or {}).get("instant") or {}).get("details") or {}).get("air_temperature")
+            if t is not None:
+                temps.append(float(t))
+
+        return {
+            "temp": _num(details.get("air_temperature")),
+            "feels_like": None,
+            "condition": condition,
+            "humidity": _num(details.get("relative_humidity")),
+            "wind": _num(details.get("wind_speed")),
+            "pressure": _num(details.get("air_pressure_at_sea_level")),
+            "high": _num(max(temps)) if temps else None,
+            "low": _num(min(temps)) if temps else None,
+            "source": "met.no",
+        }
+    except Exception as e:
+        logger.error(f"met.no: {e}")
+        return None
+
+
+def _from_open_meteo(lat, lon):
+    try:
         r = requests.get(
             "https://api.open-meteo.com/v1/forecast",
             params={
@@ -148,10 +231,12 @@ def _from_open_meteo(city: str):
         if r.status_code != 200:
             return None
         data = r.json()
+        if data.get("error"):
+            return None
         cur = data.get("current") or {}
         daily = data.get("daily") or {}
         code = int(cur.get("weather_code") or 0)
-        result = {
+        return {
             "temp": _num(cur.get("temperature_2m")),
             "feels_like": _num(cur.get("apparent_temperature")),
             "condition": WEATHER_CODES.get(code, "نامشخص"),
@@ -162,16 +247,20 @@ def _from_open_meteo(city: str):
             "low": _num((daily.get("temperature_2m_min") or [None])[0]),
             "source": "open-meteo",
         }
-        return result
     except Exception as e:
-        logger.error(f"open-meteo weather {city}: {e}")
+        logger.error(f"open-meteo: {e}")
         return None
 
 
-def _from_wttr(city: str):
+def _from_wttr(city, lat=None, lon=None):
+    """پشتیبان آخر — با فیلتر دمای نامعقول برای ایران در تابستان/زمستان"""
     try:
+        q = city
+        # برای دقت بیشتر از مختصات استفاده کن
+        if lat is not None and lon is not None:
+            q = f"{lat},{lon}"
         r = requests.get(
-            f"https://wttr.in/{city}?format=j1",
+            f"https://wttr.in/{q}?format=j1",
             headers={"User-Agent": "Mozilla/5.0"},
             timeout=10,
         )
@@ -179,71 +268,39 @@ def _from_wttr(city: str):
         data = r.json()
         current = data["current_condition"][0]
         desc = current["weatherDesc"][0]["value"]
-        # فارسی اگر lang_fa بود
         try:
             if current.get("lang_fa"):
                 desc = current["lang_fa"][0].get("value") or desc
         except Exception:
             pass
-        desc = EN2FA.get(desc, EN2FA.get(desc.title(), desc))
-        # اگر هنوز انگلیسی ساده بود
-        for en, fa in EN2FA.items():
-            if en.lower() in str(desc).lower():
-                desc = fa
-                break
-
+        temp = _num(current.get("temp_C"))
         weather_today = (data.get("weather") or [{}])[0]
         result = {
-            "temp": current.get("temp_C"),
-            "feels_like": current.get("FeelsLikeC"),
+            "temp": temp,
+            "feels_like": _num(current.get("FeelsLikeC")),
             "condition": desc,
-            "humidity": current.get("humidity"),
-            "wind": current.get("windspeedKmph"),
-            "pressure": current.get("pressure"),
-            "visibility": current.get("visibility"),
-            "high": weather_today.get("maxtempC"),
-            "low": weather_today.get("mintempC"),
+            "humidity": _num(current.get("humidity")),
+            "wind": _num(current.get("windspeedKmph")),
+            "pressure": _num(current.get("pressure")),
+            "high": _num(weather_today.get("maxtempC")),
+            "low": _num(weather_today.get("mintempC")),
             "source": "wttr",
         }
         return result
     except Exception as e:
-        logger.error(f"wttr weather {city}: {e}")
+        logger.error(f"wttr: {e}")
         return None
-
-
-def _num(v):
-    if v is None or v == "":
-        return None
-    try:
-        f = float(v)
-        return int(f) if f == int(f) else round(f, 1)
-    except Exception:
-        return v
 
 
 def format_weather(city: str, weather: dict | None) -> str:
-    """متن زیبای فارسی برای نمایش"""
     if not weather:
         return f"⚠️ آب و هوای {city} موقتاً در دسترس نیست."
     lines = [f"🌦️ آب و هوای {city}"]
     temp = weather.get("temp")
-    feels = weather.get("feels_like")
     if temp is not None:
-        line = f"🌡️ دما: {temp}°C"
-        if feels is not None and feels != temp:
-            line += f"  (احساس: {feels}°C)"
-        lines.append(line)
+        lines.append(f"🌡️ دما: {temp}°C")
     if weather.get("condition"):
         lines.append(f"🌤️ وضعیت: {weather['condition']}")
-    hi, lo = weather.get("high"), weather.get("low")
-    if hi is not None or lo is not None:
-        lines.append(f"🔼 کمینه/بیشینه: {lo if lo is not None else '—'}° / {hi if hi is not None else '—'}°")
     if weather.get("humidity") is not None:
         lines.append(f"💧 رطوبت: {weather['humidity']}%")
-    if weather.get("wind") is not None:
-        lines.append(f"💨 باد: {weather['wind']} km/h")
-    if weather.get("pressure") is not None:
-        lines.append(f"📉 فشار: {weather['pressure']} hPa")
-    if weather.get("visibility") is not None:
-        lines.append(f"👁 دید: {weather['visibility']} km")
     return "\n".join(lines)
