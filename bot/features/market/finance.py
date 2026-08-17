@@ -965,10 +965,11 @@ async def _fetch_coingecko_detail(coin_id: str) -> dict:
 
 
 async def _fetch_binance_futures(symbol: str) -> dict:
-    sym = (symbol or "").upper().replace("USDT", "") + "USDT"
+    """Funding, OI, حجم + نسبت لانگ/شورت حساب‌ها و تریدرهای برتر"""
+    sym = (symbol or "").upper().replace("USDT", "").replace("-", "") + "USDT"
     out = {}
     try:
-        async with httpx.AsyncClient(timeout=10.0) as c:
+        async with httpx.AsyncClient(timeout=12.0) as c:
             r = await c.get("https://fapi.binance.com/fapi/v1/premiumIndex", params={"symbol": sym})
             if r.status_code == 200:
                 d = r.json()
@@ -982,9 +983,123 @@ async def _fetch_binance_futures(symbol: str) -> dict:
                 tk = r3.json()
                 out["volume_24h"] = float(tk.get("quoteVolume") or 0)
                 out["price_change_pct"] = float(tk.get("priceChangePercent") or 0)
+
+            # نسبت لانگ/شورت — حساب‌های معمولی (global)
+            r4 = await c.get(
+                "https://fapi.binance.com/futures/data/globalLongShortAccountRatio",
+                params={"symbol": sym, "period": "1h", "limit": 1},
+            )
+            if r4.status_code == 200:
+                arr = r4.json() or []
+                if arr:
+                    row = arr[-1]
+                    out["ls_global_ratio"] = float(row.get("longShortRatio") or 0)
+                    out["ls_global_long"] = float(row.get("longAccount") or 0) * 100
+                    out["ls_global_short"] = float(row.get("shortAccount") or 0) * 100
+
+            # نسبت لانگ/شورت — تریدرهای برتر
+            r5 = await c.get(
+                "https://fapi.binance.com/futures/data/topLongShortAccountRatio",
+                params={"symbol": sym, "period": "1h", "limit": 1},
+            )
+            if r5.status_code == 200:
+                arr = r5.json() or []
+                if arr:
+                    row = arr[-1]
+                    out["ls_top_ratio"] = float(row.get("longShortRatio") or 0)
+                    out["ls_top_long"] = float(row.get("longAccount") or 0) * 100
+                    out["ls_top_short"] = float(row.get("shortAccount") or 0) * 100
+
+            # نسبت پوزیشن (نه فقط تعداد حساب) تریدرهای برتر
+            r6 = await c.get(
+                "https://fapi.binance.com/futures/data/topLongShortPositionRatio",
+                params={"symbol": sym, "period": "1h", "limit": 1},
+            )
+            if r6.status_code == 200:
+                arr = r6.json() or []
+                if arr:
+                    row = arr[-1]
+                    out["ls_pos_ratio"] = float(row.get("longShortRatio") or 0)
+                    out["ls_pos_long"] = float(row.get("longAccount") or 0) * 100
+                    out["ls_pos_short"] = float(row.get("shortAccount") or 0) * 100
     except Exception as e:
         logger.warning(f"binance futures {sym}: {e}")
+
+    # Fallback OKX long/short اگر Binance خالی/مسدود بود
+    if out.get("ls_global_ratio") is None:
+        try:
+            base = sym.replace("USDT", "")
+            async with httpx.AsyncClient(timeout=12.0) as c:
+                r = await c.get(
+                    "https://www.okx.com/api/v5/rubik/stat/contracts/long-short-account-ratio",
+                    params={"ccy": base},
+                )
+                if r.status_code == 200:
+                    arr = (r.json() or {}).get("data") or []
+                    if arr:
+                        # [ts, ratio] — ratio = long/short
+                        ratio = float(arr[0][1])
+                        # long% = ratio/(1+ratio)*100
+                        long_pct = ratio / (1 + ratio) * 100
+                        short_pct = 100 - long_pct
+                        out["ls_global_ratio"] = ratio
+                        out["ls_global_long"] = long_pct
+                        out["ls_global_short"] = short_pct
+                        out["ls_source"] = "okx"
+                r2 = await c.get(
+                    "https://www.okx.com/api/v5/rubik/stat/contracts/long-short-account-ratio-contract-top-trader",
+                    params={"instId": f"{base}-USDT-SWAP"},
+                )
+                if r2.status_code == 200:
+                    arr = (r2.json() or {}).get("data") or []
+                    if arr:
+                        ratio = float(arr[0][1])
+                        long_pct = ratio / (1 + ratio) * 100
+                        short_pct = 100 - long_pct
+                        out["ls_top_ratio"] = ratio
+                        out["ls_top_long"] = long_pct
+                        out["ls_top_short"] = short_pct
+        except Exception as e:
+            logger.warning(f"okx ls {sym}: {e}")
     return out
+
+
+def _format_long_short(binance: dict) -> list:
+    """خطوط فارسی نسبت لانگ/شورت"""
+    if not binance:
+        return []
+    lines = []
+    gl = binance.get("ls_global_long")
+    gs = binance.get("ls_global_short")
+    gr = binance.get("ls_global_ratio")
+    if gl is not None and gs is not None:
+        bias = "لانگ غالب 🟢" if gl > gs + 5 else ("شورت غالب 🔴" if gs > gl + 5 else "متعادل ⚪")
+        lines.append(f"👥 حساب‌ها (عمومی): لانگ {gl:.1f}% | شورت {gs:.1f}% — {bias}")
+        if gr:
+            lines.append(f"   نسبت L/S: {gr:.3f}")
+    tl = binance.get("ls_top_long")
+    ts = binance.get("ls_top_short")
+    tr = binance.get("ls_top_ratio")
+    if tl is not None and ts is not None:
+        bias = "لانگ غالب 🟢" if tl > ts + 5 else ("شورت غالب 🔴" if ts > tl + 5 else "متعادل ⚪")
+        lines.append(f"🏆 تریدرهای برتر (حساب): لانگ {tl:.1f}% | شورت {ts:.1f}% — {bias}")
+        if tr:
+            lines.append(f"   نسبت L/S: {tr:.3f}")
+    pl = binance.get("ls_pos_long")
+    ps = binance.get("ls_pos_short")
+    pr = binance.get("ls_pos_ratio")
+    if pl is not None and ps is not None:
+        bias = "لانگ غالب 🟢" if pl > ps + 5 else ("شورت غالب 🔴" if ps > pl + 5 else "متعادل ⚪")
+        lines.append(f"📦 حجم پوزیشن برتر: لانگ {pl:.1f}% | شورت {ps:.1f}% — {bias}")
+        if pr:
+            lines.append(f"   نسبت L/S: {pr:.3f}")
+    # تفسیر کوتاه
+    if gl is not None and tl is not None:
+        if gl > 60 and tl < 45:
+            lines.append("⚠️ عموم لانگ شلوغ‌اند ولی برترها محتاط‌تر — احتیاط در لانگ")
+        elif gs > 60 and ts < 45:
+            lines.append("⚠️ عموم شورت شلوغ‌اند ولی برترها محتاط‌تر — احتیاط در شورت")
+    return lines
 
 
 async def _fetch_fear_greed(limit: int = 7):
@@ -1280,6 +1395,11 @@ async def analyze_crypto(symbol: str, ai_summary: str = "", ai_guide: str = "", 
 
     lines.append("")
     lines.extend(_format_fear_greed(fg))
+    ls_lines = _format_long_short(binance or {})
+    if ls_lines:
+        lines.append("")
+        lines.append("▎6. 📊 نسبت لانگ / شورت")
+        lines.extend(ls_lines)
     lines.append(_signal_track_stub())
 
     if current is not None:
@@ -2240,10 +2360,16 @@ async def derivatives_radar(symbol: str) -> str:
         em = "🟢" if chg >= 0 else "🔴"
         lines.append(f"تغییر فیوچرز ۲۴س: {em} {chg:+.2f}%")
 
+    ls_lines = _format_long_short(data)
+    if ls_lines:
+        lines.append("")
+        lines.append("📊 نسبت لانگ / شورت")
+        lines.extend(ls_lines)
+
     lines.append("")
-    lines.append("منبع: Binance Futures (نزدیک به داده‌های مشتقه)")
+    lines.append("منبع: Binance Futures")
     lines.append("⚠️ صرفاً اطلاعاتی است.")
-    return "\n".join(lines)
+    return chr(10).join(lines)
 
 
 async def risk_scenarios(symbol: str) -> str:
