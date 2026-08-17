@@ -1218,9 +1218,9 @@ async def analyze_crypto(symbol: str, ai_summary: str = "", ai_guide: str = "", 
         f"ℹ️ راهنما: {ai_guide}",
     ]
 
-    # چندتایم‌فریم
+    # چندتایم‌فریم + همگرایی
     lines.append("")
-    lines.append("▎2. ⏱ امتیاز تایم‌فریم‌ها")
+    lines.append("▎2. ⏱ امتیاز و همگرایی تایم‌فریم")
     sc = mtf.get("scores") or {}
     di = mtf.get("dirs") or {}
     for k in ("1H", "4H", "1D"):
@@ -1228,6 +1228,8 @@ async def analyze_crypto(symbol: str, ai_summary: str = "", ai_guide: str = "", 
         d = di.get(k, "—")
         arrow = {"صعودی": "↗️", "نزولی": "↘️", "رنج/ضعیف": "↔️"}.get(d, "·")
         lines.append(f"• {k}: {s if s is not None else '—'}/10 | {d} {arrow}")
+    conv_txt, conv_pow = _mtf_convergence(mtf)
+    lines.append(f"🔗 {conv_txt} | قدرت {conv_pow}/10")
     if mtf.get("force_wait"):
         try:
             lines.append(f"⚠️ ADX روزانه: {float(mtf.get('daily_adx') or 0):.0f} < 18 → فیلتر صبر فعال")
@@ -1236,12 +1238,33 @@ async def analyze_crypto(symbol: str, ai_summary: str = "", ai_guide: str = "", 
     if mtf.get("conflict"):
         lines.append("⚠️ تضاد تایم‌فریم‌ها — اولویت با روزانه / حجم کمتر")
 
+    # ساختار بازار
+    struct = _market_structure(highs, lows, closes) if len(closes) >= 20 else {}
+    lines.append("")
+    lines.append("▎3. 📊 ساختار و حجم")
+    if struct:
+        lines.append(f"ساختار: {struct.get('structure', '—')}")
+        if struct.get("bos"):
+            lines.append(f"BOS/CHOCH: {struct['bos']}")
+    vol_note = _volume_breakout(closes, vols, resistance, support)
+    if vol_note:
+        lines.append(f"حجم: {vol_note}")
+    div = _rsi_divergence(closes) if closes else None
+    if div:
+        lines.append(f"RSI: {div}")
+
+    demand, supply = _demand_supply_zone(highs, lows, closes) if len(closes) >= 30 else (None, None)
+    if demand:
+        lines.append(f"ناحیه تقاضا: {fmt_p(demand[0])} – {fmt_p(demand[1])}")
+    if supply:
+        lines.append(f"ناحیه عرضه: {fmt_p(supply[0])} – {fmt_p(supply[1])}")
+
     pats = list(ta.get("patterns") or [])
     pats += list((mtf.get("1d") or {}).get("patterns") or [])
     pats = list(dict.fromkeys(pats))
     if pats:
         lines.append("")
-        lines.append("▎3. 🕯 الگوهای کندلی")
+        lines.append("▎4. 🕯 الگوهای کندلی")
         for p in pats[:4]:
             lines.append(f"• {p}")
 
@@ -1249,8 +1272,15 @@ async def analyze_crypto(symbol: str, ai_summary: str = "", ai_guide: str = "", 
     if atr_v is not None:
         lines.append(f"📐 ATR(14): {atr_v:,.4f}" if atr_v < 10 else f"📐 ATR(14): {atr_v:,.2f}")
 
+    # سناریوها
+    lines.append("")
+    lines.append("▎5. 🎲 سناریوها")
+    for scn in _scenarios(signal, support, resistance, current, atr_v):
+        lines.append(f"• {scn}")
+
     lines.append("")
     lines.extend(_format_fear_greed(fg))
+    lines.append(_signal_track_stub())
 
     if current is not None:
         lines.append("")
@@ -1273,7 +1303,10 @@ async def analyze_crypto(symbol: str, ai_summary: str = "", ai_guide: str = "", 
 
     lines.append("")
     lines.append("⚠️ صرفاً تحلیلی/آموزشی است؛ توصیه سرمایه‌گذاری قطعی نیست.")
-    return "\n".join(lines)
+    text_out = chr(10).join(lines)
+    if len(text_out) > 3900:
+        text_out = text_out[:3890].rsplit(chr(10), 1)[0] + chr(10) + "…"
+    return text_out
 
 
 def _default_guide(signal, exec_status, support, resistance, current) -> str:
@@ -1689,6 +1722,146 @@ async def _mtf_bundle(pair: str) -> dict:
     }
 
 
+
+def _market_structure(highs, lows, closes) -> dict:
+    """ساختار ساده: HH/HL یا LH/LL + BOS تقریبی"""
+    if len(closes) < 20:
+        return {"structure": "نامشخص", "bos": None}
+    # swing تقریبی روی 5 کندل
+    def swings(arr, mode="high"):
+        pts = []
+        for i in range(2, len(arr) - 2):
+            if mode == "high" and arr[i] == max(arr[i-2:i+3]):
+                pts.append((i, arr[i]))
+            if mode == "low" and arr[i] == min(arr[i-2:i+3]):
+                pts.append((i, arr[i]))
+        return pts[-4:]
+    sh = swings(highs, "high")
+    sl = swings(lows, "low")
+    structure = "رنج"
+    bos = None
+    if len(sh) >= 2 and len(sl) >= 2:
+        if sh[-1][1] > sh[-2][1] and sl[-1][1] > sl[-2][1]:
+            structure = "صعودی (HH/HL)"
+            if closes[-1] > sh[-1][1]:
+                bos = "BOS صعودی — شکست سقف اخیر"
+        elif sh[-1][1] < sh[-2][1] and sl[-1][1] < sl[-2][1]:
+            structure = "نزولی (LH/LL)"
+            if closes[-1] < sl[-1][1]:
+                bos = "BOS نزولی — شکست کف اخیر"
+        elif sh[-1][1] < sh[-2][1] and sl[-1][1] > sl[-2][1]:
+            structure = "احتمال CHOCH / فشردگی"
+            bos = "تغییر ساختار محتمل"
+    return {"structure": structure, "bos": bos, "last_swing_high": sh[-1][1] if sh else None, "last_swing_low": sl[-1][1] if sl else None}
+
+
+def _rsi_divergence(closes, period: int = 14) -> str | None:
+    """واگرایی ساده RSI روی ۲۰ کندل آخر"""
+    if len(closes) < period + 25:
+        return None
+    # RSI series rough
+    rsis = []
+    for end in range(period + 1, len(closes) + 1):
+        r = _rsi(closes[:end], period)
+        if r is not None:
+            rsis.append(r)
+    if len(rsis) < 20:
+        return None
+    c = closes[-20:]
+    r = rsis[-20:]
+    # سقف قیمت vs RSI
+    i_px_hi = max(range(len(c)), key=lambda i: c[i])
+    i_rsi_hi = max(range(len(r)), key=lambda i: r[i])
+    i_px_lo = min(range(len(c)), key=lambda i: c[i])
+    i_rsi_lo = min(range(len(r)), key=lambda i: r[i])
+    # bearish div: price higher high near end, rsi lower high
+    if i_px_hi >= 12 and c[i_px_hi] >= max(c[:10]) and r[i_px_hi] < max(r[:10]) - 3:
+        return "واگرایی نزولی RSI — ضعف در سقف"
+    if i_px_lo >= 12 and c[i_px_lo] <= min(c[:10]) and r[i_px_lo] > min(r[:10]) + 3:
+        return "واگرایی صعودی RSI — ضعف فروش در کف"
+    return None
+
+
+def _volume_breakout(closes, vols, resistance, support) -> str | None:
+    if not closes or not vols or len(vols) < 20:
+        return None
+    avg = sum(vols[-20:]) / 20
+    last_v = vols[-1]
+    last_c = closes[-1]
+    ratio = last_v / avg if avg else 1
+    if resistance and last_c > resistance * 0.998 and ratio >= 1.4:
+        return f"شکست مقاومت با حجم قوی (×{ratio:.1f})"
+    if support and last_c < support * 1.002 and ratio >= 1.4:
+        return f"شکست حمایت با حجم قوی (×{ratio:.1f})"
+    if ratio >= 1.8:
+        return f"حجم غیرعادی ×{ratio:.1f} میانگین"
+    if ratio < 0.6:
+        return "حجم ضعیف — شکست‌ها کم‌اعتبارتر"
+    return None
+
+
+def _demand_supply_zone(highs, lows, closes) -> tuple:
+    """بازه تقریبی تقاضا/عرضه از ۱۰–۳۰ کندل قبل"""
+    if len(closes) < 30:
+        return None, None
+    seg_l = lows[-30:-5]
+    seg_h = highs[-30:-5]
+    if not seg_l or not seg_h:
+        return None, None
+    demand = (min(seg_l), sorted(seg_l)[max(0, len(seg_l)//4)])
+    supply = (sorted(seg_h)[max(0, 3*len(seg_h)//4 - 1)], max(seg_h))
+    return demand, supply
+
+
+def _mtf_convergence(mtf: dict) -> tuple:
+    """(متن همگرایی، قدرت 1-10)"""
+    dirs = mtf.get("dirs") or {}
+    scores = mtf.get("scores") or {}
+    vals = [dirs.get(k) for k in ("1H", "4H", "1D")]
+    bull = sum(1 for d in vals if d == "صعودی")
+    bear = sum(1 for d in vals if d == "نزولی")
+    avg_sc = [scores.get(k) for k in ("1H", "4H", "1D") if scores.get(k)]
+    avg = sum(avg_sc) / len(avg_sc) if avg_sc else 5
+    if bull == 3:
+        return "همگرایی کامل صعودی ۳/۳", min(10, int(avg + 2))
+    if bear == 3:
+        return "همگرایی کامل نزولی ۳/۳", min(10, int(avg + 2))
+    if bull == 2 and bear == 0:
+        return "همگرایی جزئی صعودی ۲/۳", int(avg)
+    if bear == 2 and bull == 0:
+        return "همگرایی جزئی نزولی ۲/۳", int(avg)
+    if bull and bear:
+        return "عدم همگرایی — تضاد تایم‌فریم‌ها", max(1, int(avg - 2))
+    return "همگرایی ضعیف / رنج", max(1, int(avg - 1))
+
+
+def _scenarios(signal, support, resistance, current, atr) -> list:
+    """سناریو A/B با احتمال تقریبی"""
+    lines = []
+    try:
+        cur = float(current) if current is not None else None
+        sup = float(support) if support is not None else None
+        res = float(resistance) if resistance is not None else None
+        a = float(atr) if atr else None
+    except Exception:
+        return ["سناریو: داده ناکافی"]
+    if "لانگ" in (signal or ""):
+        lines.append(f"سناریو A (~۶۰٪): نگه داشتن بالای {sup or 'حمایت'} و حرکت به {res or 'مقاومت'}")
+        lines.append(f"سناریو B (~۴۰٪): از دست رفتن حمایت و برگشت تا {(sup - a) if (sup and a) else 'پایین‌تر'}")
+    elif "شورت" in (signal or ""):
+        lines.append(f"سناریو A (~۶۰٪): رد شدن از {res or 'مقاومت'} و حرکت به {sup or 'حمایت'}")
+        lines.append(f"سناریو B (~۴۰٪): شکست مقاومت و ادامه تا {(res + a) if (res and a) else 'بالاتر'}")
+    else:
+        lines.append("سناریو A (~۵۰٪): ادامه رنج بین حمایت و مقاومت")
+        lines.append("سناریو B (~۵۰٪): شکست یکی از دو سمت با حجم و شروع روند")
+    return lines
+
+
+def _signal_track_stub() -> str:
+    """کارنامه ساده — تا وقتی دیتابیس سیگنال نداریم"""
+    return "کارنامه سیگنال: به‌زودی با ثبت خودکار ستاپ‌ها فعال می‌شود"
+
+
 def _support_resistance(closes, highs, lows, current):
     if not closes:
         return None, None
@@ -1832,22 +2005,66 @@ async def get_crypto_analysis_short(symbol: str) -> str:
 # منوی کامل تحلیل (شبیه Algo Analyzer)
 # ─────────────────────────────────────────────────────────────────────────────
 
+
+async def market_scanner(limit: int = 10) -> str:
+    """اسکن سریع نمادهای برتر از نظر ستاپ MTF"""
+    symbols = [
+        "btc", "eth", "bnb", "sol", "xrp", "doge", "ada", "avax", "link", "dot",
+        "ton", "near", "sui", "ltc", "atom", "uni", "apt", "fil", "arb", "op",
+    ]
+    rows = []
+    for sym in symbols:
+        try:
+            pair = _pair_from_symbol(sym)
+            mtf = await _mtf_bundle(pair)
+            conv, power = _mtf_convergence(mtf)
+            sc = mtf.get("scores") or {}
+            di = mtf.get("dirs") or {}
+            # فقط اگر force_wait نباشد و امتیاز 4H خوب باشد
+            if mtf.get("force_wait"):
+                continue
+            score4 = sc.get("4H") or 0
+            if score4 < 6:
+                continue
+            direction = di.get("4H") or "—"
+            rows.append((power, score4, sym.upper(), direction, conv, sc))
+        except Exception:
+            continue
+    rows.sort(key=lambda x: (x[0], x[1]), reverse=True)
+    rows = rows[:limit]
+    lines = [
+        "🔍 اسکنر بازار — ستاپ‌های برتر",
+        "────────────────────",
+    ]
+    if not rows:
+        lines.append("الان ستاپ قوی هم‌راستا پیدا نشد (بازار رنج یا ADX ضعیف).")
+    else:
+        for i, (power, score4, sym, direction, conv, sc) in enumerate(rows, 1):
+            lines.append(
+                f"{i}. {sym} | {direction} | قدرت {power}/10 | 4H:{score4} 1H:{sc.get('1H','—')} 1D:{sc.get('1D','—')}"
+            )
+            lines.append(f"   {conv}")
+    lines.append("")
+    lines.append("⚠️ آموزشی است؛ قبل از ورود خودت تأیید کن.")
+    return chr(10).join(lines)
+
+
 def get_crypto_analysis_keyboard(symbol: str) -> "InlineKeyboardMarkup":
     from telegram import InlineKeyboardButton, InlineKeyboardMarkup
     s = (symbol or "btc").lower().replace("usdt", "").strip()
     return InlineKeyboardMarkup(
         [
             [
-                InlineKeyboardButton("1️⃣ خلاصه کلی", callback_data=f"cx:sum:{s}"),
-                InlineKeyboardButton("2️⃣ تحلیل و نمودار روزانه", callback_data=f"cx:day:{s}"),
+                InlineKeyboardButton("📅 تحلیل و نمودار روزانه", callback_data=f"cx:day:{s}"),
+                InlineKeyboardButton("⏰ تحلیل و نمودار ساعتی", callback_data=f"cx:hr:{s}"),
             ],
             [
-                InlineKeyboardButton("3️⃣ تحلیل و نمودار ساعتی", callback_data=f"cx:hr:{s}"),
-                InlineKeyboardButton("4️⃣ توصیه معاملاتی", callback_data=f"cx:rec:{s}"),
+                InlineKeyboardButton("🎯 توصیه معاملاتی", callback_data=f"cx:rec:{s}"),
+                InlineKeyboardButton("📡 رادار مشتقات", callback_data=f"cx:der:{s}"),
             ],
             [
-                InlineKeyboardButton("5️⃣ رادار مشتقات", callback_data=f"cx:der:{s}"),
-                InlineKeyboardButton("6️⃣ ریسک و سناریوها", callback_data=f"cx:risk:{s}"),
+                InlineKeyboardButton("🎲 ریسک و سناریوها", callback_data=f"cx:risk:{s}"),
+                InlineKeyboardButton("🔍 اسکنر بازار", callback_data=f"cx:scan:{s}"),
             ],
             [
                 InlineKeyboardButton("📐 سایز پوزیشن", callback_data=f"cx:pos:{s}"),

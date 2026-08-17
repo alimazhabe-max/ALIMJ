@@ -16,7 +16,7 @@ from .finance import (
     risk_scenarios,
     position_size_guide,
     calc_position_size,
-    entry_alert_text,
+    entry_alert_text, market_scanner,
     register_price_alert,
 )
 
@@ -38,6 +38,6 @@ __all__ = [
     "risk_scenarios",
     "position_size_guide",
     "calc_position_size",
-    "entry_alert_text",
+    "entry_alert_text, market_scanner",
     "register_price_alert",
 ]
