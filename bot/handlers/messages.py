@@ -1047,18 +1047,22 @@ async def _h_crypto_full(u, c, t, uid):
         pass
 
     menu = get_crypto_analysis_keyboard(symbol)
-    # نمودار جدا + متن کامل تحلیل (فرمت حرفه‌ای بدون برش کپشن)
+    # یک پیام واحد (عکس+تحلیل+منو) تا دکمه‌ها همان را ویرایش کنند
+    body = (report or "❌ داده نبود.")
     if png:
         try:
             from io import BytesIO
             bio = BytesIO(png)
             bio.name = f"{symbol}_analysis.png"
-            await u.message.reply_photo(photo=bio, caption=f"📊 {symbol.upper()} — نمودار تحلیل")
+            await u.message.reply_photo(
+                photo=bio,
+                caption=body[:1024],
+                reply_markup=menu,
+            )
         except Exception as e:
-            await u.message.reply_text(f"⚠️ نمودار: {e}")
-    body = (report or "❌ داده نبود.") + "\n\n✅ پایان تحلیل هوش مصنوعی — از منوی زیر استفاده کنید:"
-    await u.message.reply_text(body[:4000], reply_markup=menu)
-    await u.message.reply_text("📊 منوی تحلیل فعال است.", reply_markup=get_market_keyboard())
+            await u.message.reply_text(body[:4000] + f"\n⚠️ نمودار: {e}", reply_markup=menu)
+    else:
+        await u.message.reply_text(body[:4000], reply_markup=menu)
 
 
 async def _h_crypto_pos(u, c, t, uid):

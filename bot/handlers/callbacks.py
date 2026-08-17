@@ -480,12 +480,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
 
-    # ── منوی تحلیل کریپتو (cx:action:symbol) ─────────────────
+    # ── منوی تحلیل کریپتو (cx:action:symbol) — ویرایش همان پیام ──
     if data.startswith("cx:"):
         await _safe_answer(query)
         parts = data.split(":")
         if len(parts) < 3:
-            await query.message.reply_text("❌ درخواست نامعتبر")
             return
         action, symbol = parts[1], parts[2]
         context.user_data["crypto_symbol"] = symbol
@@ -495,77 +494,144 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 trading_recommendation, derivatives_radar, risk_scenarios,
                 position_size_guide, entry_alert_text,
             )
+            from io import BytesIO
+            from telegram import InputMediaPhoto
+
             menu = get_crypto_analysis_keyboard(symbol)
+
+            async def _smart_ai(base_txt: str, tf_name: str) -> tuple:
+                """جمع‌بندی + راهنما دقیق‌تر بر اساس تایم‌فریم"""
+                try:
+                    from bot.services.ai_service import ask_ai
+                    prompt = (
+                        f"تو تحلیل‌گر ارشد مشتقات کریپتو هستی. تایم‌فریم تمرکز: {tf_name}.\n"
+                        "فقط از داده زیر استفاده کن؛ عدد جعلی نساز.\n"
+                        "خروجی دقیقاً:\n"
+                        "جمع‌بندی: ۲ تا ۴ جمله فارسی (روند این تایم‌فریم، ساختار، مومنتوم، سیگنال)\n"
+                        "راهنما: ۱ تا ۲ جمله (ورود الان / صبر / فرصت گذشته)\n"
+                        "بدون بولت، بدون تضمین سود.\n\n"
+                        + (base_txt or "")[:3000]
+                    )
+                    answer, _ = await ask_ai(query.from_user.id, prompt)
+                    raw = (answer or "").strip()
+                    summary, guide = "", ""
+                    if "راهنما:" in raw:
+                        a, b = raw.split("راهنما:", 1)
+                        summary = a.replace("جمع‌بندی:", "").strip().replace("\n", " ")
+                        guide = b.strip().replace("\n", " ")
+                    elif "جمع‌بندی:" in raw:
+                        summary = raw.split("جمع‌بندی:", 1)[-1].strip().replace("\n", " ")
+                    else:
+                        summary = raw.replace("\n", " ")
+                    if len(summary) > 320:
+                        summary = summary[:320].rsplit(" ", 1)[0] + "…"
+                    if len(guide) > 220:
+                        guide = guide[:220].rsplit(" ", 1)[0] + "…"
+                    return summary, guide
+                except Exception:
+                    return "", ""
+
+            async def _edit_photo_caption(png: bytes | None, caption: str):
+                """همان پیام را ویرایش کن (عکس+کپشن یا فقط کپشن/متن)"""
+                cap = (caption or "")[:1024]
+                msg = query.message
+                try:
+                    if png:
+                        bio = BytesIO(png)
+                        bio.name = f"{symbol}.png"
+                        media = InputMediaPhoto(media=bio, caption=cap)
+                        await msg.edit_media(media=media, reply_markup=menu)
+                        return
+                    # بدون عکس جدید
+                    if msg.photo:
+                        await msg.edit_caption(caption=cap, reply_markup=menu)
+                    else:
+                        await msg.edit_text(cap[:4000], reply_markup=menu)
+                except Exception:
+                    # اگر ویرایش ممکن نبود (مثلاً پیام خیلی قدیمی)، به‌عنوان آخرین راه
+                    try:
+                        if png:
+                            bio = BytesIO(png)
+                            bio.name = f"{symbol}.png"
+                            await msg.reply_photo(photo=bio, caption=cap, reply_markup=menu)
+                        else:
+                            await msg.reply_text(cap[:4000], reply_markup=menu)
+                    except Exception as e2:
+                        await _safe_answer(query, f"خطا: {e2}", show_alert=True)
+
+            async def _edit_text(txt: str):
+                text = (txt or "")[:4000]
+                msg = query.message
+                try:
+                    if msg.photo:
+                        # روی پیام عکسی: کپشن را عوض کن (حد ۱۰۲۴)
+                        await msg.edit_caption(caption=text[:1024], reply_markup=menu)
+                    else:
+                        await msg.edit_text(text, reply_markup=menu)
+                except Exception:
+                    try:
+                        await msg.reply_text(text, reply_markup=menu)
+                    except Exception:
+                        pass
+
             if action == "sum":
-                txt = await analyze_crypto(symbol)
-                await query.message.reply_text(txt[:4000], reply_markup=menu)
+                base = await analyze_crypto(symbol, timeframe="4h")
+                s, g = await _smart_ai(base, "4H میان‌مدت")
+                txt = await analyze_crypto(symbol, ai_summary=s, ai_guide=g, timeframe="4h") if (s or g) else base
+                await _edit_text(txt)
+
             elif action == "day":
-                wait = await query.message.reply_text("⏳ نمودار روزانه...")
-                png, cap = await get_crypto_chart(symbol, 90)
-                try:
-                    await wait.delete()
-                except Exception:
-                    pass
-                if png:
-                    from io import BytesIO
-                    bio = BytesIO(png)
-                    bio.name = f"{symbol}_daily.png"
-                    await query.message.reply_photo(photo=bio, caption=(cap or "نمودار روزانه")[:1024], reply_markup=menu)
-                else:
-                    await query.message.reply_text(cap or "❌ نمودار روزانه در دسترس نیست", reply_markup=menu)
+                # تحلیل روزانه + نمودار روزانه روی همان پیام
+                base = await analyze_crypto(symbol, timeframe="1d")
+                s, g = await _smart_ai(base, "روزانه 1D")
+                report = await analyze_crypto(symbol, ai_summary=s, ai_guide=g, timeframe="1d") if (s or g) else base
+                png, _cap = await get_crypto_chart(symbol, 90)
+                caption = (report or "")[:1024]
+                await _edit_photo_caption(png, caption)
+
             elif action == "hr":
-                wait = await query.message.reply_text("⏳ نمودار ساعتی...")
-                png, cap = await get_crypto_chart(symbol, 7)
-                try:
-                    await wait.delete()
-                except Exception:
-                    pass
-                if png:
-                    from io import BytesIO
-                    bio = BytesIO(png)
-                    bio.name = f"{symbol}_hourly.png"
-                    await query.message.reply_photo(photo=bio, caption=(cap or "نمودار ساعتی")[:1024], reply_markup=menu)
-                else:
-                    await query.message.reply_text(cap or "❌ نمودار ساعتی در دسترس نیست", reply_markup=menu)
+                base = await analyze_crypto(symbol, timeframe="1h")
+                s, g = await _smart_ai(base, "ساعتی 1H")
+                report = await analyze_crypto(symbol, ai_summary=s, ai_guide=g, timeframe="1h") if (s or g) else base
+                png, _cap = await get_crypto_chart(symbol, 7)
+                caption = (report or "")[:1024]
+                await _edit_photo_caption(png, caption)
+
             elif action == "rec":
                 txt = await trading_recommendation(symbol)
-                await query.message.reply_text(txt, reply_markup=menu)
+                await _edit_text(txt)
+
             elif action == "der":
                 txt = await derivatives_radar(symbol)
-                await query.message.reply_text(txt, reply_markup=menu)
+                await _edit_text(txt)
+
             elif action == "risk":
                 txt = await risk_scenarios(symbol)
-                await query.message.reply_text(txt, reply_markup=menu)
+                await _edit_text(txt)
+
             elif action == "pos":
                 context.user_data["waiting_for"] = "crypto_pos"
-                await query.message.reply_text(position_size_guide(symbol), reply_markup=menu)
+                await _edit_text(position_size_guide(symbol))
+
             elif action == "al":
                 context.user_data["waiting_for"] = "crypto_alert"
                 txt = await entry_alert_text(symbol)
-                await query.message.reply_text(txt, reply_markup=menu)
+                await _edit_text(txt)
+
             elif action == "ref":
-                wait = await query.message.reply_text("⏳ بروزرسانی...")
-                txt = await analyze_crypto(symbol)
-                png, cap = await get_crypto_chart(symbol, 30)
-                try:
-                    await wait.delete()
-                except Exception:
-                    pass
-                if png:
-                    from io import BytesIO
-                    bio = BytesIO(png)
-                    bio.name = f"{symbol}_ref.png"
-                    await query.message.reply_photo(
-                        photo=bio,
-                        caption=(txt + "\n\n🔄 بروزرسانی شد")[:1024],
-                        reply_markup=menu,
-                    )
-                else:
-                    await query.message.reply_text(txt[:4000], reply_markup=menu)
+                base = await analyze_crypto(symbol, timeframe="4h")
+                s, g = await _smart_ai(base, "4H بروزرسانی")
+                report = await analyze_crypto(symbol, ai_summary=s, ai_guide=g, timeframe="4h") if (s or g) else base
+                png, _ = await get_crypto_chart(symbol, 30)
+                await _edit_photo_caption(png, (report or "")[:1024])
+
             else:
-                await query.message.reply_text("❌ گزینه ناشناخته", reply_markup=menu)
+                await _edit_text("❌ گزینه ناشناخته")
         except Exception as e:
-            await query.message.reply_text(f"⚠️ خطا: {e}")
+            try:
+                await query.message.reply_text(f"⚠️ خطا: {e}")
+            except Exception:
+                pass
         return
 
     # هر callback ناشناخته‌ای — حداقل spinner را قطع کن
