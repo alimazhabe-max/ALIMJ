@@ -137,12 +137,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             from bot.database import get_user_city
             city = get_user_city(user_id) or "تهران"
             if kind == "weather":
-                from bot.api.weather import get_weather
+                from bot.api.weather import get_weather, format_weather
                 w = get_weather(city)
-                if w:
-                    txt = f"🌤 هوای {city}:\nدما {w.get('temp')}°C\n{w.get('condition')}\nرطوبت {w.get('humidity')}%"
-                else:
-                    txt = "هوا در دسترس نیست."
+                txt = format_weather(city, w)
             elif kind == "price":
                 from bot.features.market.finance import full_market_prices
                 txt = await full_market_prices()
