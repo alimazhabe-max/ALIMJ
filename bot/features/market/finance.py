@@ -674,9 +674,24 @@ async def get_crypto_chart(symbol: str, days: int = 7) -> Tuple[Optional[bytes],
         import matplotlib
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
-        from matplotlib.patches import Rectangle
-        plt.rcParams["axes.unicode_minus"] = False
-        plt.rcParams["font.family"] = "DejaVu Sans"
+        from matplotlib.patches import Rectangle, FancyBboxPatch
+        from matplotlib.collections import LineCollection
+        plt.rcParams.update({
+            "axes.unicode_minus": False,
+            "font.family": "DejaVu Sans",
+            "figure.facecolor": "#0b0e11",
+            "axes.facecolor": "#0b0e11",
+            "savefig.facecolor": "#0b0e11",
+            "text.color": "#e5e7eb",
+            "axes.labelcolor": "#9ca3af",
+            "xtick.color": "#9ca3af",
+            "ytick.color": "#9ca3af",
+            "axes.edgecolor": "#1f2937",
+            "grid.color": "#1f2937",
+            "grid.linestyle": "-",
+            "grid.linewidth": 0.6,
+            "grid.alpha": 0.9,
+        })
     except ImportError as e:
         return None, f"❌ کتابخانه رسم نصب نیست: {e}"
 
@@ -686,7 +701,7 @@ async def get_crypto_chart(symbol: str, days: int = 7) -> Tuple[Optional[bytes],
     closes = np.array([float(k[4]) for k in klines], dtype=float)
     vols = np.array([float(k[5]) for k in klines], dtype=float)
     n = len(closes)
-    x = np.arange(n)
+    x = np.arange(n, dtype=float)
 
     def _ema(arr, period):
         out = np.zeros(len(arr), dtype=float)
@@ -725,89 +740,140 @@ async def get_crypto_chart(symbol: str, days: int = 7) -> Tuple[Optional[bytes],
             dn = l[i - 1] - l[i]
             dp[i] = up if up > dn and up > 0 else 0
             dm[i] = dn if dn > up and dn > 0 else 0
-        atr = tr.copy()
-        for i in range(period, len(c)):
-            atr[i] = atr[i - 1] - atr[i - 1] / period + tr[i] if i > period else tr[1:i + 1].mean()
+        atr = np.zeros(len(c))
+        atr[period] = tr[1:period + 1].mean()
+        for i in range(period + 1, len(c)):
+            atr[i] = (atr[i - 1] * (period - 1) + tr[i]) / period
         dxs = []
         for i in range(period, len(c)):
-            atr_v = atr[i] if atr[i] else 1e-9
+            atr_v = atr[i] if atr[i] > 0 else 1e-9
             di_p = 100 * (dp[i - period + 1:i + 1].mean()) / atr_v
             di_m = 100 * (dm[i - period + 1:i + 1].mean()) / atr_v
             s = di_p + di_m
             dx = 0 if s == 0 else 100 * abs(di_p - di_m) / s
             dxs.append(dx)
-            out[i] = dx if len(dxs) < period else float(np.mean(dxs[-period:]))
+            out[i] = float(np.mean(dxs[-period:])) if len(dxs) >= period else dx
         return out
 
     ema20 = _ema(closes, 20)
     ema50 = _ema(closes, 50) if n >= 50 else _ema(closes, max(10, n // 3))
-    # Bollinger
+    ema100 = _ema(closes, 100) if n >= 100 else None
     bb_period = 20
-    sma = np.convolve(closes, np.ones(bb_period) / bb_period, mode="same")
+    sma = np.array([closes[max(0, i - bb_period + 1):i + 1].mean() for i in range(n)])
     std = np.array([closes[max(0, i - bb_period + 1):i + 1].std() for i in range(n)])
     bb_u, bb_l = sma + 2 * std, sma - 2 * std
     rsi = _rsi_arr(closes, 14)
     adx = _adx_arr(highs, lows, closes, 14)
 
+    # رنگ‌های حرفه‌ای
+    C_UP = "#26a69a"
+    C_DN = "#ef5350"
+    C_EMA20 = "#42a5f5"
+    C_EMA50 = "#ffa726"
+    C_EMA100 = "#ab47bc"
+    C_BB = "#5c6bc0"
+    C_GRID = "#1e222d"
+    C_TEXT = "#d1d4dc"
+    C_MUTED = "#787b86"
+
     try:
-        fig = plt.figure(figsize=(11, 8.5), dpi=120)
-        gs = fig.add_gridspec(4, 1, height_ratios=[3.2, 0.9, 0.9, 0.9], hspace=0.08)
-        ax_price = fig.add_subplot(gs[0])
-        ax_vol = fig.add_subplot(gs[1], sharex=ax_price)
-        ax_adx = fig.add_subplot(gs[2], sharex=ax_price)
-        ax_rsi = fig.add_subplot(gs[3], sharex=ax_price)
+        fig = plt.figure(figsize=(12, 9), dpi=140)
+        gs = fig.add_gridspec(4, 1, height_ratios=[3.4, 0.85, 0.85, 0.85], hspace=0.06)
+        ax_p = fig.add_subplot(gs[0])
+        ax_v = fig.add_subplot(gs[1], sharex=ax_p)
+        ax_a = fig.add_subplot(gs[2], sharex=ax_p)
+        ax_r = fig.add_subplot(gs[3], sharex=ax_p)
 
-        # BB
-        ax_price.fill_between(x, bb_l, bb_u, color="#93c5fd", alpha=0.35, label="BBANDS(20,2)")
-        ax_price.plot(x, sma, color="#3b82f6", linewidth=0.9, linestyle="--", alpha=0.9)
+        for ax in (ax_p, ax_v, ax_a, ax_r):
+            ax.set_facecolor("#131722")
+            ax.tick_params(colors=C_MUTED, labelsize=8)
+            ax.grid(True, color=C_GRID, linewidth=0.7)
+            for spine in ax.spines.values():
+                spine.set_color("#2a2e39")
 
-        # Candles
-        width = 0.55
+        # Bollinger fill
+        ax_p.fill_between(x, bb_l, bb_u, color=C_BB, alpha=0.12, zorder=1)
+        ax_p.plot(x, bb_u, color=C_BB, linewidth=0.7, alpha=0.5, linestyle="--", zorder=2)
+        ax_p.plot(x, bb_l, color=C_BB, linewidth=0.7, alpha=0.5, linestyle="--", zorder=2)
+        ax_p.plot(x, sma, color=C_BB, linewidth=0.9, alpha=0.7, zorder=2)
+
+        # Candles — wick + body تمیز
+        width = 0.62
         for i in range(n):
-            color = "#16a34a" if closes[i] >= opens[i] else "#dc2626"
-            ax_price.plot([i, i], [lows[i], highs[i]], color=color, linewidth=0.7, solid_capstyle="round")
+            up = closes[i] >= opens[i]
+            color = C_UP if up else C_DN
+            ax_p.plot([i, i], [lows[i], highs[i]], color=color, linewidth=1.0, solid_capstyle="round", zorder=3)
             body = abs(closes[i] - opens[i])
             bottom = min(opens[i], closes[i])
-            if body < (highs[i] - lows[i]) * 0.001:
-                body = max((highs[i] - lows[i]) * 0.01, closes[i] * 0.00005)
-            ax_price.add_patch(
-                Rectangle((i - width / 2, bottom), width, body, facecolor=color, edgecolor=color, linewidth=0.4)
-            )
+            if body < (highs[i] - lows[i]) * 0.002:
+                body = max((highs[i] - lows[i]) * 0.015, closes[i] * 0.00008)
+            ax_p.add_patch(Rectangle(
+                (i - width / 2, bottom), width, body,
+                facecolor=color, edgecolor=color, linewidth=0.4, zorder=4, alpha=0.95,
+            ))
 
-        ax_price.plot(x, ema20, color="#0ea5e9", linewidth=1.2, label="EMA(20)")
-        ax_price.plot(x, ema50, color="#f59e0b", linewidth=1.2, label="EMA(50)")
-        ax_price.set_title(f"{pair} — {days}D Chart ({interval})", fontsize=12, fontweight="bold")
-        ax_price.legend(loc="upper left", fontsize=8, framealpha=0.85)
-        ax_price.grid(True, alpha=0.25, linestyle="--")
-        ax_price.set_ylabel("USD")
-        plt.setp(ax_price.get_xticklabels(), visible=False)
+        ax_p.plot(x, ema20, color=C_EMA20, linewidth=1.35, label="EMA 20", zorder=5)
+        ax_p.plot(x, ema50, color=C_EMA50, linewidth=1.35, label="EMA 50", zorder=5)
+        if ema100 is not None:
+            ax_p.plot(x, ema100, color=C_EMA100, linewidth=1.2, label="EMA 100", zorder=5)
+
+        last = float(closes[-1])
+        chg = ((closes[-1] - closes[0]) / closes[0] * 100) if closes[0] else 0
+        chg_c = C_UP if chg >= 0 else C_DN
+        ax_p.set_title(
+            f"{pair}   •   {days}D ({interval})   •   ${last:,.2f}   ({chg:+.2f}%)",
+            fontsize=13, fontweight="bold", color=C_TEXT, loc="left", pad=10,
+        )
+        leg = ax_p.legend(loc="upper left", fontsize=8, frameon=True, fancybox=True)
+        leg.get_frame().set_facecolor("#1c2030")
+        leg.get_frame().set_edgecolor("#2a2e39")
+        for txt in leg.get_texts():
+            txt.set_color(C_TEXT)
+        ax_p.set_ylabel("Price (USDT)", fontsize=9, color=C_MUTED)
+        # آخرین قیمت خط افقی
+        ax_p.axhline(last, color=chg_c, linewidth=0.8, linestyle=":", alpha=0.7, zorder=2)
+        ax_p.margins(x=0.01)
+        plt.setp(ax_p.get_xticklabels(), visible=False)
 
         # Volume
-        vcolors = ["#16a34a" if closes[i] >= opens[i] else "#dc2626" for i in range(n)]
-        ax_vol.bar(x, vols, color=vcolors, width=0.75, alpha=0.75)
-        ax_vol.set_ylabel("Vol")
-        ax_vol.grid(True, alpha=0.25)
-        plt.setp(ax_vol.get_xticklabels(), visible=False)
+        vcolors = [C_UP if closes[i] >= opens[i] else C_DN for i in range(n)]
+        ax_v.bar(x, vols, color=vcolors, width=0.7, alpha=0.85, zorder=3)
+        ax_v.set_ylabel("Volume", fontsize=8, color=C_MUTED)
+        plt.setp(ax_v.get_xticklabels(), visible=False)
+        ax_v.margins(x=0.01)
 
         # ADX
-        ax_adx.plot(x, adx, color="#111827", linewidth=1.1, label="ADX(14)")
-        ax_adx.axhline(25, color="#9ca3af", linestyle="--", linewidth=0.7)
-        ax_adx.set_ylabel("ADX")
-        ax_adx.legend(loc="upper left", fontsize=7)
-        ax_adx.grid(True, alpha=0.25)
-        plt.setp(ax_adx.get_xticklabels(), visible=False)
+        ax_a.plot(x, adx, color="#b2b5be", linewidth=1.25, label="ADX(14)", zorder=3)
+        ax_a.axhline(25, color="#787b86", linestyle="--", linewidth=0.8, alpha=0.8)
+        ax_a.fill_between(x, adx, 25, where=(~np.isnan(adx)) & (adx >= 25), color="#26a69a", alpha=0.15)
+        ax_a.set_ylabel("ADX", fontsize=8, color=C_MUTED)
+        ax_a.set_ylim(0, max(60, np.nanmax(adx) * 1.15 if np.nanmax(adx) == np.nanmax(adx) else 60))
+        la = ax_a.legend(loc="upper left", fontsize=7, frameon=True)
+        la.get_frame().set_facecolor("#1c2030")
+        la.get_frame().set_edgecolor("#2a2e39")
+        for txt in la.get_texts():
+            txt.set_color(C_TEXT)
+        plt.setp(ax_a.get_xticklabels(), visible=False)
+        ax_a.margins(x=0.01)
 
         # RSI
-        ax_rsi.plot(x, rsi, color="#111827", linewidth=1.1, label="RSI(14)")
-        ax_rsi.axhline(70, color="#9ca3af", linestyle="--", linewidth=0.7)
-        ax_rsi.axhline(30, color="#9ca3af", linestyle="--", linewidth=0.7)
-        ax_rsi.set_ylim(0, 100)
-        ax_rsi.set_ylabel("RSI")
-        ax_rsi.legend(loc="upper left", fontsize=7)
-        ax_rsi.grid(True, alpha=0.25)
+        ax_r.plot(x, rsi, color="#e0e3eb", linewidth=1.25, label="RSI(14)", zorder=3)
+        ax_r.axhline(70, color=C_DN, linestyle="--", linewidth=0.8, alpha=0.7)
+        ax_r.axhline(30, color=C_UP, linestyle="--", linewidth=0.8, alpha=0.7)
+        ax_r.axhline(50, color="#787b86", linestyle=":", linewidth=0.6, alpha=0.5)
+        ax_r.fill_between(x, 70, 100, color=C_DN, alpha=0.06)
+        ax_r.fill_between(x, 0, 30, color=C_UP, alpha=0.06)
+        ax_r.set_ylim(0, 100)
+        ax_r.set_ylabel("RSI", fontsize=8, color=C_MUTED)
+        lr = ax_r.legend(loc="upper left", fontsize=7, frameon=True)
+        lr.get_frame().set_facecolor("#1c2030")
+        lr.get_frame().set_edgecolor("#2a2e39")
+        for txt in lr.get_texts():
+            txt.set_color(C_TEXT)
+        ax_r.margins(x=0.01)
 
-        # x labels sparse
-        step = max(1, n // 8)
+        # X labels
+        step = max(1, n // 7)
         ticks = list(range(0, n, step))
         if n - 1 not in ticks:
             ticks.append(n - 1)
@@ -817,13 +883,13 @@ async def get_crypto_chart(symbol: str, days: int = 7) -> Tuple[Optional[bytes],
             if ts < 1e12:
                 ts *= 1000
             dt = datetime.utcfromtimestamp(ts / 1000.0)
-            labels.append(dt.strftime("%m/%d" if days > 3 else "%m/%d %H"))
-        ax_rsi.set_xticks(ticks)
-        ax_rsi.set_xticklabels(labels, rotation=20, fontsize=8)
+            labels.append(dt.strftime("%m/%d" if days > 5 else "%m/%d %H:%M"))
+        ax_r.set_xticks(ticks)
+        ax_r.set_xticklabels(labels, rotation=0, fontsize=8, color=C_MUTED)
 
-        fig.subplots_adjust(left=0.08, right=0.98, top=0.95, bottom=0.08)
+        fig.subplots_adjust(left=0.07, right=0.98, top=0.93, bottom=0.06)
         buf = io.BytesIO()
-        fig.savefig(buf, format="png", facecolor="white")
+        fig.savefig(buf, format="png", dpi=140, facecolor=fig.get_facecolor(), edgecolor="none")
         plt.close(fig)
         buf.seek(0)
         png = buf.read()
@@ -840,12 +906,11 @@ async def get_crypto_chart(symbol: str, days: int = 7) -> Tuple[Optional[bytes],
     emoji = "🟢" if chg >= 0 else "🔴"
     caption = (
         f"📊 {pair} | {days}D ({interval})\n"
-        f"Start: ${first:,.4f} → End: ${last:,.4f}\n"
-        f"High/Low: ${float(highs.max()):,.4f} / ${float(lows.min()):,.4f}\n"
-        f"Change: {emoji} {chg:+.2f}%\n"
-        f"EMA20/50 + BB + Vol + ADX + RSI"
+        f"${first:,.2f} → ${last:,.2f}  {emoji} {chg:+.2f}%\n"
+        f"H/L: ${float(highs.max()):,.2f} / ${float(lows.min()):,.2f}"
     )
     return png, caption
+
 
 
 async def _fetch_klines_interval(pair: str, interval: str, limit: int) -> list:
