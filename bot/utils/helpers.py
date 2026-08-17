@@ -8,7 +8,7 @@ from datetime import datetime
 from bot.config import config
 from bot.api.calendar import get_today_tehran, get_hijri_date, get_shamsi_events, get_hijri_events
 from bot.api.prayer import get_prayer_times, get_next_prayer_time, get_prayer_times_for_date
-from bot.api.weather import get_weather
+from bot.api.weather import get_weather, format_weather
 from bot.api.tgju import get_market_prices
 from bot.utils.texts import get_text
 from bot.utils.motivation import get_motivation
@@ -590,21 +590,15 @@ def get_calendar_text(year, month, day, user_id):
             else:
                 weather = get_weather(city)
                 if weather:
-                    weather_text = (
-                        f"🌡️ دما: {weather['temp']}°C" + chr(10) +
-                        f"🌤️ وضعیت: {weather['condition']}" + chr(10) +
-                        f"💧 رطوبت: {weather['humidity']}%"
-                    )
+                    from bot.features.weather.weather import format_weather
+                    weather_text = format_weather(city, weather)
         except Exception as e:
             from bot.logger import logger
             logger.error(f"calendar weather: {e}")
             weather = get_weather(city)
             if weather:
-                weather_text = (
-                    f"🌡️ دما: {weather['temp']}°C" + chr(10) +
-                    f"🌤️ وضعیت: {weather['condition']}" + chr(10) +
-                    f"💧 رطوبت: {weather['humidity']}%"
-                )
+                from bot.features.weather.weather import format_weather
+                weather_text = format_weather(city, weather)
 
         return (
             f"📅 {date_str}" + chr(10) +
