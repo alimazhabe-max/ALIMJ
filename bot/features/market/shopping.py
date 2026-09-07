@@ -27,7 +27,7 @@ UA = (
 )
 SEARCH_URL = "https://html.duckduckgo.com/html/"
 CACHE: dict[str, tuple[float, str]] = {}
-CACHE_TTL = 150
+CACHE_TTL = 300
 
 # لیست گسترده فروشگاه‌ها و منابع ایرانی + بین‌المللی مرتبط
 SOURCES = {
@@ -153,7 +153,7 @@ async def _search(query: str, domain: str = "", limit: int = 8, extra: str = "")
 
     try:
         async with httpx.AsyncClient(
-            timeout=20, follow_redirects=True, headers={"User-Agent": UA}
+            timeout=8, follow_redirects=True, headers={"User-Agent": UA}
         ) as client:
             r = await client.post(SEARCH_URL, data={"q": q})
             r.raise_for_status()
@@ -452,7 +452,7 @@ def shopping_price_history(query: str = "", days: int = 30, user_id: int = 0) ->
 async def search_shopping(
     query: str = "",
     source: str = "all",
-    max_results: int = 14,
+    max_results: int = 10,
     min_price: int = 0,
     max_price: int = 0,
     user_id: int = 0,
@@ -467,7 +467,9 @@ async def search_shopping(
 
     # انتخاب منابع
     if source in ("all", "همه", "تمام", "everywhere", "web"):
-        selected = list(SOURCES.keys())
+        # حالت all قبلاً برای هر منبع چند درخواست جدا می‌فرستاد و روی Render کند می‌شد.
+        # چند منبع پربازده + وب عمومی، recall خوب را با latency بسیار کمتر می‌دهد.
+        selected = ["torob", "digikala", "basalam", "emalls", "instagram", "general"]
     else:
         selected = [s for s in source.replace(",", " ").split() if s in SOURCES]
         if not selected:
@@ -486,7 +488,7 @@ async def search_shopping(
         limit = max(5, max_results // max(1, len(selected)) + 3)
 
         # برای هر منبع فقط چند query قوی‌تر را اجرا می‌کنیم تا روی Render فشار ایجاد نشود.
-        local_variants = variants[:3] if key not in ("general", "instagram") else variants[:5]
+        local_variants = variants[:2] if key not in ("general", "instagram") else variants[:3]
         for variant in local_variants:
             if key == "instagram":
                 tasks.append(
@@ -529,7 +531,7 @@ async def search_shopping(
             links[url] = item
 
     # بازرسی صفحات (حداکثر ۲۶ تا برای سرعت)
-    to_inspect = list(links.values())[:26]
+    to_inspect = list(links.values())[:14]
     inspect_tasks = [
         _inspect(x["url"], x["title"], x.get("snippet", "")) for x in to_inspect
     ]
@@ -553,7 +555,7 @@ async def search_shopping(
         # fallback به لینک‌های خام
         fallback = list(links.values())[:max_results]
         if not fallback:
-            return f"برای «{query}» نتیجه‌ای در فروشگاه‌ها، اینستاگرام و وب پیدا نشد."
+            return f"ℹ️ برای «{query}» از منابع فعلی نتیجه‌ای برنگشت؛ می‌توان جستجوی گسترده‌تر را دوباره اجرا کرد."
         lines = [
             f"🔎 نتایج جستجو برای «{query}» (قیمت مستقیم استخراج نشد):",
             "لینک‌های مرتبط از فروشگاه‌ها و اینستاگرام:",
