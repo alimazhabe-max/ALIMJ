@@ -532,20 +532,20 @@ def _register_builtin_tools() -> None:
     )
     register_tool(
         name="search_shopping",
-        description="جستجوی خرید و مقایسه قیمت محصول در ترب، دیجی‌کالا، اسنپ‌شاپ، تکنولایف، ایمالز، باسلام، مقداد آی‌تی، کالاوما، 19کالا و وب. وقتی کاربر قیمت/لینک خرید محصول می‌خواهد یا عکس محصول می‌فرستد و دنبال همان محصول/مدل است، از این ابزار استفاده کن. اگر مدل دقیق مشخص نیست، با عبارت توصیفی و برند/مدل احتمالی جستجو کن. هرگز قیمت حدسی نگو.",
+        description="جستجوی گسترده خرید و مقایسه قیمت محصول در تقریباً همه فروشگاه‌های ایرانی (ترب، دیجی‌کالا، اسنپ‌شاپ، تکنولایف، ایمالز، باسلام، مقدادآی‌تی، کالاوما، ۱۹کالا، موبایل‌آی‌آر، دیجی‌استایل، مدیسه، زنبیل، گلدیران، علی‌بابا، شیپور، دیوار، اکالا، تخفیفان) + صفحات فروش اینستاگرام + کل وب. وقتی کاربر قیمت/لینک خرید/شاپ اینستاگرام یا عکس محصول می‌خواهد از این ابزار استفاده کن. اگر مدل دقیق مشخص نیست با عبارت توصیفی جستجو کن. هرگز قیمت حدسی نگو.",
         parameters={
             "type": "object",
             "properties": {
                 "query": {"type": "string", "description": "نام، مدل، برند یا توصیف دقیق محصول برای جستجو"},
-                "source": {"type": "string", "enum": ["all", "torob", "digikala", "snappshop", "technolife", "emalls", "basalam", "momtaz", "kalaoma", "19kala", "general"], "description": "منبع جستجو؛ all برای همه"},
-                "max_results": {"type": "integer", "description": "حداکثر نتایج، بین 3 تا 18"},
+                "source": {"type": "string", "enum": ["all", "torob", "digikala", "snappshop", "technolife", "emalls", "basalam", "momtaz", "kalaoma", "19kala", "mobile", "digistyle", "modiseh", "zanbil", "goldiran", "alibaba", "sheypoor", "divar", "okala", "takhfifan", "instagram", "general"], "description": "منبع جستجو؛ all برای همه فروشگاه‌ها + اینستا + وب"},
+                "max_results": {"type": "integer", "description": "حداکثر نتایج، بین 4 تا 22"},
                 "min_price": {"type": "integer", "description": "حداقل قیمت تومان؛ صفر یعنی بدون فیلتر"},
                 "max_price": {"type": "integer", "description": "حداکثر قیمت تومان؛ صفر یعنی بدون فیلتر"},
             },
             "required": ["query"],
         },
         handler=_search_shopping,
-        keywords=[r"خرید|قیمت.*محصول|قیمت.*کفش|قیمت.*گوشی|دیجی.?کالا|ترب|فروشگاه|لینک خرید|ارزان.?ترین|قیمت روز محصول"],
+        keywords=[r"خرید|قیمت.*محصول|قیمت.*کفش|قیمت.*گوشی|دیجی.?کالا|ترب|فروشگاه|لینک خرید|ارزان.?ترین|قیمت روز محصول|اینستا|شاپ اینستا|فروشگاه اینستاگرام"],
     )
 
     register_tool(
