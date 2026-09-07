@@ -44,6 +44,7 @@ from bot.services.ai_extras import (
     store_answer, get_last_answer, get_ai_result_keyboard, parse_chart_request, make_chart_image,
     web_search, parse_natural_reminder, enhance_ocr_prompt,
 )
+from bot.services.visual_search import visual_search, looks_like_visual_search
 from bot.services.ai_service import (
     ask_ai, ask_ai_media, clear_history, enabled_providers,
     _extract_text_from_bytes, generate_or_edit_image,
@@ -1269,6 +1270,23 @@ async def media_ai_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             return
 
+        # Visual Lens: مسیر کاملاً جدا از تحلیل قدیمی عکس.
+        # فقط با درخواست صریح Lens/جستجوی تصویری فعال می‌شود.
+        if images and prompt and looks_like_visual_search(prompt):
+            notice = await msg.reply_text("🔎 در حال بررسی تصویر با Lens محلی...")
+            try:
+                result = await visual_search(images[0][0], caption=prompt)
+                await msg.reply_text(
+                    result[:4000],
+                    reply_markup=get_ai_keyboard(user_id),
+                )
+            finally:
+                try:
+                    await notice.delete()
+                except Exception:
+                    pass
+            return
+
         # ویرایش تصویر: عکس + دستور ویرایش
         if images and prompt and looks_like_image_edit(prompt):
             notice = await msg.reply_text("🎨 در حال ویرایش تصویر...")
@@ -1326,6 +1344,40 @@ async def media_ai_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "❌ تحلیل ممکن نشد.\n\n" + str(exc)[:2500],
             reply_markup=get_ai_keyboard(user_id),
         )
+
+
+async def lens_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """اجرای Lens محلی روی عکسی که کاربر به آن Reply کرده است."""
+    if not update.message:
+        return
+    reply = update.message.reply_to_message
+    if not reply:
+        await update.message.reply_text("📷 روی یک عکس Reply کن و بعد /lens را بفرست.")
+        return
+
+    photo = reply.photo[-1] if reply.photo else None
+    if not photo and reply.document:
+        mime = reply.document.mime_type or ""
+        if mime.startswith("image/"):
+            photo = reply.document
+
+    if not photo:
+        await update.message.reply_text("❌ پیام Reply شده یک تصویر نیست.")
+        return
+
+    notice = await update.message.reply_text("🔎 در حال تحلیل تصویر...")
+    try:
+        tg_file = await photo.get_file()
+        data = bytes(await tg_file.download_as_bytearray())
+        result = await visual_search(data, caption="lens")
+        await update.message.reply_text(result[:4000])
+    except Exception as exc:
+        await update.message.reply_text(f"❌ تحلیل تصویر انجام نشد:\n{str(exc)[:2000]}")
+    finally:
+        try:
+            await notice.delete()
+        except Exception:
+            pass
 
 
 async def voice_ai_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
