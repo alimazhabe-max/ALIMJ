@@ -693,6 +693,17 @@ async def _text_handler_inner(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text("🕌 مذهبی:", reply_markup=get_religious_keyboard())
         return
 
+    # «دستیار خرید» قدیمی حذف شده؛ خرید اکنون بخشی از همان دستیار هوشمند است.
+    if text in ("🛒 دستیار خرید", "دستیار خرید", "🛍 دستیار خرید"):
+        context.user_data["ai_mode"] = True
+        context.user_data.pop("ai_shopping_mode", None)
+        await update.message.reply_text(
+            "🤖 دستیار هوشمند فعال است.\n\n"
+            "اسم محصول، قیمت، لینک خرید یا عکس محصول را بفرست؛ خودم جستجوی فروشگاهی و مقایسه را انجام می‌دهم.",
+            reply_markup=get_ai_keyboard(user_id),
+        )
+        return
+
     if text in ("💵 قیمت کامل بازار", "قیمت کامل بازار"):
         track_usage(user_id, "market")
         m = await update.message.reply_text("⏳ دریافت قیمت‌ها...")
@@ -1298,14 +1309,48 @@ async def media_ai_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     pass
             return
 
-        # خرید دیگر حالت/منوی جدا ندارد؛ عکس خرید هم داخل همان دستیار هوشمند تحلیل می‌شود.
-        if images and not prompt:
-            prompt = (
-                "این تصویر را بررسی کن. اگر کاربر احتمالاً دنبال خرید/قیمت/لینک محصول است، "
-                "برند، مدل، نوع، رنگ، ظرفیت و ویژگی‌های قابل تشخیص را به یک عبارت کوتاه جستجو تبدیل کن "
-                "و ابزار search_shopping را اجرا کن. نتایج مشابه را هم در صورت نبود تطابق دقیق نشان بده؛ "
-                "قیمت، موجودی و لینک را هرگز حدس نزن."
+        # خرید از روی عکس: همه‌چیز داخل همان دستیار هوشمند انجام می‌شود.
+        # ابتدا Vision فقط یک عبارت جستجوی کوتاه و قابل‌استفاده می‌سازد؛ سپس موتور خرید واقعاً وب/فروشگاه‌ها را می‌گردد.
+        shopping_image_intent = bool(
+            images and prompt and re.search(
+                r"خرید|قیمت|فروشگاه|فروشنده|لینک|پیدا.?کن|مشابه|ارزان|سرچ|جستجو|شاپ|buy|price|shop|find",
+                prompt, re.I,
             )
+        )
+        if images and shopping_image_intent:
+            notice = await msg.reply_text("🛒 در حال تشخیص محصول و جستجوی واقعی فروشگاه‌ها...")
+            try:
+                vision_prompt = (
+                    "این عکس یک محصول است. فقط یک عبارت جستجوی کوتاه برای پیدا کردن همین محصول یا مشابه نزدیک آن بنویس. "
+                    "برند، مدل، نوع محصول، رنگ، جنس، طرح و ویژگی‌های قابل‌تشخیص را وارد کن. "
+                    "حداکثر 18 کلمه؛ بدون توضیح، بدون قیمت و بدون جمله اضافی."
+                )
+                search_query, _ = await ask_ai_media(
+                    user_id, vision_prompt, images=images, file_text=file_text, filename=filename
+                )
+                search_query = re.sub(r"[\n\r]+", " ", (search_query or "")).strip()[:500]
+                if not search_query:
+                    search_query = prompt[:500]
+
+                from bot.features.market.shopping import search_shopping
+                shopping_result = await search_shopping(
+                    query=search_query, source="all", max_results=10, user_id=user_id
+                )
+                # اگر موتور خرید هیچ لینک واقعی نداد، Lens وب را به‌عنوان fallback اجرا کن.
+                if "🔗" not in shopping_result:
+                    shopping_result = await visual_search(
+                        images[0][0], caption=search_query, include_web=True
+                    )
+                await msg.reply_text(
+                    "🛒 جستجوی خرید بر اساس عکس\n\n" + shopping_result[:7000],
+                    reply_markup=get_ai_keyboard(user_id),
+                )
+            finally:
+                try:
+                    await notice.delete()
+                except Exception:
+                    pass
+            return
 
         notice = await msg.reply_text("✍️ در حال تحلیل...")
         try:
