@@ -19,6 +19,7 @@ from .finance import (
     entry_alert_text, market_scanner,
     register_price_alert,
 )
+from .shopping import search_shopping
 
 __all__ = [
     "full_market_prices",
@@ -40,4 +41,5 @@ __all__ = [
     "calc_position_size",
     "entry_alert_text, market_scanner",
     "register_price_alert",
+    "search_shopping",
 ]
