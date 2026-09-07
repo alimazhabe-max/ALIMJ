@@ -12,7 +12,7 @@ from bot.handlers.commands import (
     backup_command, restore_document_handler,
 )
 from bot.handlers.callbacks import button_handler
-from bot.handlers.messages import text_handler, media_ai_handler, voice_ai_handler
+from bot.handlers.messages import text_handler, media_ai_handler, voice_ai_handler, lens_command
 from bot.scheduler import setup_scheduler
 from bot.db_persist import notify_admins_if_empty, shutdown_backup
 import threading
@@ -118,6 +118,7 @@ def main():
     )
 
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("lens", lens_command))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("city", city_command))
     app.add_handler(CommandHandler("language", language_command))
