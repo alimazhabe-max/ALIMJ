@@ -1239,11 +1239,7 @@ async def generate_or_edit_image(
     source_image: bytes | None = None,
     source_mime: str = "image/jpeg",
 ) -> tuple[bytes, str]:
-    """
-    ساخت تصویر از متن، یا ویرایش تصویر با دستور متنی.
-    خروجی: (image_bytes, mime_type)
-    نیاز به کلید Gemini دارد.
-    """
+    """ساخت/ویرایش تصویر با Gemini و مدیریت هوشمند quota/rate-limit و fallback مدل‌ها."""
     prompt = (prompt or "").strip()
     if not prompt:
         raise RuntimeError("توضیح تصویر خالی است.")
@@ -1252,21 +1248,24 @@ async def generate_or_edit_image(
     if not keys:
         raise RuntimeError("برای ساخت/ویرایش تصویر به کلید Gemini نیاز است.")
 
-    model = IMAGE_GEN_MODEL
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+    models: List[str] = []
+    for candidate in (IMAGE_GEN_MODEL, *IMAGE_GEN_MODEL_FALLBACKS):
+        candidate = (candidate or "").strip()
+        if candidate and candidate not in models:
+            models.append(candidate)
+    if not models:
+        raise RuntimeError("هیچ مدل تصویری Gemini تنظیم نشده است.")
 
     parts = []
     if source_image:
         if len(source_image) > 4_500_000:
             raise RuntimeError("حجم تصویر برای ویرایش خیلی بزرگ است.")
-        parts.append(
-            {
-                "inline_data": {
-                    "mime_type": source_mime or "image/jpeg",
-                    "data": base64.b64encode(source_image).decode("ascii"),
-                }
+        parts.append({
+            "inline_data": {
+                "mime_type": source_mime or "image/jpeg",
+                "data": base64.b64encode(source_image).decode("ascii"),
             }
-        )
+        })
         full_prompt = (
             "Edit this image according to the following instruction. "
             "Return the edited image.\n\n" + prompt
@@ -1280,77 +1279,121 @@ async def generate_or_edit_image(
 
     payload = {
         "contents": [{"role": "user", "parts": parts}],
-        "generationConfig": {
-            "responseModalities": ["TEXT", "IMAGE"],
-        },
+        "generationConfig": {"responseModalities": ["TEXT", "IMAGE"]},
         "safetySettings": GEMINI_SAFETY_SETTINGS,
     }
 
-    errors = []
+    def _error_detail(data) -> str:
+        if isinstance(data, dict):
+            err = data.get("error")
+            if isinstance(err, dict):
+                msg = err.get("message") or err.get("status")
+                if msg:
+                    return str(msg).replace("\n", " ")[:500]
+            msg = data.get("message")
+            if msg:
+                return str(msg).replace("\n", " ")[:500]
+        return str(data).replace("\n", " ")[:500]
+
+    errors: List[str] = []
+    quota_failures = 0
+    attempted = 0
+
+    # هر مدل روی هر کلید امتحان می‌شود؛ بنابراین 429 مدل اصلی،
+    # بی‌دلیل مانع تست مدل‌های fallback نمی‌شود.
     for key in keys:
-        try:
-            status, data = await _post_json(url, params={"key": key}, json=payload)
-            if status >= 400:
-                if _is_quota_error(status, data):
-                    _mark_key_cooldown("gemini", key, daily=True)
-                    errors.append(f"{_key_id('gemini', key)} HTTP {status}")
-                    continue
-                # fallback مدل قدیمی‌تر
-                if "not found" in str(data).lower() or status == 404:
-                    fallback_models = [m for m in IMAGE_GEN_MODEL_FALLBACKS if m != model]
-                    recovered = False
-                    for alt in fallback_models:
-                        alt_url = (
-                            f"https://generativelanguage.googleapis.com/v1beta/models/"
-                            f"{alt}:generateContent"
-                        )
-                        alt_status, alt_data = await _post_json(
-                            alt_url, params={"key": key}, json=payload
-                        )
-                        if alt_status < 400:
-                            model, url, data, status = alt, alt_url, alt_data, alt_status
-                            recovered = True
-                            break
-                    if not recovered:
-                        raise RuntimeError(
-                            f"Gemini image HTTP {status}: {str(data)[:700]}"
-                        )
-                else:
-                    raise RuntimeError(
-                        f"Gemini image HTTP {status}: {str(data)[:700]}"
-                    )
-
-            candidates = data.get("candidates") or []
-            if not candidates:
-                raise RuntimeError(f"پاسخ خالی از مدل تصویر: {str(data)[:500]}")
-
-            out_parts = (candidates[0].get("content") or {}).get("parts") or []
-            text_bits = []
-            image_bytes = None
-            mime = "image/png"
-            for part in out_parts:
-                if "text" in part and part["text"]:
-                    text_bits.append(part["text"])
-                inline = part.get("inlineData") or part.get("inline_data")
-                if inline and inline.get("data"):
-                    image_bytes = base64.b64decode(inline["data"])
-                    mime = inline.get("mimeType") or inline.get("mime_type") or "image/png"
-
-            if not image_bytes:
-                msg = " ".join(text_bits)[:500] or str(data)[:500]
-                raise RuntimeError(
-                    "مدل تصویری برنگرداند. ممکن است این مدل در کلید شما فعال نباشد یا محدودیت داشته باشد.\n"
-                    + msg
+        key_label = _key_id("gemini", key)
+        for model in models:
+            attempted += 1
+            url = (
+                "https://generativelanguage.googleapis.com/v1beta/models/"
+                f"{model}:generateContent"
+            )
+            try:
+                status, data = await _post_json(
+                    url, params={"key": key}, json=payload
                 )
 
-            _advance_rr("gemini")
-            return image_bytes, mime
-        except RuntimeError as exc:
-            errors.append(str(exc)[:250])
-            continue
+                if status >= 400:
+                    detail = _error_detail(data)
+                    if _is_quota_error(status, data):
+                        quota_failures += 1
+                        # 429 معمولاً rate-limit است؛ 403 بیشتر به quota/permission مربوط است.
+                        _mark_key_cooldown(
+                            "gemini", key, daily=(status == 403)
+                        )
+                        errors.append(f"{key_label}/{model} HTTP {status}: {detail}")
+                        # حتی بعد از 429 مدل‌های دیگر همین کلید را هم تست می‌کنیم.
+                        continue
+
+                    if status == 404 or "not found" in detail.lower():
+                        errors.append(f"{key_label}/{model} مدل در دسترس نیست: {detail}")
+                        continue
+
+                    errors.append(f"{key_label}/{model} HTTP {status}: {detail}")
+                    continue
+
+                candidates = data.get("candidates") or []
+                if not candidates:
+                    errors.append(
+                        f"{key_label}/{model}: پاسخ خالی از مدل تصویر"
+                    )
+                    continue
+
+                out_parts = (candidates[0].get("content") or {}).get("parts") or []
+                text_bits = []
+                image_bytes = None
+                mime = "image/png"
+                for part in out_parts:
+                    if part.get("text"):
+                        text_bits.append(str(part["text"]))
+                    inline = part.get("inlineData") or part.get("inline_data")
+                    if inline and inline.get("data"):
+                        try:
+                            image_bytes = base64.b64decode(inline["data"])
+                        except Exception as exc:
+                            errors.append(
+                                f"{key_label}/{model}: تصویر خراب/نامعتبر ({exc})"
+                            )
+                            image_bytes = None
+                            continue
+                        mime = (
+                            inline.get("mimeType")
+                            or inline.get("mime_type")
+                            or "image/png"
+                        )
+
+                if not image_bytes:
+                    msg = " ".join(text_bits)[:500]
+                    errors.append(
+                        f"{key_label}/{model}: مدل تصویر برنگرداند"
+                        + (f" — {msg}" if msg else "")
+                    )
+                    continue
+
+                _advance_rr("gemini")
+                logger.info(
+                    "Gemini image generation succeeded: %s/%s", key_label, model
+                )
+                return image_bytes, mime
+
+            except (httpx.TimeoutException, httpx.NetworkError) as exc:
+                errors.append(f"{key_label}/{model}: network/timeout: {str(exc)[:250]}")
+                continue
+            except Exception as exc:
+                errors.append(f"{key_label}/{model}: {str(exc)[:300]}")
+                continue
+
+    if quota_failures == attempted and attempted > 0:
+        raise RuntimeError(
+            "سهمیه یا Rate Limit سرویس Gemini برای کلیدهای فعلی در دسترس نیست. "
+            "همه مدل‌های تصویری و کلیدهای موجود امتحان شدند. "
+            "اگر کلیدها متعلق به یک پروژه باشند، تعویض کلید ممکن است سهمیه را تغییر ندهد.\n"
+            + " | ".join(errors[:6])
+        )
 
     raise RuntimeError(
-        "ساخت/ویرایش تصویر ناموفق بود.\n" + " | ".join(errors[:5])
+        "ساخت/ویرایش تصویر ناموفق بود.\n" + " | ".join(errors[:8])
     )
 
 
