@@ -228,6 +228,26 @@ async def _search_shopping(query: str = "", source: str = "all", max_results: in
     )
 
 
+async def _shopping_assistant(
+    request: str = "",
+    source: str = "all",
+    max_results: int = 14,
+    min_price: int = 0,
+    max_price: int = 0,
+    user_id: int = 0,
+) -> str:
+    """مسیر تخصصی دستیار خرید: تشخیص intent، بودجه و جستجوی بهینه."""
+    from bot.features.market.shopping_assistant import shopping_assistant
+    return await shopping_assistant(
+        request=request,
+        source=source,
+        max_results=int(max_results or 14),
+        min_price=int(min_price or 0),
+        max_price=int(max_price or 0),
+        user_id=user_id,
+    )
+
+
 def _shopping_price_history(query: str = "", days: int = 30) -> str:
     from bot.features.market.shopping import shopping_price_history
     return shopping_price_history(query=query, days=int(days or 30))
@@ -531,8 +551,36 @@ def _register_builtin_tools() -> None:
         keywords=[r"قیمت|دلار|یورو|طلا|سکه|ارز|نرخ"],
     )
     register_tool(
+        name="shopping_assistant",
+        description=(
+            "دستیار تخصصی خرید. برای درخواست طبیعی مثل «ارزان‌ترین گوشی X»، "
+            "«بهترین فروشگاه X»، «مقایسه قیمت X»، «لینک خرید X»، "
+            "«شاپ اینستاگرام X» و تاریخچه قیمت استفاده کن. "
+            "این ابزار intent و بودجه را تشخیص می‌دهد و جستجوی فروشگاهی را بهینه می‌کند. "
+            "برای عکس محصول، ابتدا از Vision برند/مدل/ویژگی‌ها را استخراج کن و سپس این ابزار را صدا بزن. "
+            "هرگز قیمت یا لینک ساختگی نساز."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "request": {"type": "string", "description": "درخواست کامل خرید کاربر"},
+                "source": {"type": "string", "description": "all یا نام منبع/فروشگاه"},
+                "max_results": {"type": "integer", "description": "حداکثر نتایج"},
+                "min_price": {"type": "integer", "description": "حداقل قیمت به تومان"},
+                "max_price": {"type": "integer", "description": "حداکثر قیمت به تومان"},
+            },
+            "required": ["request"],
+        },
+        handler=_shopping_assistant,
+        keywords=[
+            r"خرید|قیمت محصول|ارزان‌ترین|ارزانترین|بهترین فروشگاه|مقایسه قیمت|"
+            r"لینک خرید|شاپ اینستاگرام|فروشگاه اینستاگرام"
+        ],
+    )
+
+    register_tool(
         name="search_shopping",
-        description="جستجوی گسترده خرید و مقایسه قیمت محصول در تقریباً همه فروشگاه‌های ایرانی (ترب، دیجی‌کالا، اسنپ‌شاپ، تکنولایف، ایمالز، باسلام، مقدادآی‌تی، کالاوما، ۱۹کالا، موبایل‌آی‌آر، دیجی‌استایل، مدیسه، زنبیل، گلدیران، علی‌بابا، شیپور، دیوار، اکالا، تخفیفان) + صفحات فروش اینستاگرام + کل وب. وقتی کاربر قیمت/لینک خرید/شاپ اینستاگرام یا عکس محصول می‌خواهد از این ابزار استفاده کن. اگر مدل دقیق مشخص نیست با عبارت توصیفی جستجو کن. هرگز قیمت حدسی نگو.",
+        description="جستجوی سریع خرید در فروشگاه‌ها و وب؛ برای درخواست‌های پیچیده خرید از shopping_assistant استفاده می‌شود.  (ترب، دیجی‌کالا، اسنپ‌شاپ، تکنولایف، ایمالز، باسلام، مقدادآی‌تی، کالاوما، ۱۹کالا، موبایل‌آی‌آر، دیجی‌استایل، مدیسه، زنبیل، گلدیران، علی‌بابا، شیپور، دیوار، اکالا، تخفیفان) + صفحات فروش اینستاگرام + کل وب. وقتی کاربر قیمت/لینک خرید/شاپ اینستاگرام یا عکس محصول می‌خواهد از این ابزار استفاده کن. اگر مدل دقیق مشخص نیست با عبارت توصیفی جستجو کن. هرگز قیمت حدسی نگو.",
         parameters={
             "type": "object",
             "properties": {

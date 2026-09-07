@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import os
+import re
 import time
 from collections import defaultdict, deque
 from typing import Deque, Dict, List, Optional, Tuple
@@ -2012,6 +2013,29 @@ async def translate_voice(
 
 
 
+def _shopping_prompt_hint(prompt: str) -> str:
+    """راهنمای کوتاه و کم‌هزینه برای routing خرید."""
+    q = (prompt or "").strip()
+    if not q:
+        return ""
+    if not re.search(
+        r"خرید|قیمت|فروشگاه|فروشنده|ارزان|بهترین|لینک خرید|اینستا|شاپ|"
+        r"مقایسه.*قیمت|قیمت.*محصول|buy|price|shop",
+        q,
+        re.I,
+    ):
+        return ""
+
+    return (
+        "\n\n[SHOPPING MODE]\n"
+        "این درخواست خرید است. قبل از پاسخ نهایی، ابزار shopping_assistant را در اولویت قرار بده. "
+        "در صورت درخواست «ارزان‌ترین»، تطابق دقیق مدل/مشخصات را بر پایین‌ترین عدد مقدم بدان. "
+        "در صورت «بهترین»، کیفیت تطابق و اعتبار فروشگاه را هم لحاظ کن. "
+        "اگر عکس محصول داری، از اطلاعات تصویری برند/مدل/رنگ/ظرفیت را استخراج کن و همان مشخصات را برای جستجو استفاده کن. "
+        "اگر مدل دقیق نامشخص است، عدم قطعیت را شفاف بگو. قیمت، موجودی و لینک را حدس نزن."
+    )
+
+
 async def ask_ai(user_id: int, prompt: str) -> tuple[str, str]:
     prompt = (prompt or "").strip()
     if not prompt:
@@ -2026,6 +2050,9 @@ async def ask_ai(user_id: int, prompt: str) -> tuple[str, str]:
         )
 
     original_prompt = prompt
+    shopping_hint = _shopping_prompt_hint(prompt)
+    if shopping_hint:
+        prompt = prompt + shopping_hint
     try:
         _extract_and_store_memory(user_id, original_prompt)
     except Exception:
