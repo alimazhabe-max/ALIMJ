@@ -1379,22 +1379,38 @@ def looks_like_image_request(text: str) -> bool:
     t = (text or "").strip()
     if not t:
         return False
+    # درخواست‌های صریح ساخت تصویر
     patterns = (
-        r"تصویر\s*بساز",
-        r"عکس\s*بساز",
-        r"عکس\s*تولید",
-        r"تصویر\s*تولید",
+        r"تصویر\s*(?:بساز|تولید(?:\s*کن|ش\s*کن)?|درست\s*کن|ایجاد\s*کن)",
+        r"عکس\s*(?:بساز|تولید(?:\s*کن|ش\s*کن)?|درست\s*کن|ایجاد\s*کن)",
+        r"(?:نقاشی|طرح|پوستر|پرتره|لوگو|والپیپر|تصویرسازی)\s*(?:بساز|درست\s*کن|ایجاد\s*کن|طراحی\s*کن)",
         r"بکش",
         r"نقاشی\s*کن",
-        r"generate\s+(an?\s+)?image",
-        r"draw\s+(me\s+)?",
-        r"create\s+(an?\s+)?image",
-        r"image\s+of",
         r"طراحی\s*کن",
         r"پرامپت\s*تصویر",
+        r"generate\s+(?:an?\s+)?image",
+        r"draw(?:\s+me)?\s+",
+        r"create\s+(?:an?\s+)?image",
+        r"image\s+of",
     )
     import re
-    return any(re.search(p, t, re.I) for p in patterns)
+    if any(re.search(p, t, re.I) for p in patterns):
+        return True
+
+    # حالت محاوره‌ای فارسی مثل: «یک پارک در حال باران بساز»
+    # فقط وقتی فعال می‌شود که فعل ساخت با یک موضوع بصری همراه باشد تا
+    # درخواست‌هایی مثل «یک برنامه بساز» اشتباهاً تصویر محسوب نشوند.
+    visual_terms = (
+        r"عکس|تصویر|پارک|منظره|طبیعت|آسمان|دریا|کوه|جنگل|خیابان|شهر|خانه|"
+        r"ماشین|موتور|شخص|مرد|زن|بچه|کاراکتر|شخصیت|حیوان|گربه|سگ|"
+        r"باران|برف|غروب|طلوع|ماه|خورشید|گل|درخت|دشت|ساحل|لوگو|پوستر|"
+        r"پرتره|نقاشی|طرح|والپیپر|فانتزی|سینمایی|واقع‌گرایانه|انیمه"
+    )
+    creation_verbs = r"بساز|درست\s*کن|ایجاد\s*کن|تولید\s*کن|طراحی\s*کن"
+    if re.search(rf"(?:^|\s)(?:یک|یه|یکى)?\s*.+\s+(?:{creation_verbs})\s*$", t, re.I):
+        return bool(re.search(visual_terms, t, re.I))
+
+    return False
 
 
 def looks_like_image_edit(text: str) -> bool:
