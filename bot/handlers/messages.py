@@ -693,19 +693,6 @@ async def _text_handler_inner(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text("🕌 مذهبی:", reply_markup=get_religious_keyboard())
         return
 
-    # بازار
-    if text in ("🛒 دستیار خرید", "دستیار خرید", "🛍 دستیار خرید"):
-        context.user_data["ai_mode"] = True
-        context.user_data["ai_shopping_mode"] = True
-        await update.message.reply_text(
-            "🛒 دستیار خرید هوشمند\n\n"
-            "اسم محصول، مدل یا عکس محصول را بفرست. من تقریباً همه فروشگاه‌های ایرانی + اینستاگرام + کل وب را بررسی می‌کنم و "
-            "قیمت، فروشنده و لینک خرید را مقایسه می‌کنم.\n\n"
-            "مثال: «این کفش رو پیدا کن و قیمتش رو بگو» یا فقط عکس محصول را بفرست.",
-            reply_markup=get_ai_keyboard(user_id),
-        )
-        return
-
     if text in ("💵 قیمت کامل بازار", "قیمت کامل بازار"):
         track_usage(user_id, "market")
         m = await update.message.reply_text("⏳ دریافت قیمت‌ها...")
@@ -1311,28 +1298,14 @@ async def media_ai_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     pass
             return
 
-        # حالت خرید از روی عکس: مستقیماً وارد Visual Lens + موتور خرید شو.
-        # قبلاً اینجا درخواست به AI سپرده می‌شد و AI ممکن بود فقط توضیح بدهد
-        # و اصلاً search_shopping را اجرا نکند؛ در نتیجه «نتیجه‌ای پیدا نشد»
-        # تولید می‌شد حتی وقتی محصول مشابه در وب وجود داشت.
-        if images and context.user_data.get("ai_shopping_mode") and not prompt:
-            notice = await msg.reply_text("🛒 در حال شناسایی محصول و پیدا کردن نمونه‌های مشابه...")
-            try:
-                result = await visual_search(
-                    images[0][0],
-                    caption="محصول برای خرید؛ مشابه این محصول را با لینک و قیمت پیدا کن",
-                    include_web=True,
-                )
-                await msg.reply_text(
-                    result[:4000],
-                    reply_markup=get_ai_keyboard(user_id),
-                )
-            finally:
-                try:
-                    await notice.delete()
-                except Exception:
-                    pass
-            return
+        # خرید دیگر حالت/منوی جدا ندارد؛ عکس خرید هم داخل همان دستیار هوشمند تحلیل می‌شود.
+        if images and not prompt:
+            prompt = (
+                "این تصویر را بررسی کن. اگر کاربر احتمالاً دنبال خرید/قیمت/لینک محصول است، "
+                "برند، مدل، نوع، رنگ، ظرفیت و ویژگی‌های قابل تشخیص را به یک عبارت کوتاه جستجو تبدیل کن "
+                "و ابزار search_shopping را اجرا کن. نتایج مشابه را هم در صورت نبود تطابق دقیق نشان بده؛ "
+                "قیمت، موجودی و لینک را هرگز حدس نزن."
+            )
 
         notice = await msg.reply_text("✍️ در حال تحلیل...")
         try:
