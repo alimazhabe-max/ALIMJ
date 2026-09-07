@@ -153,7 +153,7 @@ async def _search(query: str, domain: str = "", limit: int = 8, extra: str = "")
 
     try:
         async with httpx.AsyncClient(
-            timeout=8, follow_redirects=True, headers={"User-Agent": UA}
+            timeout=20, follow_redirects=True, headers={"User-Agent": UA}
         ) as client:
             r = await client.post(SEARCH_URL, data={"q": q})
             r.raise_for_status()
@@ -462,14 +462,12 @@ async def search_shopping(
     if not query:
         return "عبارت محصول برای جستجو مشخص نیست."
 
-    max_results = max(4, min(int(max_results or 10), 18))
+    max_results = max(4, min(int(max_results or 10), 14))
     source = (source or "all").lower().strip()
 
     # انتخاب منابع
     if source in ("all", "همه", "تمام", "everywhere", "web"):
-        # برای جستجوی تصویری/خرید، منابع پربازده را نگه می‌داریم تا
-        # ده‌ها درخواست همزمان به Render فشار نیاورد.
-        selected = ["torob", "digikala", "basalam", "emalls", "instagram", "general"]
+        selected = list(SOURCES.keys())
     else:
         selected = [s for s in source.replace(",", " ").split() if s in SOURCES]
         if not selected:
