@@ -45,6 +45,7 @@ from bot.services.ai_extras import (
     web_search, parse_natural_reminder, enhance_ocr_prompt,
 )
 from bot.services.visual_search import visual_search, looks_like_visual_search
+from bot.features.market.shopping import search_shopping
 from bot.services.ai_service import (
     ask_ai, ask_ai_media, clear_history, enabled_providers,
     _extract_text_from_bytes, generate_or_edit_image,
@@ -1270,16 +1271,67 @@ async def media_ai_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             return
 
-        # Visual Lens: مسیر کاملاً جدا از تحلیل قدیمی عکس.
-        # فقط با درخواست صریح Lens/جستجوی تصویری فعال می‌شود.
-        if images and prompt and looks_like_visual_search(prompt):
-            notice = await msg.reply_text("🔎 در حال بررسی تصویر با Lens محلی...")
+        # Visual Lens / جستجوی خرید با عکس:
+        # قبلاً فقط خروجی BLIP/OCR به وب می‌رفت و اگر مدل محلی در دسترس نبود،
+        # ربات وارد پاسخ متنی عمومی می‌شد. اینجا اول از قابلیت بینایی موجود
+        # در ask_ai_media برای استخراج ویژگی‌های محصول استفاده می‌کنیم و سپس
+        # همان توصیف را مستقیماً به موتور جستجوی خرید می‌دهیم.
+        if images and (prompt and looks_like_visual_search(prompt) or context.user_data.get("ai_shopping_mode")):
+            notice = await msg.reply_text("🔎 در حال تشخیص محصول و پیدا کردن نمونه‌های مشابه...")
             try:
-                result = await visual_search(images[0][0], caption=prompt)
-                await msg.reply_text(
-                    result[:4000],
-                    reply_markup=get_ai_keyboard(user_id),
+                vision_prompt = (
+                    "این عکس یک محصول است. فقط برای جستجوی خرید، مشخصات قابل مشاهده را استخراج کن. "
+                    "نوع محصول، جنس، رنگ، شکل، طرح/نقش برجسته، نوع درپوش، سبک و هر نوشته یا برند قابل خواندن را بگو. "
+                    "اگر برند یا مدل قطعی نیست حدس نزن. چند کلیدواژه کوتاه فارسی و انگلیسی برای جستجوی محصول مشابه بده. "
+                    "تطابق ۱۰۰٪ لازم نیست؛ هدف پیدا کردن محصولات مشابه با شباهت حدود ۵۰ تا ۶۰ درصد یا بیشتر است."
                 )
+                vision_answer, _provider = await ask_ai_media(
+                    user_id,
+                    vision_prompt,
+                    images=images or None,
+                    file_text=file_text,
+                    filename=filename,
+                )
+
+                # متن کاربر را هم به توصیف اضافه می‌کنیم تا رنگ/کاربری موردنظر از بین نرود.
+                search_query = " ".join(x for x in (vision_answer, prompt) if x).strip()
+                shopping_result = await search_shopping(
+                    search_query,
+                    source="all",
+                    max_results=10,
+                    user_id=user_id,
+                )
+
+                # اگر جستجوی فروشگاهی نتیجه نداد، Lens قدیمی همچنان به‌عنوان fallback کار می‌کند.
+                if not shopping_result or "نتیجه‌ای" in shopping_result[:300] or "مشخص نیست" in shopping_result[:300]:
+                    fallback = await visual_search(images[0][0], caption=vision_answer or prompt)
+                    result = (
+                        "🔎 تحلیل تصویری محصول\n\n"
+                        + (vision_answer[:1800] if vision_answer else "")
+                        + "\n\n"
+                        + fallback[:5000]
+                    )
+                else:
+                    result = (
+                        "🔎 **جستجوی هوشمند محصول از روی عکس**\n\n"
+                        "👁️ مشخصات استخراج‌شده از تصویر:\n"
+                        + (vision_answer[:2200] if vision_answer else "تشخیص متنی در دسترس نبود.")
+                        + "\n\n"
+                        + shopping_result[:6500]
+                        + "\n\n⚠️ نتایج مشابه‌اند و تطابق دقیق مدل تضمین نمی‌شود. قیمت و موجودی را قبل از خرید بررسی کنید."
+                    )
+
+                await msg.reply_text(result[:12000], reply_markup=get_ai_keyboard(user_id))
+            except Exception as exc:
+                # در صورت خطای مسیر خرید، Lens محلی را از دست نمی‌دهیم.
+                try:
+                    fallback = await visual_search(images[0][0], caption=prompt)
+                    await msg.reply_text(fallback[:5000], reply_markup=get_ai_keyboard(user_id))
+                except Exception:
+                    await msg.reply_text(
+                        f"❌ جستجوی تصویری انجام نشد.\n{str(exc)[:1200]}",
+                        reply_markup=get_ai_keyboard(user_id),
+                    )
             finally:
                 try:
                     await notice.delete()
