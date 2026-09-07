@@ -693,6 +693,18 @@ async def _text_handler_inner(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
 
     # بازار
+    if text in ("🛒 دستیار خرید", "دستیار خرید", "🛍 دستیار خرید"):
+        context.user_data["ai_mode"] = True
+        context.user_data["ai_shopping_mode"] = True
+        await update.message.reply_text(
+            "🛒 دستیار خرید هوشمند\n\n"
+            "اسم محصول، مدل یا عکس محصول را بفرست. من ترب، دیجی‌کالا و فروشگاه‌های دیگر را بررسی می‌کنم و "
+            "قیمت، فروشنده و لینک خرید را مقایسه می‌کنم.\n\n"
+            "مثال: «این کفش رو پیدا کن و قیمتش رو بگو» یا فقط عکس محصول را بفرست.",
+            reply_markup=get_ai_keyboard(user_id),
+        )
+        return
+
     if text in ("💵 قیمت کامل بازار", "قیمت کامل بازار"):
         track_usage(user_id, "market")
         m = await update.message.reply_text("⏳ دریافت قیمت‌ها...")
@@ -1280,6 +1292,15 @@ async def media_ai_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 except Exception:
                     pass
             return
+
+        # در حالت دستیار خرید، عکس بدون کپشن هم مستقیماً وارد مسیر خرید هوشمند شود.
+        if images and context.user_data.get("ai_shopping_mode") and not prompt:
+            prompt = (
+                "این تصویر را برای خرید بررسی کن. برند، مدل احتمالی، رنگ و نوع محصول را دقیق استخراج کن؛ "
+                "سپس از ابزار search_shopping برای جستجوی همان محصول در ترب، دیجی‌کالا و فروشگاه‌های دیگر استفاده کن. "
+                "قیمت، فروشنده، موجودی قابل تشخیص و لینک خرید را مقایسه کن. اگر مدل دقیق قابل تشخیص نیست، "
+                "نتایج نزدیک را با هشدار مشخص کن و هرگز قیمت حدسی نده."
+            )
 
         notice = await msg.reply_text("✍️ در حال تحلیل...")
         try:

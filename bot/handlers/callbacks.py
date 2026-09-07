@@ -101,6 +101,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data == "ai_exit":
         context.user_data.pop("ai_mode", None)
+        context.user_data.pop("ai_shopping_mode", None)
         context.user_data.pop("waiting_for", None)
         await _safe_answer(query)
         await query.message.reply_text("➕ منوی بیشتر:", reply_markup=get_more_keyboard())
