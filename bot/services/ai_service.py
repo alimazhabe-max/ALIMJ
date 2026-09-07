@@ -1225,6 +1225,12 @@ IMAGE_GEN_MODEL = os.getenv(
     "GEMINI_IMAGE_MODEL",
     "gemini-3.1-flash-image",
 )
+IMAGE_GEN_MODEL_FALLBACKS = tuple(
+    x.strip() for x in os.getenv(
+        "GEMINI_IMAGE_MODEL_FALLBACKS",
+        "gemini-3.1-flash-lite-image,gemini-2.5-flash-image",
+    ).split(",") if x.strip()
+)
 
 
 async def generate_or_edit_image(
@@ -1291,21 +1297,21 @@ async def generate_or_edit_image(
                     continue
                 # fallback مدل قدیمی‌تر
                 if "not found" in str(data).lower() or status == 404:
-                    alt = os.getenv("GEMINI_IMAGE_MODEL_FALLBACK", "gemini-2.5-flash-image")
-                    if model != alt:
-                        model = alt
-                        url = (
+                    fallback_models = [m for m in IMAGE_GEN_MODEL_FALLBACKS if m != model]
+                    recovered = False
+                    for alt in fallback_models:
+                        alt_url = (
                             f"https://generativelanguage.googleapis.com/v1beta/models/"
-                            f"{model}:generateContent"
+                            f"{alt}:generateContent"
                         )
-                        status, data = await _post_json(
-                            url, params={"key": key}, json=payload
+                        alt_status, alt_data = await _post_json(
+                            alt_url, params={"key": key}, json=payload
                         )
-                        if status >= 400:
-                            raise RuntimeError(
-                                f"Gemini image HTTP {status}: {str(data)[:700]}"
-                            )
-                    else:
+                        if alt_status < 400:
+                            model, url, data, status = alt, alt_url, alt_data, alt_status
+                            recovered = True
+                            break
+                    if not recovered:
                         raise RuntimeError(
                             f"Gemini image HTTP {status}: {str(data)[:700]}"
                         )
@@ -1346,6 +1352,26 @@ async def generate_or_edit_image(
     raise RuntimeError(
         "ساخت/ویرایش تصویر ناموفق بود.\n" + " | ".join(errors[:5])
     )
+
+
+def extract_image_prompt(text: str) -> str:
+    """دستور ساخت تصویر را از فرمان کاربر جدا می‌کند."""
+    t = (text or "").strip()
+    if not t:
+        return ""
+    import re
+    patterns = (
+        r"^/image(?:@\w+)?\s*[:：-]?\s*",
+        r"^(?:تصویر|عکس)\s*(?:بساز|تولید کن|تولیدش کن|درست کن)\s*[:：-]?\s*",
+        r"^(?:یک|یه)\s+(?:تصویر|عکس)\s+(?:بساز|درست کن)\s*[:：-]?\s*",
+        r"^(?:generate|create)\s+(?:an?\s+)?image\s*[:：-]?\s*",
+        r"^draw(?:\s+me)?\s*[:：-]?\s*",
+    )
+    for pattern in patterns:
+        cleaned = re.sub(pattern, "", t, count=1, flags=re.I).strip()
+        if cleaned != t:
+            return cleaned[:5000]
+    return t[:5000]
 
 
 def looks_like_image_request(text: str) -> bool:
