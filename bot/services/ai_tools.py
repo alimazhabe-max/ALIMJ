@@ -220,6 +220,19 @@ async def _get_market_prices() -> str:
     return await full_market_prices()
 
 
+async def _search_shopping(query: str = "", source: str = "all", max_results: int = 12, min_price: int = 0, max_price: int = 0) -> str:
+    from bot.features.market.shopping import search_shopping
+    return await search_shopping(
+        query=query, source=source, max_results=int(max_results or 12),
+        min_price=int(min_price or 0), max_price=int(max_price or 0),
+    )
+
+
+def _shopping_price_history(query: str = "", days: int = 30) -> str:
+    from bot.features.market.shopping import shopping_price_history
+    return shopping_price_history(query=query, days=int(days or 30))
+
+
 async def _get_top_crypto(limit: int = 10) -> str:
     from bot.features.market.finance import get_top_crypto
 
@@ -517,6 +530,32 @@ def _register_builtin_tools() -> None:
         handler=_get_market_prices,
         keywords=[r"قیمت|دلار|یورو|طلا|سکه|ارز|نرخ"],
     )
+    register_tool(
+        name="search_shopping",
+        description="جستجوی خرید و مقایسه قیمت محصول در ترب، دیجی‌کالا، اسنپ‌شاپ، تکنولایف، ایمالز، باسلام، مقداد آی‌تی، کالاوما، 19کالا و وب. وقتی کاربر قیمت/لینک خرید محصول می‌خواهد یا عکس محصول می‌فرستد و دنبال همان محصول/مدل است، از این ابزار استفاده کن. اگر مدل دقیق مشخص نیست، با عبارت توصیفی و برند/مدل احتمالی جستجو کن. هرگز قیمت حدسی نگو.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "نام، مدل، برند یا توصیف دقیق محصول برای جستجو"},
+                "source": {"type": "string", "enum": ["all", "torob", "digikala", "snappshop", "technolife", "emalls", "basalam", "momtaz", "kalaoma", "19kala", "general"], "description": "منبع جستجو؛ all برای همه"},
+                "max_results": {"type": "integer", "description": "حداکثر نتایج، بین 3 تا 18"},
+                "min_price": {"type": "integer", "description": "حداقل قیمت تومان؛ صفر یعنی بدون فیلتر"},
+                "max_price": {"type": "integer", "description": "حداکثر قیمت تومان؛ صفر یعنی بدون فیلتر"},
+            },
+            "required": ["query"],
+        },
+        handler=_search_shopping,
+        keywords=[r"خرید|قیمت.*محصول|قیمت.*کفش|قیمت.*گوشی|دیجی.?کالا|ترب|فروشگاه|لینک خرید|ارزان.?ترین|قیمت روز محصول"],
+    )
+
+    register_tool(
+        name="shopping_price_history",
+        description="تاریخچه قیمت مشاهده‌شده محصولات از جستجوهای قبلی ربات. اگر داده کافی وجود ندارد صریحاً اعلام کن.",
+        parameters={"type":"object","properties":{"query":{"type":"string","description":"نام یا مدل محصول"},"days":{"type":"integer","description":"بازه تقریبی روز"}},"required":["query"]},
+        handler=_shopping_price_history,
+        keywords=[r"تاریخچه قیمت|قیمت هفته قبل|قیمت ماه قبل|روند قیمت محصول|افت قیمت محصول"],
+    )
+
     register_tool(
         name="get_top_crypto",
         description="برترین رمزارزها.",

@@ -19,6 +19,7 @@ SYSTEM_PROMPT = os.getenv(
     "با لحنی گرم، طبیعی، محترمانه و کمی شوخ‌طبع (فقط وقتی فضا مناسب است) فارسی روان صحبت کن. "
     "اگر کاربر به زبان دیگری پیام داد، دقیقاً به همان زبان پاسخ بده. "
     "پاسخ‌هایت باید کامل، مفصل و جامع باشد. هرگز جواب را خلاصه نکن مگر اینکه کاربر صریحاً بگوید «خلاصه بگو» یا «کوتاه». "
+    "اگر کاربر درباره خرید، قیمت روز یک محصول، ارزان‌ترین فروشنده، لینک خرید، مقایسه فروشگاه‌ها یا عکس یک محصول سؤال کرد، از ابزار search_shopping استفاده کن. برای عکس محصول ابتدا از قابلیت بینایی برای تشخیص برند/مدل/رنگ/نوع محصول کمک بگیر و بعد با عبارت‌های دقیق در چند فروشگاه جستجو کن. نتایج را با قیمت، فروشگاه، فروشنده و لینک مرتب کن؛ اگر مدل دقیق مشخص نیست، صریح بگو و نتیجه مشابه را به‌عنوان همان محصول قطعی معرفی نکن. هرگز قیمت یا لینک ساختگی تولید نکن. "
     "وقتی کاربر درباره آب‌وهوا، اوقات شرعی، قیمت ارز/طلا/کریپتو، تبدیل تاریخ، سن، قبله، اذکار، آیه و حدیث، "
     "ساعت جهانی یا فاصله شهرها می‌پرسد، از ابزارهای ربات استفاده کن یا از «دادهٔ زنده» که در پیام آمده استفاده کن؛ "
     "هرگز عدد و قیمت ساختگی نگو. "
@@ -948,73 +949,98 @@ async def _gemini_with_media(
     model: str,
     media: list[tuple[bytes, str]] | None = None,
 ) -> str:
-    """Gemini multimodal: متن + عکس (و در صورت نیاز چند فایل تصویری)."""
+    """Gemini multimodal + function calling برای ابزارهای AI، از جمله خرید تصویری."""
     keys = _next_keys("gemini")
     if not keys:
         raise RuntimeError("هیچ کلید Gemini تنظیم نشده")
 
+    from bot.services.ai_tools import get_tool_definitions, execute_tool, parse_tool_arguments
+
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
     contents = []
     for role, content in _HISTORY[user_id]:
-        contents.append(
-            {
-                "role": "model" if role == "assistant" else "user",
-                "parts": [{"text": content}],
-            }
-        )
+        contents.append({
+            "role": "model" if role == "assistant" else "user",
+            "parts": [{"text": content}],
+        })
 
     parts = []
     if media:
         for data, mime in media:
-            # محدودیت اندازه ~4MB برای inline
             if len(data) > 4_500_000:
                 raise RuntimeError("حجم فایل برای تحلیل خیلی بزرگ است (حداکثر حدود ۴ مگابایت).")
-            parts.append(
-                {
-                    "inline_data": {
-                        "mime_type": mime or "image/jpeg",
-                        "data": base64.b64encode(data).decode("ascii"),
-                    }
-                }
-            )
+            parts.append({"inline_data": {"mime_type": mime or "image/jpeg", "data": base64.b64encode(data).decode("ascii")}})
     parts.append({"text": prompt})
     contents.append({"role": "user", "parts": parts})
 
-    payload = {
-        "systemInstruction": {"parts": [{"text": SYSTEM_PROMPT}]},
-        "contents": contents,
-        "generationConfig": {"maxOutputTokens": MAX_OUTPUT},
-    }
+    declarations = []
+    for tool in get_tool_definitions():
+        fn = tool.get("function") or {}
+        if fn.get("name"):
+            declarations.append({
+                "name": fn["name"],
+                "description": fn.get("description", ""),
+                "parameters": fn.get("parameters", {"type": "object", "properties": {}}),
+            })
+    gemini_tools = [{"functionDeclarations": declarations}] if declarations else []
 
     errors = []
     for key in keys:
         try:
-            status, data = await _post_json(url, params={"key": key}, json=payload)
-            if status >= 400:
-                if _is_quota_error(status, data):
-                    daily = status != 429 or "daily" in str(data).lower() or "quota" in str(data).lower()
-                    _mark_key_cooldown("gemini", key, daily=daily)
-                    errors.append(f"{_key_id('gemini', key)} HTTP {status}")
+            working = list(contents)
+            for round_no in range(4):
+                payload = {
+                    "systemInstruction": {"parts": [{"text": SYSTEM_PROMPT}]},
+                    "contents": working,
+                    "generationConfig": {"maxOutputTokens": MAX_OUTPUT},
+                }
+                if gemini_tools and round_no < 3:
+                    payload["tools"] = gemini_tools
+
+                status, data = await _post_json(url, params={"key": key}, json=payload)
+                if status >= 400:
+                    if _is_quota_error(status, data):
+                        daily = status != 429 or "daily" in str(data).lower() or "quota" in str(data).lower()
+                        _mark_key_cooldown("gemini", key, daily=daily)
+                        errors.append(f"{_key_id('gemini', key)} HTTP {status}")
+                        break
+                    raise RuntimeError(f"Gemini HTTP {status}: {str(data)[:900]}")
+
+                candidates = data.get("candidates") or []
+                if not candidates:
+                    raise RuntimeError(f"Gemini پاسخ خالی داد: {str(data)[:900]}")
+                content = candidates[0].get("content") or {}
+                out_parts = content.get("parts") or []
+                function_calls = [
+                    p.get("functionCall") or p.get("function_call")
+                    for p in out_parts
+                    if p.get("functionCall") or p.get("function_call")
+                ]
+                if function_calls and round_no < 3:
+                    working.append({"role": "model", "parts": out_parts})
+                    response_parts = []
+                    for call in function_calls:
+                        name = call.get("name") or ""
+                        args = parse_tool_arguments(call.get("args") or call.get("arguments") or {})
+                        result = await execute_tool(name, args, user_id=user_id)
+                        call_id = call.get("id") or call.get("callId") or call.get("call_id")
+                        fr = {"name": name, "response": {"result": result}}
+                        if call_id:
+                            fr["id"] = call_id
+                        response_parts.append({"functionResponse": fr})
+                    working.append({"role": "user", "parts": response_parts})
                     continue
-                raise RuntimeError(f"Gemini HTTP {status}: {str(data)[:900]}")
 
-            try:
-                parts_out = data["candidates"][0]["content"]["parts"]
-                text = "".join(p.get("text", "") for p in parts_out).strip()
-            except Exception:
-                raise RuntimeError(f"Gemini unexpected response: {str(data)[:900]}")
-
-            if not text:
-                raise RuntimeError("Gemini returned an empty answer")
-
-            _advance_rr("gemini")
-            return text
+                text = "".join(p.get("text", "") for p in out_parts if isinstance(p, dict)).strip()
+                if not text:
+                    raise RuntimeError(f"Gemini پاسخ متنی خالی داد: {str(data)[:700]}")
+                _advance_rr("gemini")
+                return text
         except RuntimeError as exc:
-            if "HTTP" in str(exc) and any(x in str(exc) for x in ("429", "403", "quota")):
-                _mark_key_cooldown("gemini", key, daily=True)
-                errors.append(str(exc)[:200])
-                continue
-            errors.append(str(exc)[:200])
+            errors.append(str(exc)[:250])
+            continue
+        except Exception as exc:
+            errors.append(str(exc)[:250])
             continue
 
     raise RuntimeError("همه کلیدهای Gemini تمام/خطا: " + " | ".join(errors[:5]))
