@@ -462,13 +462,13 @@ async def search_shopping(
     if not query:
         return "عبارت محصول برای جستجو مشخص نیست."
 
-    max_results = max(4, min(int(max_results or 14), 22))
+    max_results = max(4, min(int(max_results or 10), 18))
     source = (source or "all").lower().strip()
 
     # انتخاب منابع
     if source in ("all", "همه", "تمام", "everywhere", "web"):
-        # حالت all قبلاً برای هر منبع چند درخواست جدا می‌فرستاد و روی Render کند می‌شد.
-        # چند منبع پربازده + وب عمومی، recall خوب را با latency بسیار کمتر می‌دهد.
+        # برای جستجوی تصویری/خرید، منابع پربازده را نگه می‌داریم تا
+        # ده‌ها درخواست همزمان به Render فشار نیاورد.
         selected = ["torob", "digikala", "basalam", "emalls", "instagram", "general"]
     else:
         selected = [s for s in source.replace(",", " ").split() if s in SOURCES]
@@ -488,7 +488,7 @@ async def search_shopping(
         limit = max(5, max_results // max(1, len(selected)) + 3)
 
         # برای هر منبع فقط چند query قوی‌تر را اجرا می‌کنیم تا روی Render فشار ایجاد نشود.
-        local_variants = variants[:2] if key not in ("general", "instagram") else variants[:3]
+        local_variants = variants[:3] if key not in ("general", "instagram") else variants[:5]
         for variant in local_variants:
             if key == "instagram":
                 tasks.append(
@@ -555,7 +555,7 @@ async def search_shopping(
         # fallback به لینک‌های خام
         fallback = list(links.values())[:max_results]
         if not fallback:
-            return f"ℹ️ برای «{query}» از منابع فعلی نتیجه‌ای برنگشت؛ می‌توان جستجوی گسترده‌تر را دوباره اجرا کرد."
+            return f"برای «{query}» نتیجه‌ای در فروشگاه‌ها، اینستاگرام و وب پیدا نشد."
         lines = [
             f"🔎 نتایج جستجو برای «{query}» (قیمت مستقیم استخراج نشد):",
             "لینک‌های مرتبط از فروشگاه‌ها و اینستاگرام:",
