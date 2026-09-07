@@ -27,7 +27,7 @@ UA = (
 )
 SEARCH_URL = "https://html.duckduckgo.com/html/"
 CACHE: dict[str, tuple[float, str]] = {}
-CACHE_TTL = 300
+CACHE_TTL = 150
 
 # لیست گسترده فروشگاه‌ها و منابع ایرانی + بین‌المللی مرتبط
 SOURCES = {
@@ -462,12 +462,13 @@ async def search_shopping(
     if not query:
         return "عبارت محصول برای جستجو مشخص نیست."
 
-    max_results = max(4, min(int(max_results or 10), 14))
+    max_results = max(4, min(int(max_results or 10), 16))
     source = (source or "all").lower().strip()
 
     # انتخاب منابع
     if source in ("all", "همه", "تمام", "everywhere", "web"):
-        selected = list(SOURCES.keys())
+        preferred = ["torob", "digikala", "snappshop", "technolife", "emalls", "basalam", "digistyle", "modiseh", "instagram", "general"]
+        selected = [s for s in preferred if s in SOURCES]
     else:
         selected = [s for s in source.replace(",", " ").split() if s in SOURCES]
         if not selected:
