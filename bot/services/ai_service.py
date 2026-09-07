@@ -6,6 +6,8 @@ import base64
 import os
 import re
 import time
+from pathlib import Path
+from urllib.parse import quote
 from collections import defaultdict, deque
 from typing import Deque, Dict, List, Optional, Tuple
 
@@ -1233,167 +1235,244 @@ IMAGE_GEN_MODEL_FALLBACKS = tuple(
 )
 
 
+async def _get_image_bytes(url: str, *, headers=None) -> tuple[int, bytes, str]:
+    """GET image endpoint and return status, bytes, content-type."""
+    client = _get_http()
+    response = await client.get(url, headers=headers, follow_redirects=True)
+    return response.status_code, response.content, response.headers.get("content-type", "")
+
+
+async def _generate_image_pollinations(prompt: str) -> tuple[bytes, str]:
+    """Pollinations anonymous/free fallback. No key is required for the fallback path."""
+    model = os.getenv("POLLINATIONS_IMAGE_MODEL", "flux").strip() or "flux"
+    width = int(os.getenv("POLLINATIONS_IMAGE_WIDTH", "1024"))
+    height = int(os.getenv("POLLINATIONS_IMAGE_HEIGHT", "1024"))
+    encoded = quote(prompt, safe="")
+    urls = [
+        f"https://gen.pollinations.ai/image/{encoded}?model={quote(model)}&width={width}&height={height}",
+        f"https://image.pollinations.ai/prompt/{encoded}?width={width}&height={height}",
+    ]
+    errors = []
+    for url in urls:
+        try:
+            status, content, mime = await _get_image_bytes(url)
+            if status < 400 and content and (content.startswith(b"\\x89PNG") or content.startswith(b"\\xff\\xd8") or "image" in mime.lower()):
+                return content, mime or "image/png"
+            errors.append(f"HTTP {status}")
+        except Exception as exc:
+            errors.append(str(exc)[:200])
+    raise RuntimeError("Pollinations در دسترس نبود: " + " | ".join(errors[:3]))
+
+
+_LOCAL_PIPELINE = None
+_LOCAL_PIPELINE_MODEL = None
+_LOCAL_BACKEND_CACHE = None
+
+
+def _find_local_image_model() -> Optional[str]:
+    """فقط مدل‌هایی را برمی‌گرداند که واقعاً روی سیستم موجودند؛ دانلود خودکار انجام نمی‌دهد."""
+    candidates = []
+    configured = os.getenv("LOCAL_IMAGE_MODEL_PATH", "").strip()
+    if configured:
+        candidates.append(configured)
+    for raw in os.getenv("LOCAL_IMAGE_MODEL_PATHS", "./models/image,./models/sd15,./models/sdxl,/models/image").split(","):
+        raw = raw.strip()
+        if raw:
+            candidates.append(raw)
+    for item in candidates:
+        path = Path(item).expanduser()
+        if path.exists() and path.is_dir():
+            # diffusers models normally have model_index.json; allow common single-file dirs too.
+            if (path / "model_index.json").exists() or any(path.glob("*.safetensors")):
+                return str(path)
+    return None
+
+
+async def _detect_local_backend() -> tuple[str, str] | None:
+    """هوشمندانه backend محلی موجود را پیدا می‌کند؛ هیچ چیزی دانلود نمی‌شود."""
+    global _LOCAL_BACKEND_CACHE
+    if _LOCAL_BACKEND_CACHE is not None:
+        return _LOCAL_BACKEND_CACHE
+
+    client = _get_http()
+    candidates = []
+    configured = os.getenv("LOCAL_IMAGE_API_URL", "").strip().rstrip("/")
+    if configured:
+        candidates.append(("a1111", configured))
+    candidates.extend([
+        ("a1111", "http://127.0.0.1:7860"),
+        ("comfyui", "http://127.0.0.1:8188"),
+    ])
+
+    for backend, base in candidates:
+        try:
+            if backend == "a1111":
+                r = await client.get(f"{base}/sdapi/v1/sd-models", timeout=3)
+                if r.status_code < 400:
+                    _LOCAL_BACKEND_CACHE = (backend, base)
+                    return _LOCAL_BACKEND_CACHE
+            else:
+                r = await client.get(f"{base}/system_stats", timeout=3)
+                if r.status_code < 400:
+                    _LOCAL_BACKEND_CACHE = (backend, base)
+                    return _LOCAL_BACKEND_CACHE
+        except Exception:
+            continue
+
+    model_path = _find_local_image_model()
+    if model_path:
+        _LOCAL_BACKEND_CACHE = ("diffusers", model_path)
+        return _LOCAL_BACKEND_CACHE
+    return None
+
+
+async def _generate_image_a1111(prompt: str, base_url: str) -> tuple[bytes, str]:
+    """تولید تصویر از Stable Diffusion WebUI/Forge API روی همان سرور."""
+    client = _get_http()
+    payload = {
+        "prompt": prompt,
+        "steps": int(os.getenv("LOCAL_IMAGE_STEPS", "20")),
+        "width": int(os.getenv("LOCAL_IMAGE_WIDTH", "512")),
+        "height": int(os.getenv("LOCAL_IMAGE_HEIGHT", "512")),
+        "batch_size": 1,
+        "n_iter": 1,
+    }
+    response = await client.post(
+        f"{base_url}/sdapi/v1/txt2img",
+        json=payload,
+        timeout=max(TIMEOUT, 120),
+    )
+    if response.status_code >= 400:
+        raise RuntimeError(f"A1111 HTTP {response.status_code}: {response.text[:300]}")
+    data = response.json()
+    images = data.get("images") or []
+    if not images:
+        raise RuntimeError("A1111 تصویری برنگرداند")
+    return base64.b64decode(images[0]), "image/png"
+
+
+async def _generate_image_local(prompt: str) -> tuple[bytes, str]:
+    """Local fallback with automatic backend detection (A1111/Forge → Diffusers)."""
+    global _LOCAL_PIPELINE, _LOCAL_PIPELINE_MODEL
+
+    backend = await _detect_local_backend()
+    if not backend:
+        raise RuntimeError("هیچ موتور تصویر محلی روی سرور پیدا نشد")
+
+    backend_name, backend_value = backend
+    if backend_name == "a1111":
+        return await _generate_image_a1111(prompt, backend_value)
+
+    model_path = backend_value if backend_name == "diffusers" else _find_local_image_model()
+    if not model_path:
+        raise RuntimeError("مدل Diffusers محلی پیدا نشد")
+
+    try:
+        import io
+        import torch
+        from diffusers import AutoPipelineForText2Image
+    except Exception as exc:
+        raise RuntimeError(f"وابستگی‌های local image نصب نیستند: {exc}")
+
+    if _LOCAL_PIPELINE is None or _LOCAL_PIPELINE_MODEL != model_path:
+        def _load():
+            pipe = AutoPipelineForText2Image.from_pretrained(
+                model_path,
+                torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
+                local_files_only=True,
+            )
+            if torch.cuda.is_available():
+                pipe = pipe.to("cuda")
+            return pipe
+        _LOCAL_PIPELINE = await asyncio.to_thread(_load)
+        _LOCAL_PIPELINE_MODEL = model_path
+
+    def _run():
+        image = _LOCAL_PIPELINE(prompt, num_inference_steps=int(os.getenv("LOCAL_IMAGE_STEPS", "20"))).images[0]
+        buf = io.BytesIO()
+        image.save(buf, format="PNG")
+        return buf.getvalue()
+
+    return await asyncio.to_thread(_run), "image/png"
+
+
 async def generate_or_edit_image(
     prompt: str,
     *,
     source_image: bytes | None = None,
     source_mime: str = "image/jpeg",
 ) -> tuple[bytes, str]:
-    """ساخت/ویرایش تصویر با Gemini و مدیریت هوشمند quota/rate-limit و fallback مدل‌ها."""
+    """ساخت/ویرایش تصویر با انتخاب خودکار اولین سرویس در دسترس.
+
+    ترتیب پیش‌فرض: Gemini → Pollinations → Local.
+    سرویس‌هایی که کلید/مدل لازم را ندارند خودکار رد می‌شوند. برای ویرایش عکس،
+    سرویس‌هایی که فقط text-to-image هستند برای ویرایش عکس رد می‌شوند.
+    """
     prompt = (prompt or "").strip()
     if not prompt:
         raise RuntimeError("توضیح تصویر خالی است.")
 
-    keys = _next_keys("gemini")
-    if not keys:
-        raise RuntimeError("برای ساخت/ویرایش تصویر به کلید Gemini نیاز است.")
-
-    models: List[str] = []
-    for candidate in (IMAGE_GEN_MODEL, *IMAGE_GEN_MODEL_FALLBACKS):
-        candidate = (candidate or "").strip()
-        if candidate and candidate not in models:
-            models.append(candidate)
-    if not models:
-        raise RuntimeError("هیچ مدل تصویری Gemini تنظیم نشده است.")
-
-    parts = []
-    if source_image:
-        if len(source_image) > 4_500_000:
-            raise RuntimeError("حجم تصویر برای ویرایش خیلی بزرگ است.")
-        parts.append({
-            "inline_data": {
-                "mime_type": source_mime or "image/jpeg",
-                "data": base64.b64encode(source_image).decode("ascii"),
-            }
-        })
-        full_prompt = (
-            "Edit this image according to the following instruction. "
-            "Return the edited image.\n\n" + prompt
-        )
-    else:
-        full_prompt = (
-            "Generate a high-quality image for this request. "
-            "Return an image.\n\n" + prompt
-        )
-    parts.append({"text": full_prompt})
-
-    payload = {
-        "contents": [{"role": "user", "parts": parts}],
-        "generationConfig": {"responseModalities": ["TEXT", "IMAGE"]},
-        "safetySettings": GEMINI_SAFETY_SETTINGS,
-    }
-
-    def _error_detail(data) -> str:
-        if isinstance(data, dict):
-            err = data.get("error")
-            if isinstance(err, dict):
-                msg = err.get("message") or err.get("status")
-                if msg:
-                    return str(msg).replace("\n", " ")[:500]
-            msg = data.get("message")
-            if msg:
-                return str(msg).replace("\n", " ")[:500]
-        return str(data).replace("\n", " ")[:500]
-
     errors: List[str] = []
-    quota_failures = 0
-    attempted = 0
 
-    # هر مدل روی هر کلید امتحان می‌شود؛ بنابراین 429 مدل اصلی،
-    # بی‌دلیل مانع تست مدل‌های fallback نمی‌شود.
-    for key in keys:
-        key_label = _key_id("gemini", key)
-        for model in models:
-            attempted += 1
-            url = (
-                "https://generativelanguage.googleapis.com/v1beta/models/"
-                f"{model}:generateContent"
-            )
-            try:
-                status, data = await _post_json(
-                    url, params={"key": key}, json=payload
-                )
+    # 1) Gemini: اگر کلید موجود باشد امتحان می‌شود؛ quota failure جلوی fallback را نمی‌گیرد.
+    gemini_keys = _next_keys("gemini")
+    if gemini_keys:
+        models: List[str] = []
+        for candidate in (IMAGE_GEN_MODEL, *IMAGE_GEN_MODEL_FALLBACKS):
+            candidate = (candidate or "").strip()
+            if candidate and candidate not in models:
+                models.append(candidate)
+        parts = []
+        if source_image:
+            if len(source_image) > 4_500_000:
+                raise RuntimeError("حجم تصویر برای ویرایش خیلی بزرگ است.")
+            parts.append({"inline_data": {"mime_type": source_mime or "image/jpeg", "data": base64.b64encode(source_image).decode("ascii")}})
+            full_prompt = "Edit this image according to the following instruction. Return the edited image.\n\n" + prompt
+        else:
+            full_prompt = "Generate a high-quality image for this request. Return an image.\n\n" + prompt
+        parts.append({"text": full_prompt})
+        payload = {"contents": [{"role": "user", "parts": parts}], "generationConfig": {"responseModalities": ["TEXT", "IMAGE"]}, "safetySettings": GEMINI_SAFETY_SETTINGS}
 
-                if status >= 400:
-                    detail = _error_detail(data)
-                    if _is_quota_error(status, data):
-                        quota_failures += 1
-                        # 429 معمولاً rate-limit است؛ 403 بیشتر به quota/permission مربوط است.
-                        _mark_key_cooldown(
-                            "gemini", key, daily=(status == 403)
-                        )
-                        errors.append(f"{key_label}/{model} HTTP {status}: {detail}")
-                        # حتی بعد از 429 مدل‌های دیگر همین کلید را هم تست می‌کنیم.
+        for key in gemini_keys:
+            for model in models:
+                try:
+                    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+                    status, data = await _post_json(url, params={"key": key}, json=payload)
+                    if status >= 400:
+                        err = data.get("error", {}) if isinstance(data, dict) else {}
+                        detail = str(err.get("message") or err.get("status") or data).replace("\n", " ")[:450]
+                        errors.append(f"gemini/{model} HTTP {status}: {detail}")
+                        if _is_quota_error(status, data):
+                            _mark_key_cooldown("gemini", key, daily=(status == 403))
                         continue
+                    for part in ((data.get("candidates") or [{}])[0].get("content") or {}).get("parts") or []:
+                        inline = part.get("inlineData") or part.get("inline_data")
+                        if inline and inline.get("data"):
+                            return base64.b64decode(inline["data"]), inline.get("mimeType") or inline.get("mime_type") or "image/png"
+                    errors.append(f"gemini/{model}: تصویر برنگشت")
+                except Exception as exc:
+                    errors.append(f"gemini/{model}: {str(exc)[:250]}")
+    else:
+        errors.append("gemini: کلید موجود نیست")
 
-                    if status == 404 or "not found" in detail.lower():
-                        errors.append(f"{key_label}/{model} مدل در دسترس نیست: {detail}")
-                        continue
+    # 2) Pollinations: بدون کلید امتحان می‌شود؛ برای text-to-image.
+    if not source_image:
+        try:
+            return await _generate_image_pollinations(prompt)
+        except Exception as exc:
+            errors.append(f"pollinations: {str(exc)[:350]}")
+    else:
+        errors.append("pollinations: برای ویرایش عکس رد شد")
 
-                    errors.append(f"{key_label}/{model} HTTP {status}: {detail}")
-                    continue
-
-                candidates = data.get("candidates") or []
-                if not candidates:
-                    errors.append(
-                        f"{key_label}/{model}: پاسخ خالی از مدل تصویر"
-                    )
-                    continue
-
-                out_parts = (candidates[0].get("content") or {}).get("parts") or []
-                text_bits = []
-                image_bytes = None
-                mime = "image/png"
-                for part in out_parts:
-                    if part.get("text"):
-                        text_bits.append(str(part["text"]))
-                    inline = part.get("inlineData") or part.get("inline_data")
-                    if inline and inline.get("data"):
-                        try:
-                            image_bytes = base64.b64decode(inline["data"])
-                        except Exception as exc:
-                            errors.append(
-                                f"{key_label}/{model}: تصویر خراب/نامعتبر ({exc})"
-                            )
-                            image_bytes = None
-                            continue
-                        mime = (
-                            inline.get("mimeType")
-                            or inline.get("mime_type")
-                            or "image/png"
-                        )
-
-                if not image_bytes:
-                    msg = " ".join(text_bits)[:500]
-                    errors.append(
-                        f"{key_label}/{model}: مدل تصویر برنگرداند"
-                        + (f" — {msg}" if msg else "")
-                    )
-                    continue
-
-                _advance_rr("gemini")
-                logger.info(
-                    "Gemini image generation succeeded: %s/%s", key_label, model
-                )
-                return image_bytes, mime
-
-            except (httpx.TimeoutException, httpx.NetworkError) as exc:
-                errors.append(f"{key_label}/{model}: network/timeout: {str(exc)[:250]}")
-                continue
-            except Exception as exc:
-                errors.append(f"{key_label}/{model}: {str(exc)[:300]}")
-                continue
-
-    if quota_failures == attempted and attempted > 0:
-        raise RuntimeError(
-            "سهمیه یا Rate Limit سرویس Gemini برای کلیدهای فعلی در دسترس نیست. "
-            "همه مدل‌های تصویری و کلیدهای موجود امتحان شدند. "
-            "اگر کلیدها متعلق به یک پروژه باشند، تعویض کلید ممکن است سهمیه را تغییر ندهد.\n"
-            + " | ".join(errors[:6])
-        )
+    # 3) Local: فقط اگر مدل از قبل روی دیسک موجود باشد؛ هیچ دانلود خودکاری انجام نمی‌شود.
+    try:
+        return await _generate_image_local(prompt)
+    except Exception as exc:
+        errors.append(f"local: {str(exc)[:350]}")
 
     raise RuntimeError(
-        "ساخت/ویرایش تصویر ناموفق بود.\n" + " | ".join(errors[:8])
+        "هیچ سرویس تصویر در دسترس نبود. سیستم همه گزینه‌های موجود را خودکار بررسی کرد.\n"
+        + " | ".join(errors[:10])
     )
 
 
