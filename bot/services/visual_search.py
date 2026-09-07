@@ -259,34 +259,47 @@ async def _ddg_search(query: str, limit: int = MAX_RESULTS_PER_QUERY) -> list[Se
 
 
 def _query_variants(description: str, ocr: str, caption: str = "") -> list[str]:
-    """Generate short, complementary queries instead of one overly-specific sentence."""
+    """Build broad-to-specific product queries. Never require an exact phrase."""
     text = " ".join(x for x in (description, caption, ocr) if x)
-    keys = _extract_keywords(text, 16)
+    keys = _extract_keywords(text, 24)
     if not keys:
         return []
 
-    # Keep phrases around product nouns/visual attributes, but avoid a huge exact sentence.
     variants: list[str] = []
-    base = " ".join(keys[:6])
-    if base:
-        variants.append(base)
-    if len(keys) >= 3:
-        variants.append(" ".join(keys[:3]) + " محصول")
-        variants.append(" ".join(keys[:3]) + " خرید")
-    if len(keys) >= 5:
-        variants.append(" ".join(keys[:5]) + " فروشگاه")
-        variants.append(" ".join(keys[1:6]))
-
-    # English fallback can improve recall for globally indexed product pages.
-    english_terms = [
-        k for k in keys
-        if re.fullmatch(r"[a-z0-9.-]+", k)
+    # For visual descriptions, keep the product noun + the strongest visual signals.
+    groups = [
+        keys[:5],
+        keys[:3],
+        keys[:4],
+        keys[1:6],
+        keys[-5:],
     ]
+    suffixes = ["", " محصول", " خرید", " فروشگاه"]
+    for group in groups:
+        if not group:
+            continue
+        base = " ".join(group)
+        for suffix in suffixes[:2 if len(variants) >= 5 else 4]:
+            variants.append(base + suffix)
+
+    # High-value explicit product attributes often get lost in AI prose.
+    normalized = _normalize(text)
+    attribute_terms = []
+    for term in (
+        "بطری", "شیشه", "آبی", "کبالت", "گوزن", "شاخ", "برجسته",
+        "چوب پنبه", "چوب‌پنبه", "دکوری", "بانکه", "ظرف", "سرامیک",
+        "استیل", "چوبی", "پلاستیکی",
+    ):
+        if term in normalized:
+            attribute_terms.append(term.replace("‌", " "))
+    if attribute_terms:
+        variants.append(" ".join(_unique(attribute_terms)))
+        variants.append(" ".join(_unique(attribute_terms[:4])) + " خرید")
+
+    english_terms = [k for k in keys if re.fullmatch(r"[a-z0-9.-]+", k)]
     if english_terms:
         variants.append(" ".join(english_terms[:6]) + " product")
 
-    # Always have a broader query based on the first semantic terms.
-    variants.append(" ".join(keys[:4]))
     return _unique(variants)[:MAX_QUERIES]
 
 
@@ -363,6 +376,23 @@ async def visual_search(
                 results.extend(batch)
     ranked = _dedupe_and_rank(results, description, ocr, caption)
 
+    # مهم: در جستجوی محصول از روی عکس، فقط به نتایج خام Lens اکتفا نکن.
+    # خروجی تشخیص باید مستقیماً وارد موتور خرید پروژه شود تا لینک/قیمت واقعی
+    # برگردد و در صورت نبود مدل دقیق، محصولات مشابه هم نمایش داده شوند.
+    shopping_results: str = ""
+    if include_web and queries:
+        try:
+            from bot.features.market.shopping import search_shopping
+            # کوتاه‌ترین Query معمولاً برای فروشگاه‌ها بهتر از پاراگراف AI است.
+            shopping_query = queries[0]
+            shopping_results = await search_shopping(
+                query=shopping_query,
+                source="all",
+                max_results=8,
+            )
+        except Exception as exc:
+            shopping_results = ""
+
     lines = ["🔎 تحلیل تصویری / Visual Lens", ""]
     if info:
         lines.append(f"📐 تصویر: {info.get('width')}×{info.get('height')} | {info.get('format', '')}")
@@ -378,16 +408,20 @@ async def visual_search(
         lines.extend(f"• {q}" for q in queries[:MAX_QUERIES])
 
     lines.append("")
+    if shopping_results:
+        lines.append("🛒 نتایج خرید و محصولات مشابه:")
+        lines.append(shopping_results[:6500])
+
     if ranked:
-        lines.append("🛍️ نزدیک‌ترین نتایج پیدا شده (نیازی به تطابق ۱۰۰٪ نیست):")
-        for i, r in enumerate(ranked[:8], 1):
+        lines.append("\n🌐 نتایج وب مشابه (برای افزایش شانس پیدا کردن مدل):")
+        for i, r in enumerate(ranked[:6], 1):
             pct = round(r.score * 100)
             lines.append(f"\n{i}. ⭐ {pct}% — {r.title[:180]}\n{r.url}")
             if r.snippet:
                 lines.append(f"   {r.snippet[:260]}")
-    else:
-        lines.append("ℹ️ نتیجه دقیق پیدا نشد؛ جستجوی وب نتیجه قابل اتکایی برنگرداند.")
-        lines.append("💡 اگر عکس واضح‌تر یا نمای نزدیک‌تر بفرستید، شانس پیدا کردن مشابه بیشتر می‌شود.")
+    elif not shopping_results:
+        lines.append("ℹ️ نتیجه‌ای از وب/فروشگاه برنگشت؛ عبارت‌های عمومی‌تر هم بررسی شدند.")
+        lines.append("💡 عکس واضح‌تر یا نمای نزدیک‌تر می‌تواند نتیجه را بهتر کند.")
 
     lines.append("\n⚠️ درصدها «شباهت تقریبی متنی/جستجویی» هستند، نه تضمین تطابق محصول.")
     return "\n".join(lines)[:12000]
