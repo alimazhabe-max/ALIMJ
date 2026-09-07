@@ -16,10 +16,11 @@ from .finance import (
     risk_scenarios,
     position_size_guide,
     calc_position_size,
-    entry_alert_text, market_scanner,
+    entry_alert_text,
+    market_scanner,
     register_price_alert,
 )
-from .shopping import search_shopping
+from .shopping import search_shopping, shopping_price_history
 
 __all__ = [
     "full_market_prices",
@@ -39,7 +40,9 @@ __all__ = [
     "risk_scenarios",
     "position_size_guide",
     "calc_position_size",
-    "entry_alert_text, market_scanner",
+    "entry_alert_text",
+    "market_scanner",
     "register_price_alert",
     "search_shopping",
+    "shopping_price_history",
 ]
