@@ -289,17 +289,73 @@ async def _inspect(url: str, title: str, snippet: str) -> ProductResult:
     return result
 
 
-def _score(result: ProductResult, query: str) -> float:
-    qwords = {x.lower() for x in re.findall(r"[\wآ-ی]{2,}", query)}
-    twords = {x.lower() for x in re.findall(r"[\wآ-ی]{2,}", result.title)}
-    overlap = len(qwords & twords) / max(1, len(qwords))
-    score = overlap * 100
+def _query_variants(query: str) -> list[str]:
+    """ساخت چند جستجوی کوتاه‌تر تا نتیجه به تطابق لفظ‌به‌لفظ وابسته نباشد."""
+    q = re.sub(r"\s+", " ", (query or "").strip())
+    if not q:
+        return []
+
+    variants: list[str] = [q]
+    # کلمات کم‌ارزش در توصیف‌های بینایی را حذف می‌کنیم.
+    stop = {
+        "یک", "عدد", "نوع", "مدل", "شکل", "طرح", "دارای", "با", "و", "از",
+        "برای", "در", "روی", "رنگ", "مناسب", "دکوری", "دکوراتیو", "خاص",
+        "برجستگی", "برجسته", "تصویر", "عکس",
+    }
+    words = [w for w in re.findall(r"[\wآ-ی]{2,}", q.lower()) if w not in stop]
+    if words:
+        variants.append(" ".join(words))
+    if len(words) >= 4:
+        # دو نسخه کوتاه برای موتور جستجو؛ یکی ابتدای توصیف و یکی انتهای آن.
+        variants.append(" ".join(words[:4]))
+        variants.append(" ".join(words[-4:]))
+    # چند جایگزین رایج برای توصیف‌های فارسی/بازاری.
+    synonym_groups = [
+        ("چوب پنبه ای", "چوب پنبه"),
+        ("چوب‌پنبه‌ای", "چوب پنبه"),
+        ("چوبی", "درب چوبی"),
+        ("شیشه ای", "شیشه"),
+        ("شیشه‌ای", "شیشه"),
+    ]
+    for a, b in synonym_groups:
+        if a in q.lower():
+            variants.append(q.lower().replace(a, b))
+
+    out: list[str] = []
+    seen: set[str] = set()
+    for v in variants:
+        v = re.sub(r"\s+", " ", v).strip()
+        if len(v) >= 4 and v not in seen:
+            seen.add(v)
+            out.append(v)
+    return out[:6]
+
+
+def _score(result: ProductResult, query: str | list[str]) -> float:
+    """امتیاز نرم؛ نتیجه مشابه را حذف نمی‌کند و بهترین query را ملاک می‌گیرد."""
+    queries = query if isinstance(query, list) else _query_variants(query)
+    if not queries:
+        queries = [str(query or "")]
+
+    text = f"{result.title} {result.match_hint}".lower()
+    twords = {x.lower() for x in re.findall(r"[\wآ-ی]{2,}", text)}
+    best = 0.0
+    for q in queries:
+        qwords = {x.lower() for x in re.findall(r"[\wآ-ی]{2,}", q)}
+        if not qwords:
+            continue
+        overlap = len(qwords & twords) / max(1, len(qwords))
+        # تطابق عبارت کامل امتیاز زیادی می‌گیرد، اما شرط نیست.
+        phrase_bonus = 18 if q.lower() in text else 0
+        best = max(best, overlap * 100 + phrase_bonus)
+
+    score = best
     if result.price is not None:
         score += 12
     if result.seller:
         score += 3
     if result.source == "instagram":
-        score += 4  # کمی اولویت به شاپ‌های اینستا
+        score += 4
     if result.source in ("torob", "digikala", "emalls"):
         score += 6
     return score
@@ -421,30 +477,26 @@ async def search_shopping(
     if "instagram" not in selected:
         selected.append("instagram")
 
-    # ساخت تسک‌های جستجو
+    # چند query مستقل می‌سازیم؛ تطابق دقیق دیگر شرط موفقیت نیست.
+    variants = _query_variants(query) or [query]
     tasks = []
     for key in selected:
         cfg = SOURCES[key]
         domain = cfg["domains"][0] if cfg["domains"] else ""
         limit = max(5, max_results // max(1, len(selected)) + 3)
 
-        if key == "instagram":
-            # جستجوی اختصاصی اینستاگرام برای پیدا کردن شاپ‌ها
-            insta_query = f"{query} {' OR '.join(INSTA_KEYWORDS[:4])}"
-            tasks.append(_search(insta_query, domain="instagram.com", limit=limit + 2))
-            # یک جستجوی دیگر با هشتگ‌مانند
-            tasks.append(
-                _search(f"{query} فروشگاه OR شاپ OR خرید", domain="instagram.com", limit=6)
-            )
-        elif key == "general":
-            # جستجوی باز در کل وب (بدون site:)
-            tasks.append(_search(query, domain="", limit=limit + 4))
-            # جستجوی اضافی با کلمات خرید
-            tasks.append(
-                _search(f"{query} خرید OR قیمت OR فروشگاه", domain="", limit=6)
-            )
-        else:
-            tasks.append(_search(query, domain=domain, limit=limit))
+        # برای هر منبع فقط چند query قوی‌تر را اجرا می‌کنیم تا روی Render فشار ایجاد نشود.
+        local_variants = variants[:3] if key not in ("general", "instagram") else variants[:5]
+        for variant in local_variants:
+            if key == "instagram":
+                tasks.append(
+                    _search(f"{variant} {' OR '.join(INSTA_KEYWORDS[:3])}",
+                            domain="instagram.com", limit=limit + 1)
+                )
+            elif key == "general":
+                tasks.append(_search(variant, domain="", limit=limit + 2))
+            else:
+                tasks.append(_search(variant, domain=domain, limit=limit))
 
     batches = await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -493,7 +545,7 @@ async def search_shopping(
             continue
         clean.append(x)
 
-    clean.sort(key=lambda x: (-_score(x, query), x.price is None, x.price or 10**18))
+    clean.sort(key=lambda x: (-_score(x, variants), x.price is None, x.price or 10**18))
     clean = clean[:max_results]
     _save_history(clean)
 
