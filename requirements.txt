@@ -12,3 +12,5 @@ beautifulsoup4
 pypdf
 edge-tts
 matplotlib
+
+Pillow>=10.0

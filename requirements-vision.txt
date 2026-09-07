@@ -1,0 +1,6 @@
+# Optional local vision stack (no API key)
+# Install only if you want local BLIP inference.
+torch>=2.2
+transformers>=4.40,<5
+sentencepiece>=0.2
+pytesseract>=0.3.10
