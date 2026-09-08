@@ -1,0 +1,63 @@
+2026-09-08 14:53:48 - bot - INFO - Initializing database at /tmp/tmp4bmiiwtq/test.db ...
+2026-09-08 14:53:48 - bot - INFO - No backup to restore — fresh DB at /tmp/tmp4bmiiwtq/test.db
+2026-09-08 14:53:48 - bot - INFO - DB empty and GitHub not configured — skip auto-restore
+2026-09-08 14:53:48 - bot - INFO - Migration: all azan notifications set to OFF by default
+2026-09-08 14:53:48 - bot - INFO - Database ready — 0 users
+2026-09-08 14:53:48 - bot - WARNING - AI provider __v11_test_provider__ circuit-open for 45.0s after 3 consecutive failures
+2026-09-08 14:53:49 - bot - INFO - Initializing database at /tmp/pytest-of-root/pytest-5/test_user_preferences_roundtri0/test.db ...
+2026-09-08 14:53:49 - bot - INFO - No backup to restore — fresh DB at /tmp/pytest-of-root/pytest-5/test_user_preferences_roundtri0/test.db
+2026-09-08 14:53:49 - bot - INFO - DB empty and GitHub not configured — skip auto-restore
+2026-09-08 14:53:49 - bot - INFO - Migration: all azan notifications set to OFF by default
+2026-09-08 14:53:49 - bot - INFO - Database ready — 0 users
+2026-09-08 14:53:49 - bot - INFO - Initializing database at /tmp/pytest-of-root/pytest-5/test_top_features_is_bounded_a0/test.db ...
+2026-09-08 14:53:49 - bot - INFO - No backup to restore — fresh DB at /tmp/pytest-of-root/pytest-5/test_top_features_is_bounded_a0/test.db
+2026-09-08 14:53:49 - bot - INFO - DB empty and GitHub not configured — skip auto-restore
+2026-09-08 14:53:49 - bot - INFO - Migration: all azan notifications set to OFF by default
+2026-09-08 14:53:49 - bot - INFO - Database ready — 0 users
+2026-09-08 14:53:49 - bot - INFO - Initializing database at /tmp/tmprz4gc8l2/test.db ...
+2026-09-08 14:53:49 - bot - INFO - No backup to restore — fresh DB at /tmp/tmprz4gc8l2/test.db
+2026-09-08 14:53:49 - bot - INFO - DB empty and GitHub not configured — skip auto-restore
+2026-09-08 14:53:49 - bot - INFO - Migration: all azan notifications set to OFF by default
+2026-09-08 14:53:49 - bot - INFO - Database ready — 0 users
+2026-09-08 14:54:03 - bot - INFO - Initializing database at /tmp/tmpz9q4bz3j/test.db ...
+2026-09-08 14:54:03 - bot - INFO - No backup to restore — fresh DB at /tmp/tmpz9q4bz3j/test.db
+2026-09-08 14:54:03 - bot - INFO - DB empty and GitHub not configured — skip auto-restore
+2026-09-08 14:54:03 - bot - INFO - Migration: all azan notifications set to OFF by default
+2026-09-08 14:54:03 - bot - INFO - Database ready — 0 users
+2026-09-08 14:54:03 - bot - WARNING - AI provider __v11_test_provider__ circuit-open for 45.0s after 3 consecutive failures
+2026-09-08 14:54:04 - bot - INFO - Initializing database at /tmp/pytest-of-root/pytest-6/test_user_preferences_roundtri0/test.db ...
+2026-09-08 14:54:04 - bot - INFO - No backup to restore — fresh DB at /tmp/pytest-of-root/pytest-6/test_user_preferences_roundtri0/test.db
+2026-09-08 14:54:04 - bot - INFO - DB empty and GitHub not configured — skip auto-restore
+2026-09-08 14:54:04 - bot - INFO - Migration: all azan notifications set to OFF by default
+2026-09-08 14:54:04 - bot - INFO - Database ready — 0 users
+2026-09-08 14:54:04 - bot - INFO - Initializing database at /tmp/pytest-of-root/pytest-6/test_top_features_is_bounded_a0/test.db ...
+2026-09-08 14:54:04 - bot - INFO - No backup to restore — fresh DB at /tmp/pytest-of-root/pytest-6/test_top_features_is_bounded_a0/test.db
+2026-09-08 14:54:04 - bot - INFO - DB empty and GitHub not configured — skip auto-restore
+2026-09-08 14:54:04 - bot - INFO - Migration: all azan notifications set to OFF by default
+2026-09-08 14:54:04 - bot - INFO - Database ready — 0 users
+2026-09-08 14:54:04 - bot - INFO - Initializing database at /tmp/tmpsprv5k0d/test.db ...
+2026-09-08 14:54:04 - bot - INFO - No backup to restore — fresh DB at /tmp/tmpsprv5k0d/test.db
+2026-09-08 14:54:04 - bot - INFO - DB empty and GitHub not configured — skip auto-restore
+2026-09-08 14:54:04 - bot - INFO - Migration: all azan notifications set to OFF by default
+2026-09-08 14:54:04 - bot - INFO - Database ready — 0 users
+2026-09-08 15:07:41 - bot - INFO - Initializing database at /tmp/tmph2b_75it/test.db ...
+2026-09-08 15:07:41 - bot - INFO - No backup to restore — fresh DB at /tmp/tmph2b_75it/test.db
+2026-09-08 15:07:41 - bot - INFO - DB empty and GitHub not configured — skip auto-restore
+2026-09-08 15:07:41 - bot - INFO - Migration: all azan notifications set to OFF by default
+2026-09-08 15:07:41 - bot - INFO - Database ready — 0 users
+2026-09-08 15:07:41 - bot - WARNING - AI provider __v11_test_provider__ circuit-open for 45.0s after 3 consecutive failures
+2026-09-08 15:07:42 - bot - INFO - Initializing database at /tmp/pytest-of-root/pytest-7/test_user_preferences_roundtri0/test.db ...
+2026-09-08 15:07:42 - bot - INFO - No backup to restore — fresh DB at /tmp/pytest-of-root/pytest-7/test_user_preferences_roundtri0/test.db
+2026-09-08 15:07:42 - bot - INFO - DB empty and GitHub not configured — skip auto-restore
+2026-09-08 15:07:42 - bot - INFO - Migration: all azan notifications set to OFF by default
+2026-09-08 15:07:42 - bot - INFO - Database ready — 0 users
+2026-09-08 15:07:42 - bot - INFO - Initializing database at /tmp/pytest-of-root/pytest-7/test_top_features_is_bounded_a0/test.db ...
+2026-09-08 15:07:42 - bot - INFO - No backup to restore — fresh DB at /tmp/pytest-of-root/pytest-7/test_top_features_is_bounded_a0/test.db
+2026-09-08 15:07:42 - bot - INFO - DB empty and GitHub not configured — skip auto-restore
+2026-09-08 15:07:42 - bot - INFO - Migration: all azan notifications set to OFF by default
+2026-09-08 15:07:42 - bot - INFO - Database ready — 0 users
+2026-09-08 15:07:42 - bot - INFO - Initializing database at /tmp/tmpm6dhseb6/test.db ...
+2026-09-08 15:07:42 - bot - INFO - No backup to restore — fresh DB at /tmp/tmpm6dhseb6/test.db
+2026-09-08 15:07:42 - bot - INFO - DB empty and GitHub not configured — skip auto-restore
+2026-09-08 15:07:42 - bot - INFO - Migration: all azan notifications set to OFF by default
+2026-09-08 15:07:42 - bot - INFO - Database ready — 0 users
