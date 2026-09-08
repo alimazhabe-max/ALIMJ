@@ -1,0 +1,47 @@
+services:
+    type: web
+    name: prayer-bot
+    runtime: python
+    repo: https://github.com/alimazhabe-max/ALIMJ  # آدرس مخزن خود را وارد کنید
+    plan: free
+    envVars:
+      - key: BOT_TOKEN
+        sync: false
+      - key: ADMIN_IDS
+        sync: false
+      - key: CHANNEL_ID
+        sync: false
+      - key: CHANNEL_LINK
+        sync: false
+      - key: TIMEZONE
+        value: Asia/Tehran
+      - key: PRAYER_METHOD
+        value: 7
+      - key: CACHE_TTL
+        value: 300
+      - key: RATE_LIMIT
+        value: 10
+      - key: LOG_LEVEL
+        value: INFO
+      - key: HTTP_TIMEOUT
+        value: 15
+      - key: HTTP_RETRIES
+        value: 2
+      - key: HTTP_GET_CACHE_TTL
+        value: 12
+      - key: HTTP_GET_CACHE_MAX
+        value: 512
+      - key: AI_TOOL_TIMEOUT
+        value: 25
+      - key: AI_TOOL_CONCURRENCY
+        value: 8
+      - key: AI_ROUTING_MODE
+        value: balanced
+      - key: METRICS_TOKEN
+        sync: false
+      - key: STARTUP_CHECK
+        value: "true"
+      - key: RELEASE_VERSION
+        value: "30.5.2"
+    buildCommand: python -c "from bot.release import version_string; print('Building', version_string())" && pip install -r requirements.txt
+    startCommand: python -m bot.main

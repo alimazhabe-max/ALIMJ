@@ -1,0 +1,16 @@
+python-telegram-bot[job-queue]==20.3
+requests==2.32.3
+jdatetime
+hijri-converter
+apscheduler
+pytz
+Flask
+python-dotenv
+httpx[http2]
+httpcore
+beautifulsoup4
+pypdf
+edge-tts
+matplotlib
+
+Pillow>=10.0
