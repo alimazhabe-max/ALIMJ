@@ -1,7 +1,6 @@
 """Crypto-analysis orchestration extracted from finance.py."""
 from __future__ import annotations
 from bot.features.market import finance as _f
-import asyncio
 
 # Runtime aliases; this module is imported lazily by the finance facade.
 # Keep all dependencies that were originally module-level in finance.py exposed
@@ -87,7 +86,7 @@ async def analyze_crypto(symbol: str, ai_summary: str = "", ai_guide: str = "", 
     klines_t = _fetch_klines_interval(pair, tf, klimit)
     fund_t = _fetch_fundamentals(coin_id, base)
 
-    detail, binance, fg, klines, fund = await asyncio.gather(
+    detail, binance, fg, klines, fund = await __import__("asyncio").gather(
         detail_t, binance_t, fg_t, klines_t, fund_t
     )
 

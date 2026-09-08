@@ -5,9 +5,14 @@ market facade. It lazily references runtime HTTP/logging dependencies from
 finance.py after that module is initialized.
 """
 from __future__ import annotations
+import asyncio
 from bot.features.market import finance as _f
 from bot.logger import logger
 from bot.utils.http_client import pooled_async_client, request_with_retry
+
+# Compatibility aliases preserved from the original finance.py implementation.
+# finance_ta is loaded through the finance facade after it is initialized.
+_fetch_klines_interval = _f._fetch_klines_interval
 
 async def _fetch_klines_for_ta(pair: str, limit: int = 200) -> list:
     """OHLCV از Binance Vision برای تحلیل تکنیکال"""
