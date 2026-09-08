@@ -7,7 +7,6 @@ from bot.features.market import finance as _f
 # here after the V27 decomposition.  The facade is fully initialized before
 # finance_crypto is imported, so these aliases avoid circular imports while
 # preserving the original analysis pipeline.
-import asyncio
 
 SYMBOL_TO_ID = _f.SYMBOL_TO_ID
 resolve_coin_id = _f.resolve_coin_id
@@ -87,7 +86,8 @@ async def analyze_crypto(symbol: str, ai_summary: str = "", ai_guide: str = "", 
     klines_t = _fetch_klines_interval(pair, tf, klimit)
     fund_t = _fetch_fundamentals(coin_id, base)
 
-    detail, binance, fg, klines, fund = await asyncio.gather(
+    import asyncio as _asyncio
+    detail, binance, fg, klines, fund = await _asyncio.gather(
         detail_t, binance_t, fg_t, klines_t, fund_t
     )
 
