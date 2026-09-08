@@ -227,6 +227,7 @@ async def _ask_ai_stream_and_send(update, context, user_id: int, text: str):
         # Streaming واقعی با ویرایش کنترل‌شده برای جلوگیری از Flood Limit تلگرام.
         last_edit = time.monotonic()
         last_len = 0
+        last_rendered = "✍️ در حال نوشتن..."
         async for piece, label in ask_ai_stream(user_id, text):
             if label:
                 provider_label = label
@@ -239,11 +240,15 @@ async def _ask_ai_stream_and_send(update, context, user_id: int, text: str):
                     preview = "🤖 " + current
                     if len(preview) > 4000:
                         preview = preview[:3990] + "…"
-                    try:
-                        await sent.edit_text(preview)
+                    if preview != last_rendered:
+                        try:
+                            await sent.edit_text(preview)
+                            last_rendered = preview
+                            last_edit, last_len = now, len(current)
+                        except Exception as edit_error:
+                            logger.debug("AI stream edit skipped: %s", edit_error)
+                    else:
                         last_edit, last_len = now, len(current)
-                    except Exception as edit_error:
-                        logger.debug("AI stream edit skipped: %s", edit_error)
 
         answer = "".join(buf).strip()
         if not answer:
@@ -253,10 +258,23 @@ async def _ask_ai_stream_and_send(update, context, user_id: int, text: str):
         final = "🤖 " + answer
         if len(final) > 4000:
             final = final[:3990] + "…"
-        try:
-            await sent.edit_text(final)
-        except Exception:
-            await msg.reply_text(final)
+        # اگر آخرین ویرایش دقیقاً همان متن نهایی بوده، دوباره پیام نفرست.
+        # این جلوی Duplicate Reply را در خطای «Message is not modified» می‌گیرد.
+        if final != last_rendered:
+            try:
+                await sent.edit_text(final)
+                last_rendered = final
+            except Exception as edit_error:
+                # یک retry روی همان پیام؛ هرگز fallback به reply_text نکن،
+                # چون ممکن است درخواست edit سمت تلگرام موفق شده باشد و فقط
+                # پاسخ شبکه از دست رفته باشد؛ reply مجدد در این حالت دو جواب می‌سازد.
+                logger.warning("AI final edit failed; retrying same message: %s", edit_error)
+                try:
+                    await asyncio.sleep(0.15)
+                    await sent.edit_text(final)
+                    last_rendered = final
+                except Exception as retry_error:
+                    logger.warning("AI final edit retry failed: %s", retry_error)
         return answer, provider_label or "ai"
 
     except Exception:
