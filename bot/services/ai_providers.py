@@ -21,6 +21,12 @@ from bot.services.ai_runtime import (
 from bot.services.ai_tools import get_tool_definitions, execute_tool
 from bot.utils.http_client import request_with_retry
 
+
+def _legacy_ai_context():
+    """Load facade-owned prompt/history helpers lazily to avoid circular imports."""
+    from bot.services import ai_service
+    return ai_service.SYSTEM_PROMPT, ai_service._messages
+
 async def _post_json(url: str, *, headers=None, json=None, params=None) -> tuple[int, dict]:
     """POST with shared connection pool and bounded transient retries."""
     client = _get_http()
@@ -116,7 +122,7 @@ async def _gemini(
 
             for _round in range(max_tool_rounds + 1 if use_tools else 1):
                 payload = {
-                    "systemInstruction": {"parts": [{"text": SYSTEM_PROMPT}]},
+                    "systemInstruction": {"parts": [{"text": _legacy_ai_context()[0]}]},
                     "contents": working_contents,
                     "generationConfig": {"maxOutputTokens": MAX_OUTPUT},
                     "safetySettings": GEMINI_SAFETY_SETTINGS,
@@ -246,7 +252,7 @@ async def _openai_compatible(
         if extra_headers:
             headers.update(extra_headers)
 
-        messages = _messages(user_id, prompt)
+        messages = _legacy_ai_context()[1](user_id, prompt)
         # حداکثر ۲ دور tool calling تا گیر نکند
         max_tool_rounds = 2 if use_tools else 0
 
@@ -385,7 +391,7 @@ async def _cloudflare(user_id: int, prompt: str, model: str) -> str:
 
     url = f"https://api.cloudflare.com/client/v4/accounts/{account}/ai/run/{model}"
     payload = {
-        "messages": _messages(user_id, prompt),
+        "messages": _legacy_ai_context()[1](user_id, prompt),
         "max_tokens": MAX_OUTPUT,
     }
 
