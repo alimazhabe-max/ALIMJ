@@ -7,7 +7,7 @@ import re
 from bot.database import set_birth_date
 from bot.utils.helpers import (
     get_date_tools_keyboard, get_tools_keyboard, get_market_keyboard,
-    get_profile_keyboard, get_crypto_analysis_keyboard, get_font_keyboard,
+    get_profile_keyboard, get_font_keyboard,
 )
 from bot.features.date.date_tools import (
     parse_shamsi, parse_any_date, parse_two_dates, parse_countdown,

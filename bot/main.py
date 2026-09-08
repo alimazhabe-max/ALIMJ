@@ -53,8 +53,17 @@ def metrics():
 
 @flask_app.route("/health")
 def health():
-    # Never expose filesystem paths or internal database details publicly.
-    return {"status": "ok", "time": str(datetime.now())}
+    # Never expose filesystem paths, admin IDs, or internal database details publicly.
+    from bot.release import APP_NAME, VERSION, RELEASE_CHANNEL
+    deployment_id = getattr(config, "DEPLOYMENT_ID", "")
+    return {
+        "status": "ok",
+        "app": APP_NAME,
+        "version": VERSION,
+        "channel": RELEASE_CHANNEL,
+        "deployment": deployment_id[:12] if deployment_id else "unknown",
+        "time": str(datetime.now()),
+    }
 
 
 def run_flask():
@@ -152,12 +161,50 @@ async def post_shutdown(app: Application):
         logger.warning(f"AI HTTP client close: {e}")
 
 
+def startup_self_check() -> None:
+    """Fail fast on broken deployment wiring before Telegram polling starts."""
+    checks = []
+    required_commands = (
+        "start", "help_command", "city_command", "language_command",
+        "calendar_command", "stats_command", "broadcast_command",
+        "backup_command", "restore_document_handler", "diagnostics_command",
+        "knowledge_command", "agent_command", "memory_command",
+        "automation_command", "plugins_command",
+    )
+    from bot.handlers import commands as command_module
+    for name in required_commands:
+        checks.append((f"command:{name}", callable(getattr(command_module, name, None))))
+
+    from bot.handlers import callbacks as callbacks_module
+    checks.append(("callback:button_handler", callable(getattr(callbacks_module, "button_handler", None))))
+
+    from bot.handlers import messages as messages_module
+    for name in ("text_handler", "media_ai_handler", "voice_ai_handler", "lens_command"):
+        checks.append((f"message:{name}", callable(getattr(messages_module, name, None))))
+
+    checks.append(("database:init_db", callable(init_db)))
+    checks.append(("database:backup_db", callable(backup_db)))
+
+    failed = [name for name, ok in checks if not ok]
+    if failed:
+        raise RuntimeError("Startup self-check failed: " + ", ".join(failed))
+
+    expected = getattr(config, "RELEASE_VERSION", "")
+    actual = version_string()
+    if expected and expected not in actual:
+        raise RuntimeError(f"RELEASE_VERSION mismatch: expected {expected}, running {actual}")
+    logger.info("✅ Startup self-check passed (%d checks)", len(checks))
+
+
 def main():
     logger.info("=" * 50)
     logger.info(f"🚀 Starting {version_string()}")
     logger.info(f"DB path: {DB_PATH}")
     logger.info(f"ADMIN_IDS: {config.ADMIN_IDS}")
     logger.info("=" * 50)
+    logger.info("Deployment ID: %s", getattr(config, "DEPLOYMENT_ID", "")[:12] or "unknown")
+    if getattr(config, "STARTUP_CHECK", True):
+        startup_self_check()
 
     init_db()
     backup_db()

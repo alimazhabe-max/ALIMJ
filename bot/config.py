@@ -61,6 +61,10 @@ class Config:
     # تعداد بکاپ‌هایی که نگه داشته می‌شوند
     BACKUP_KEEP = int(os.getenv("BACKUP_KEEP", "14"))
     AUTOMATION_DIGEST_HOUR = int(os.getenv("AUTOMATION_DIGEST_HOUR", "8"))
+    # Deployment/runtime diagnostics (safe to expose only as non-secret metadata).
+    RELEASE_VERSION = os.getenv("RELEASE_VERSION", "").strip()
+    DEPLOYMENT_ID = os.getenv("DEPLOYMENT_ID", os.getenv("RENDER_GIT_COMMIT", "")).strip()
+    STARTUP_CHECK = os.getenv("STARTUP_CHECK", "true").strip().lower() not in {"0", "false", "no", "off"}
 
 
 config = Config()
