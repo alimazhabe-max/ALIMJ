@@ -84,6 +84,11 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
         return
     logger.error("Exception while handling an update:", exc_info=err)
     try:
+        from bot.utils.observability import record_error
+        record_error("telegram_update", err)
+    except Exception:
+        pass
+    try:
         if not update or not isinstance(update, Update) or not update.effective_user:
             return
         uid = update.effective_user.id

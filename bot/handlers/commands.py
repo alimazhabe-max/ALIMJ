@@ -208,7 +208,7 @@ async def diagnostics_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     if user_id not in config.ADMIN_IDS:
         await update.message.reply_text(get_text(user_id, "admin_only"))
         return
-    from bot.utils.observability import snapshot
+    from bot.utils.observability import snapshot, recent_errors
     from bot.services.ai_service import _PROVIDER_HEALTH
     data = snapshot()
     lines = ["🩺 Diagnostics", ""]
@@ -217,6 +217,12 @@ async def diagnostics_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         lines.append(f"AI {provider}: ok={int(h['ok'])} fail={int(h['fail'])} cooldown={cooldown}s")
     for key, info in sorted(data["latency"].items()):
         lines.append(f"{key}: avg={info['avg_ms']}ms p95={info['p95_ms']}ms n={info['count']}")
+    errors = recent_errors(5)
+    if errors:
+        lines.append("")
+        lines.append("Recent errors:")
+        for item in errors:
+            lines.append(f"• {item['source']} / {item['type']}: {item['message']}")
     if len(lines) == 2:
         lines.append("هنوز متریک قابل توجهی ثبت نشده است.")
     await update.message.reply_text("\n".join(lines)[-3900:])
