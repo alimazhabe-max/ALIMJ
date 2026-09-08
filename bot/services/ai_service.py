@@ -30,7 +30,7 @@ from bot.services.ai_runtime import (
     _split_keys, _provider_keys, _key_id, _is_key_available, _mark_key_cooldown,
     _is_quota_error, _next_keys, _advance_rr, clear_history, _valid_selected_model,
     get_selected_model, set_selected_model, clear_selected_model, _env_models,
-    available_model_options, available_providers, models_for_provider,
+    available_model_options, available_providers, models_for_provider, _PROVIDER_PRETTY,
     enabled_providers, default_model_info, set_selected_provider, key_pool_status,
     _model_profile, _route_score, _provider_rank, _provider_available, _record_provider,
 )

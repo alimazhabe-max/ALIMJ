@@ -182,6 +182,50 @@ def startup_self_check() -> None:
     for name in ("text_handler", "media_ai_handler", "voice_ai_handler", "lens_command"):
         checks.append((f"message:{name}", callable(getattr(messages_module, name, None))))
 
+    # Validate the high-frequency UI/feature symbols too. These are imported lazily
+    # by handlers, so checking them at startup prevents production-only NameError/ImportError.
+    from bot.utils import keyboard_factory as keyboard_module
+    required_keyboards = (
+        "get_main_keyboard", "get_more_keyboard", "get_country_keyboard",
+        "get_language_keyboard", "get_iran_cities_keyboard", "get_iraq_cities_keyboard",
+        "get_font_keyboard", "get_font_en_keyboard", "get_date_tools_keyboard",
+        "get_tools_keyboard", "get_market_keyboard", "get_profile_keyboard",
+    )
+    for name in required_keyboards:
+        checks.append((f"keyboard:{name}", callable(getattr(keyboard_module, name, None))))
+
+    # Execute every zero/low-side-effect keyboard constructor. This catches
+    # runtime NameError/ImportError issues (e.g. missing Telegram classes)
+    # that AST/callable checks cannot detect. User-specific/stateful flows are
+    # intentionally excluded from startup to avoid touching the database.
+    smoke_keyboards = (
+        "get_main_keyboard", "get_ai_keyboard", "get_ai_model_keyboard",
+        "get_more_keyboard", "get_date_tools_keyboard", "get_religious_keyboard",
+        "get_market_keyboard", "get_weather_geo_keyboard", "get_tools_keyboard",
+        "get_azan_keyboard", "get_fun_keyboard", "get_joke_keyboard",
+        "get_profile_keyboard", "get_smart_settings_keyboard", "get_country_keyboard",
+        "get_iran_cities_keyboard", "get_iraq_cities_keyboard", "get_language_keyboard",
+        "get_font_keyboard", "get_font_en_keyboard", "get_font_fa_keyboard",
+    )
+    for name in smoke_keyboards:
+        constructor = getattr(keyboard_module, name, None)
+        if not callable(constructor):
+            raise RuntimeError(f"Runtime smoke missing keyboard: {name}")
+        try:
+            markup = constructor()
+            if markup is None:
+                raise RuntimeError("returned None")
+        except Exception as exc:
+            raise RuntimeError(f"Runtime smoke failed for keyboard:{name}: {type(exc).__name__}: {exc}") from exc
+    logger.info("🔥 Runtime smoke passed (%d keyboard constructors)", len(smoke_keyboards))
+
+    from bot.handlers import feature_handlers as feature_module
+    required_features = (
+        "date_tools_handler", "market_handler", "tools_handler", "font_handler",
+    )
+    for name in required_features:
+        checks.append((f"feature:{name}", callable(getattr(feature_module, name, None))))
+
     checks.append(("database:init_db", callable(init_db)))
     checks.append(("database:backup_db", callable(backup_db)))
 

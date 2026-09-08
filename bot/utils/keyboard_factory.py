@@ -1,3 +1,6 @@
+from bot.utils.city_data import IRAN_CITIES, IRAQ_CITIES
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup
+
 def get_refresh_button():
     """فقط دکمه بروزرسانی زیر پیام"""
     return InlineKeyboardMarkup([
