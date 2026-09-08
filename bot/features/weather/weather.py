@@ -31,6 +31,10 @@ def _request_get(url, *, params=None, headers=None, timeout=10):
     return _SESSION.get(url, params=params, headers=headers, timeout=timeout)
 
 
+# Compatibility alias: older weather paths use `_get`; keep one shared HTTP session.
+_get = _request_get
+
+
 CITY_COORDS = {
     "تهران": (35.6892, 51.3890), "مشهد": (36.2970, 59.6062), "اصفهان": (32.6546, 51.6680),
     "شیراز": (29.5918, 52.5837), "تبریز": (38.0962, 46.2738), "قم": (34.6416, 50.8746),
