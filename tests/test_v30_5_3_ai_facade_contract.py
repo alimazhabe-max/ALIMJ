@@ -41,3 +41,12 @@ def test_ai_providers_have_no_unresolved_prompt_symbols():
     names = {n.id for n in ast.walk(tree) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)}
     assert "SYSTEM_PROMPT" not in names
     assert "_messages" not in names
+
+
+def test_ai_stream_final_edit_does_not_send_duplicate_fallback_reply():
+    src = (ROOT / "bot/handlers/messages.py").read_text(encoding="utf-8")
+    assert 'last_rendered = "✍️ در حال نوشتن..."' in src
+    assert 'if final != last_rendered:' in src
+    assert 'await asyncio.sleep(0.15)' in src
+    final_block = src[src.index('        # اگر آخرین ویرایش دقیقاً همان متن نهایی بوده'):src.index('        return answer, provider_label or "ai"')]
+    assert 'await msg.reply_text(final)' not in final_block
