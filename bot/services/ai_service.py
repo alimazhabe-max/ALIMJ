@@ -488,6 +488,8 @@ IMAGE_GEN_MODEL = os.getenv(
     "GEMINI_IMAGE_MODEL",
     "gemini-3.1-flash-image",
 )
+TTS_VOICE = os.getenv("TTS_VOICE", "fa-IR-DilaraNeural")
+
 IMAGE_GEN_MODEL_FALLBACKS = tuple(
     x.strip() for x in os.getenv(
         "GEMINI_IMAGE_MODEL_FALLBACKS",
