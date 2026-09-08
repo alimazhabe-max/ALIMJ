@@ -1,6 +1,6 @@
 """Release metadata and lightweight runtime information for Rooze Ziba."""
 APP_NAME = "Rooze Ziba / ALIMJ"
-VERSION = "28.0.0"
+VERSION = "29.0.1"
 RELEASE_CHANNEL = "production"
 
 

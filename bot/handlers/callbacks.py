@@ -141,7 +141,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         kind = data.split(":", 1)[1]
         await _safe_answer(query)
         try:
-            from bot.database import get_user_city
             city = get_user_city(user_id) or "تهران"
             if kind == "weather":
                 from bot.api.weather import get_weather, format_weather

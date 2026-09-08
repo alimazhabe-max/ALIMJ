@@ -11,6 +11,7 @@ from bot.handlers.commands import (
     start, help_command, city_command, language_command,
     calendar_command, stats_command, broadcast_command,
     backup_command, restore_document_handler, diagnostics_command, knowledge_command, agent_command,
+    memory_command, automation_command, plugins_command,
 )
 from bot.handlers.callbacks import button_handler
 from bot.handlers.messages import text_handler, media_ai_handler, voice_ai_handler, lens_command
