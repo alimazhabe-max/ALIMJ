@@ -1,9 +1,0 @@
-__pycache__/
-*.pyc
-*.log
-bot_data.db
-backups/
-.env
-venv/
-*.db
-*.sqlite3
