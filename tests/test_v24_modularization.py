@@ -27,4 +27,4 @@ def test_jokes_immutable():
 def test_release():
     ns = {}
     exec((ROOT / 'bot/release.py').read_text(encoding='utf-8'), ns)
-    assert ns['VERSION'] == '28.0.0'
+    assert ns['VERSION'] == '29.0.1'
