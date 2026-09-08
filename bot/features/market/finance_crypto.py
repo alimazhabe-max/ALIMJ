@@ -3,8 +3,22 @@ from __future__ import annotations
 from bot.features.market import finance as _f
 
 # Runtime aliases; this module is imported lazily by the finance facade.
+# Keep all dependencies that were originally module-level in finance.py exposed
+# here after the V27 decomposition.  The facade is fully initialized before
+# finance_crypto is imported, so these aliases avoid circular imports while
+# preserving the original analysis pipeline.
+import asyncio
+
 SYMBOL_TO_ID = _f.SYMBOL_TO_ID
 resolve_coin_id = _f.resolve_coin_id
+pooled_async_client = _f.pooled_async_client
+request_with_retry = _f.request_with_retry
+_fetch_coingecko_detail = _f._fetch_coingecko_detail
+_fetch_binance_futures = _f._fetch_binance_futures
+_fetch_klines_interval = _f._fetch_klines_interval
+_atr = _f._atr
+_detect_candle_patterns = _f._detect_candle_patterns
+_format_fear_greed = getattr(_f, "_format_fear_greed", None)
 get_crypto_analysis_short = getattr(_f, "get_crypto_analysis_short", None)
 _fetch_klines_for_ta = _f._fetch_klines_for_ta
 _compute_ta = _f._compute_ta
@@ -26,6 +40,10 @@ _pair_from_symbol = _f._pair_from_symbol
 _format_long_short = _f._format_long_short
 _fetch_fear_greed = _f._fetch_fear_greed
 logger = _f.logger
+
+if _format_fear_greed is None:
+    def _format_fear_greed(data):
+        return str(data or "")
 
 async def analyze_crypto(symbol: str, ai_summary: str = "", ai_guide: str = "", timeframe: str = "4h") -> str:
     """
