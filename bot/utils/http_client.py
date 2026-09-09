@@ -5,6 +5,7 @@ import time
 import hashlib
 from contextlib import asynccontextmanager
 from typing import Any
+from urllib.parse import urlparse
 from bot.utils.observability import record as record_metric
 import httpx
 
@@ -18,6 +19,9 @@ _async_lock = asyncio.Lock()
 _GET_CACHE: dict[str, tuple[float, httpx.Response]] = {}
 _GET_CACHE_MAX = max(64, int(__import__('os').getenv('HTTP_GET_CACHE_MAX', '1024')))
 _GET_CACHE_TTL = max(0, float(__import__('os').getenv('HTTP_GET_CACHE_TTL', '12')))
+_RATE_LIMIT_MAX_DELAY = max(1.0, float(__import__('os').getenv('HTTP_429_MAX_DELAY', '10')))
+_RATE_LIMIT_COOLDOWN: dict[str, float] = {}
+_RATE_LIMIT_LOCK = asyncio.Lock()
 
 def _cache_key(url: str, kwargs: dict[str, Any]) -> str:
     params = kwargs.get('params')
@@ -46,9 +50,30 @@ async def pooled_async_client():
     """Yield the shared client without closing it at the end of a request."""
     yield await get_async_client()
 
+async def _wait_for_rate_limit(host: str) -> None:
+    """Avoid sending another request while a host is in a known 429 cooldown."""
+    async with _RATE_LIMIT_LOCK:
+        until = _RATE_LIMIT_COOLDOWN.get(host, 0.0)
+    delay = until - time.monotonic()
+    if delay > 0:
+        await asyncio.sleep(min(_RATE_LIMIT_MAX_DELAY, delay))
+
+
+def _set_rate_limit(host: str, delay: float) -> None:
+    if delay <= 0:
+        return
+    _RATE_LIMIT_COOLDOWN[host] = max(_RATE_LIMIT_COOLDOWN.get(host, 0.0), time.monotonic() + min(_RATE_LIMIT_MAX_DELAY, delay))
+    if len(_RATE_LIMIT_COOLDOWN) > 128:
+        now = time.monotonic()
+        for key, until in list(_RATE_LIMIT_COOLDOWN.items()):
+            if until <= now:
+                _RATE_LIMIT_COOLDOWN.pop(key, None)
+
+
 async def request_with_retry(method: str, url: str, *, retries: int | None = None, **kwargs: Any) -> httpx.Response:
-    """HTTP request with retry/backoff and a short GET cache to reduce API pressure."""
+    """HTTP request with retry/backoff, 429 host cooldown and a short GET cache."""
     method = method.upper()
+    host = urlparse(url).netloc.lower()
     cache_key = _cache_key(url, kwargs) if method == 'GET' and _GET_CACHE_TTL > 0 else None
     if cache_key:
         cached = _GET_CACHE.get(cache_key)
@@ -60,6 +85,7 @@ async def request_with_retry(method: str, url: str, *, retries: int | None = Non
     attempts = _RETRIES if retries is None else max(0, retries)
     last: Exception | None = None
     for attempt in range(attempts + 1):
+        await _wait_for_rate_limit(host)
         try:
             started = time.monotonic()
             response = await client.request(method, url, **kwargs)
@@ -80,9 +106,11 @@ async def request_with_retry(method: str, url: str, *, retries: int | None = Non
                 return response
             retry_after = response.headers.get('retry-after')
             try:
-                delay = min(4.0, max(0.15, float(retry_after))) if retry_after else 0.35 * (2 ** attempt)
-            except ValueError:
-                delay = 0.35 * (2 ** attempt)
+                delay = min(_RATE_LIMIT_MAX_DELAY, max(0.25, float(retry_after))) if retry_after else min(_RATE_LIMIT_MAX_DELAY, 0.8 * (2 ** attempt))
+            except (TypeError, ValueError):
+                delay = min(_RATE_LIMIT_MAX_DELAY, 0.8 * (2 ** attempt))
+            if response.status_code == 429:
+                _set_rate_limit(host, delay)
             await asyncio.sleep(delay)
         except (httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError) as exc:
             last = exc
@@ -103,3 +131,4 @@ async def close_async_client() -> None:
 def clear_http_cache() -> None:
     """Drop in-memory GET responses during lifecycle shutdown/tests."""
     _GET_CACHE.clear()
+    _RATE_LIMIT_COOLDOWN.clear()
