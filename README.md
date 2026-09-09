@@ -52,7 +52,7 @@ Important deployment variables:
 - `ADMIN_IDS`
 - `DB_PATH` / persistent disk path when persistence is available
 - `METRICS_TOKEN` if `/metrics` is exposed
-- `RELEASE_VERSION=35.0.0`
+- `RELEASE_VERSION=36.0.0`
 - `STARTUP_CHECK=true`
 
 The startup self-check runs before polling and validates important handler/keyboard contracts.
@@ -116,3 +116,7 @@ SQLite uses WAL/transaction retries. Keep database files on persistent storage i
 ## Compatibility rule
 
 Existing providers, fallbacks, handlers, tools and user-facing features are preserved. Refactors should keep public import/function contracts whenever practical. `bot/features/fun/jokes_data.json` is immutable and must not be edited, regenerated or indexed.
+
+### Database schema (V36)
+
+The SQLite layer now tracks its schema version in `schema_meta` and applied migrations in `schema_migrations`. Existing databases are adopted safely at the V1 baseline after the normal schema initialization; user data is not dropped. Future schema changes must be added as numbered, idempotent migrations.
