@@ -1,5 +1,6 @@
 """Crypto-analysis orchestration extracted from finance.py."""
 from __future__ import annotations
+import asyncio
 from bot.features.market import finance as _f
 
 # Runtime aliases; this module is imported lazily by the finance facade.
@@ -357,57 +358,58 @@ def _build_smart_summary_pair(pair, trend, ta, support, resistance, signal, scor
 
 
 async def _fetch_fundamentals(coin_id: str | None, base: str) -> dict:
-    """داده فاندامنتال از CoinGecko + DefiLlama + Global"""
+    """فاندامنتال‌های سبک؛ منابع مستقل هم‌زمان خوانده می‌شوند."""
     out = {}
-    headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
-    try:
-        async with pooled_async_client() as c:
-            # global dominance
-            try:
-                rg = await request_with_retry("GET", "https://api.coingecko.com/api/v3/global")
-                if rg.status_code == 200:
-                    g = (rg.json() or {}).get("data") or {}
-                    out["btc_dom"] = (g.get("market_cap_percentage") or {}).get("btc")
-            except Exception:
-                pass
-            # DefiLlama TVL by protocol slug guess
-            slug_map = {
-                "BTC": None, "ETH": "ethereum", "SOL": "solana", "AVAX": "avalanche",
-                "DOT": "polkadot", "ADA": "cardano", "TRX": "tron", "NEAR": "near",
-                "MATIC": "polygon", "ARB": "arbitrum", "OP": "optimism", "SUI": "sui",
-                "TON": "ton", "LINK": "chainlink",
-            }
-            slug = slug_map.get(base.upper())
-            if slug:
-                try:
-                    rt = await request_with_retry("GET", f"https://api.llama.fi/tvl/{slug}")
-                    if rt.status_code == 200:
-                        val = rt.json()
-                        if isinstance(val, (int, float)) and val > 0:
-                            out["tvl"] = float(val)
-                except Exception:
-                    pass
-            # simple price fallback if needed
-            if coin_id:
-                try:
-                    rs = await request_with_retry("GET", 
-                        "https://api.coingecko.com/api/v3/simple/price",
-                        params={
-                            "ids": coin_id,
-                            "vs_currencies": "usd",
-                            "include_market_cap": "true",
-                            "include_24hr_vol": "true",
-                        },
-                    )
-                    if rs.status_code == 200:
-                        row = (rs.json() or {}).get(coin_id) or {}
-                        out["price"] = row.get("usd")
-                        out["mcap"] = row.get("usd_market_cap")
-                        out["vol"] = row.get("usd_24h_vol")
-                except Exception:
-                    pass
-    except Exception as e:
-        logger.warning(f"fundamentals: {e}")
+    retries = max(0, int(__import__('os').getenv("MARKET_HTTP_RETRIES", "0")))
+    slug_map = {
+        "BTC": None, "ETH": "ethereum", "SOL": "solana", "AVAX": "avalanche",
+        "DOT": "polkadot", "ADA": "cardano", "TRX": "tron", "NEAR": "near",
+        "MATIC": "polygon", "ARB": "arbitrum", "OP": "optimism", "SUI": "sui",
+        "TON": "ton", "LINK": "chainlink",
+    }
+    slug = slug_map.get(base.upper())
+
+    async def _global():
+        try:
+            return await request_with_retry("GET", "https://api.coingecko.com/api/v3/global", retries=retries)
+        except Exception:
+            return None
+
+    async def _tvl():
+        if not slug:
+            return None
+        try:
+            return await request_with_retry("GET", f"https://api.llama.fi/tvl/{slug}", retries=retries)
+        except Exception:
+            return None
+
+    async def _simple():
+        if not coin_id:
+            return None
+        try:
+            return await request_with_retry(
+                "GET", "https://api.coingecko.com/api/v3/simple/price", retries=retries,
+                params={
+                    "ids": coin_id, "vs_currencies": "usd",
+                    "include_market_cap": "true", "include_24hr_vol": "true",
+                },
+            )
+        except Exception:
+            return None
+
+    rg, rt, rs = await asyncio.gather(_global(), _tvl(), _simple())
+    if rg is not None and getattr(rg, "status_code", 0) == 200:
+        g = (rg.json() or {}).get("data") or {}
+        out["btc_dom"] = (g.get("market_cap_percentage") or {}).get("btc")
+    if rt is not None and getattr(rt, "status_code", 0) == 200:
+        val = rt.json()
+        if isinstance(val, (int, float)) and val > 0:
+            out["tvl"] = float(val)
+    if rs is not None and getattr(rs, "status_code", 0) == 200 and coin_id:
+        row = (rs.json() or {}).get(coin_id) or {}
+        out["price"] = row.get("usd")
+        out["mcap"] = row.get("usd_market_cap")
+        out["vol"] = row.get("usd_24h_vol")
     return out
 
 

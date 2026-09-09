@@ -17,6 +17,10 @@ from bot.utils.http_client import pooled_async_client, request_with_retry
 _cache = {}
 _cache_t = {}
 _cache_locks = {}
+_HTTP_DATA_CACHE = {}
+_HTTP_DATA_CACHE_T = {}
+_HTTP_DATA_CACHE_TTL = 30
+_HTTP_DATA_CACHE_MAX = 128
 
 async def _cache_lock(key):
     lock = _cache_locks.get(key)
@@ -330,22 +334,31 @@ async def get_crypto_chart(symbol: str, days: int = 7) -> Tuple[Optional[bytes],
 
 
 async def _fetch_klines_interval(pair: str, interval: str, limit: int) -> list:
+    key = f"klines:{pair}:{interval}:{limit}"
+    now = asyncio.get_running_loop().time()
+    cached = _HTTP_DATA_CACHE.get(key)
+    if cached is not None and now - _HTTP_DATA_CACHE_T.get(key, 0) < _HTTP_DATA_CACHE_TTL:
+        return cached
+    retries = max(0, int(__import__('os').getenv("MARKET_HTTP_RETRIES", "0")))
     headers = {"User-Agent": "Mozilla/5.0"}
     try:
         async with pooled_async_client() as c:
             r = await request_with_retry("GET", 
-                "https://data-api.binance.vision/api/v3/klines",
+                "https://data-api.binance.vision/api/v3/klines", retries=retries,
                 params={"symbol": pair, "interval": interval, "limit": limit},
             )
             if r.status_code == 200:
                 data = r.json() or []
                 if data:
+                    _HTTP_DATA_CACHE[key] = data
+                    _HTTP_DATA_CACHE_T[key] = now
+                    _trim_http_data_cache()
                     return data
             # OKX map
             okx_bar = {"15m": "15m", "1h": "1H", "4h": "4H", "1d": "1D"}.get(interval, "1H")
             okx_sym = pair.replace("USDT", "-USDT")
             r2 = await request_with_retry("GET", 
-                "https://www.okx.com/api/v5/market/candles",
+                "https://www.okx.com/api/v5/market/candles", retries=retries,
                 params={"instId": okx_sym, "bar": okx_bar, "limit": str(min(limit, 300))},
             )
             if r2.status_code == 200:
@@ -353,18 +366,40 @@ async def _fetch_klines_interval(pair: str, interval: str, limit: int) -> list:
                 out = []
                 for row in reversed(rows):
                     out.append([int(row[0]), row[1], row[2], row[3], row[4], row[5]])
+                _HTTP_DATA_CACHE[key] = out
+                _HTTP_DATA_CACHE_T[key] = now
+                _trim_http_data_cache()
                 return out
     except Exception as e:
         logger.warning(f"klines interval: {e}")
     return []
 
 
+def _trim_http_data_cache() -> None:
+    if len(_HTTP_DATA_CACHE) <= _HTTP_DATA_CACHE_MAX:
+        return
+    now = asyncio.get_running_loop().time()
+    for key, ts in list(_HTTP_DATA_CACHE_T.items()):
+        if now - ts >= _HTTP_DATA_CACHE_TTL:
+            _HTTP_DATA_CACHE.pop(key, None)
+            _HTTP_DATA_CACHE_T.pop(key, None)
+    while len(_HTTP_DATA_CACHE) > _HTTP_DATA_CACHE_MAX:
+        key = next(iter(_HTTP_DATA_CACHE))
+        _HTTP_DATA_CACHE.pop(key, None)
+        _HTTP_DATA_CACHE_T.pop(key, None)
+
 
 async def _fetch_coingecko_detail(coin_id: str) -> dict:
+    key = f"cg-detail:{coin_id}"
+    now = asyncio.get_running_loop().time()
+    cached = _HTTP_DATA_CACHE.get(key)
+    if cached is not None and now - _HTTP_DATA_CACHE_T.get(key, 0) < 30:
+        return cached
+    retries = max(0, int(__import__('os').getenv("MARKET_HTTP_RETRIES", "0")))
     try:
         async with pooled_async_client() as c:
             r = await request_with_retry("GET", 
-                f"https://api.coingecko.com/api/v3/coins/{coin_id}",
+                f"https://api.coingecko.com/api/v3/coins/{coin_id}", retries=retries,
                 params={
                     "localization": "false",
                     "tickers": "false",
@@ -374,70 +409,62 @@ async def _fetch_coingecko_detail(coin_id: str) -> dict:
                 },
             )
             if r.status_code == 200:
-                return r.json() or {}
+                data = r.json() or {}
+                _HTTP_DATA_CACHE[key] = data
+                _HTTP_DATA_CACHE_T[key] = now
+                _trim_http_data_cache()
+                return data
     except Exception as e:
         logger.warning(f"cg detail: {e}")
     return {}
 
 
 async def _fetch_binance_futures(symbol: str) -> dict:
-    """Funding, OI, حجم + نسبت لانگ/شورت حساب‌ها و تریدرهای برتر"""
+    """Funding/OI/volume + long/short ratios, fetched in parallel."""
     sym = (symbol or "").upper().replace("USDT", "").replace("-", "") + "USDT"
+    key = f"futures:{sym}"
+    now = asyncio.get_running_loop().time()
+    cached = _HTTP_DATA_CACHE.get(key)
+    if cached is not None and now - _HTTP_DATA_CACHE_T.get(key, 0) < 20:
+        return dict(cached)
+    retries = max(0, int(__import__('os').getenv("MARKET_HTTP_RETRIES", "0")))
     out = {}
     try:
-        async with pooled_async_client() as c:
-            r = await request_with_retry("GET", "https://fapi.binance.com/fapi/v1/premiumIndex", params={"symbol": sym})
-            if r.status_code == 200:
-                d = r.json()
-                out["funding_rate"] = float(d.get("lastFundingRate") or 0) * 100
-                out["mark_price"] = float(d.get("markPrice") or 0)
-            r2 = await request_with_retry("GET", "https://fapi.binance.com/fapi/v1/openInterest", params={"symbol": sym})
-            if r2.status_code == 200:
-                out["open_interest"] = float(r2.json().get("openInterest") or 0)
-            r3 = await request_with_retry("GET", "https://fapi.binance.com/fapi/v1/ticker/24hr", params={"symbol": sym})
-            if r3.status_code == 200:
-                tk = r3.json()
-                out["volume_24h"] = float(tk.get("quoteVolume") or 0)
-                out["price_change_pct"] = float(tk.get("priceChangePercent") or 0)
-
-            # نسبت لانگ/شورت — حساب‌های معمولی (global)
-            r4 = await request_with_retry("GET", 
-                "https://fapi.binance.com/futures/data/globalLongShortAccountRatio",
-                params={"symbol": sym, "period": "1h", "limit": 1},
-            )
-            if r4.status_code == 200:
-                arr = r4.json() or []
-                if arr:
-                    row = arr[-1]
-                    out["ls_global_ratio"] = float(row.get("longShortRatio") or 0)
-                    out["ls_global_long"] = float(row.get("longAccount") or 0) * 100
-                    out["ls_global_short"] = float(row.get("shortAccount") or 0) * 100
-
-            # نسبت لانگ/شورت — تریدرهای برتر
-            r5 = await request_with_retry("GET", 
-                "https://fapi.binance.com/futures/data/topLongShortAccountRatio",
-                params={"symbol": sym, "period": "1h", "limit": 1},
-            )
-            if r5.status_code == 200:
-                arr = r5.json() or []
-                if arr:
-                    row = arr[-1]
-                    out["ls_top_ratio"] = float(row.get("longShortRatio") or 0)
-                    out["ls_top_long"] = float(row.get("longAccount") or 0) * 100
-                    out["ls_top_short"] = float(row.get("shortAccount") or 0) * 100
-
-            # نسبت پوزیشن (نه فقط تعداد حساب) تریدرهای برتر
-            r6 = await request_with_retry("GET", 
-                "https://fapi.binance.com/futures/data/topLongShortPositionRatio",
-                params={"symbol": sym, "period": "1h", "limit": 1},
-            )
-            if r6.status_code == 200:
-                arr = r6.json() or []
-                if arr:
-                    row = arr[-1]
-                    out["ls_pos_ratio"] = float(row.get("longShortRatio") or 0)
-                    out["ls_pos_long"] = float(row.get("longAccount") or 0) * 100
-                    out["ls_pos_short"] = float(row.get("shortAccount") or 0) * 100
+        urls = [
+            ("premium", "https://fapi.binance.com/fapi/v1/premiumIndex", {"symbol": sym}),
+            ("oi", "https://fapi.binance.com/fapi/v1/openInterest", {"symbol": sym}),
+            ("ticker", "https://fapi.binance.com/fapi/v1/ticker/24hr", {"symbol": sym}),
+            ("global", "https://fapi.binance.com/futures/data/globalLongShortAccountRatio", {"symbol": sym, "period": "1h", "limit": 1}),
+            ("top", "https://fapi.binance.com/futures/data/topLongShortAccountRatio", {"symbol": sym, "period": "1h", "limit": 1}),
+            ("pos", "https://fapi.binance.com/futures/data/topLongShortPositionRatio", {"symbol": sym, "period": "1h", "limit": 1}),
+        ]
+        responses = await asyncio.gather(*[
+            request_with_retry("GET", url, retries=retries, params=params)
+            for _, url, params in urls
+        ], return_exceptions=True)
+        for (name, _, _), response in zip(urls, responses):
+            if isinstance(response, Exception) or getattr(response, "status_code", 0) != 200:
+                continue
+            try:
+                data = response.json()
+                if name == "premium":
+                    out["funding_rate"] = float(data.get("lastFundingRate") or 0) * 100
+                    out["mark_price"] = float(data.get("markPrice") or 0)
+                elif name == "oi":
+                    out["open_interest"] = float(data.get("openInterest") or 0)
+                elif name == "ticker":
+                    out["volume_24h"] = float(data.get("quoteVolume") or 0)
+                    out["price_change_pct"] = float(data.get("priceChangePercent") or 0)
+                else:
+                    arr = data or []
+                    if arr:
+                        row = arr[-1]
+                        prefix = {"global": "ls_global", "top": "ls_top", "pos": "ls_pos"}[name]
+                        out[f"{prefix}_ratio"] = float(row.get("longShortRatio") or 0)
+                        out[f"{prefix}_long"] = float(row.get("longAccount") or 0) * 100
+                        out[f"{prefix}_short"] = float(row.get("shortAccount") or 0) * 100
+            except Exception:
+                continue
     except Exception as e:
         logger.warning(f"binance futures {sym}: {e}")
 
@@ -447,7 +474,7 @@ async def _fetch_binance_futures(symbol: str) -> dict:
             base = sym.replace("USDT", "")
             async with pooled_async_client() as c:
                 r = await request_with_retry("GET", 
-                    "https://www.okx.com/api/v5/rubik/stat/contracts/long-short-account-ratio",
+                    "https://www.okx.com/api/v5/rubik/stat/contracts/long-short-account-ratio", retries=retries,
                     params={"ccy": base},
                 )
                 if r.status_code == 200:
@@ -463,7 +490,7 @@ async def _fetch_binance_futures(symbol: str) -> dict:
                         out["ls_global_short"] = short_pct
                         out["ls_source"] = "okx"
                 r2 = await request_with_retry("GET", 
-                    "https://www.okx.com/api/v5/rubik/stat/contracts/long-short-account-ratio-contract-top-trader",
+                    "https://www.okx.com/api/v5/rubik/stat/contracts/long-short-account-ratio-contract-top-trader", retries=retries,
                     params={"instId": f"{base}-USDT-SWAP"},
                 )
                 if r2.status_code == 200:
@@ -477,6 +504,10 @@ async def _fetch_binance_futures(symbol: str) -> dict:
                         out["ls_top_short"] = short_pct
         except Exception as e:
             logger.warning(f"okx ls {sym}: {e}")
+    if out:
+        _HTTP_DATA_CACHE[key] = dict(out)
+        _HTTP_DATA_CACHE_T[key] = now
+        _trim_http_data_cache()
     return out
 
 
@@ -520,9 +551,15 @@ def _format_long_short(binance: dict) -> list:
 
 async def _fetch_fear_greed(limit: int = 7):
     """شاخص ترس و طمع — امروز + میانگین چند روز"""
+    key = f"fear-greed:{limit}"
+    now = asyncio.get_running_loop().time()
+    cached = _HTTP_DATA_CACHE.get(key)
+    if cached is not None and now - _HTTP_DATA_CACHE_T.get(key, 0) < 60:
+        return cached
+    retries = max(0, int(__import__('os').getenv("MARKET_HTTP_RETRIES", "0")))
     try:
         async with pooled_async_client() as c:
-            r = await request_with_retry("GET", "https://api.alternative.me/fng/", params={"limit": str(limit)})
+            r = await request_with_retry("GET", "https://api.alternative.me/fng/", retries=retries, params={"limit": str(limit)})
             if r.status_code == 200:
                 data = (r.json() or {}).get("data") or []
                 if not data:
@@ -542,6 +579,9 @@ async def _fetch_fear_greed(limit: int = 7):
                     "avg_7": (sum(vals) / len(vals)) if vals else None,
                     "prev": int(data[1]["value"]) if len(data) > 1 else None,
                 }
+                _HTTP_DATA_CACHE[key] = out
+                _HTTP_DATA_CACHE_T[key] = now
+                _trim_http_data_cache()
                 return out
     except Exception as e:
         logger.warning(f"fear greed: {e}")

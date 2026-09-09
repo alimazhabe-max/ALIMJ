@@ -87,7 +87,7 @@ async def _fetch_tgju_bulk() -> dict:
     async with pooled_async_client() as client:
         for url in _AJAX_URLS:
             try:
-                r = await request_with_retry("GET", url)
+                r = await request_with_retry("GET", url, retries=0)
                 if r.status_code == 200:
                     data = r.json() or {}
                     current = data.get("current") or {}
@@ -125,7 +125,7 @@ async def _tgju_price(slug: str):
     try:
         url = f"https://www.tgju.org/profile/{slug}"
         async with pooled_async_client() as c:
-            r = await request_with_retry("GET", url)
+            r = await request_with_retry("GET", url, retries=0)
             r.raise_for_status()
         soup = BeautifulSoup(r.text, "html.parser")
         tag = soup.find(attrs={"data-col": "info.last_trade.PDrCotVal"})
@@ -184,7 +184,7 @@ async def _crypto_simple(ids: list):
     try:
         async with pooled_async_client() as client:
             r = await request_with_retry("GET", 
-                "https://api.coingecko.com/api/v3/simple/price",
+                "https://api.coingecko.com/api/v3/simple/price", retries=0,
                 params={
                     "ids": ",".join(ids),
                     "vs_currencies": "usd",
@@ -215,7 +215,7 @@ async def _crypto_simple(ids: list):
                 pid = mapping.get(cid)
                 if not pid:
                     continue
-                r = await request_with_retry("GET", f"https://api.coinpaprika.com/v1/tickers/{pid}")
+                r = await request_with_retry("GET", f"https://api.coinpaprika.com/v1/tickers/{pid}", retries=0)
                 if r.status_code == 200:
                     price = r.json().get("quotes", {}).get("USD", {}).get("price")
                     if price:
@@ -232,7 +232,7 @@ async def _crypto_simple(ids: list):
 async def _top_from_coinlore(limit: int = 20):
     try:
         async with pooled_async_client() as client:
-            r = await request_with_retry("GET", f"https://api.coinlore.net/api/tickers/?start=0&limit={limit}")
+            r = await request_with_retry("GET", f"https://api.coinlore.net/api/tickers/?start=0&limit={limit}", retries=0)
             if r.status_code != 200:
                 return []
             data = (r.json() or {}).get("data") or []
@@ -252,7 +252,7 @@ async def _top_from_coinlore(limit: int = 20):
 async def _top_from_paprika(limit: int = 20):
     try:
         async with pooled_async_client() as client:
-            r = await request_with_retry("GET", "https://api.coinpaprika.com/v1/tickers")
+            r = await request_with_retry("GET", "https://api.coinpaprika.com/v1/tickers", retries=0)
             if r.status_code != 200:
                 return []
             data = r.json() or []
@@ -277,16 +277,16 @@ async def get_top_crypto(limit: int = 20) -> str:
     if key in _cache and now - _cache_t.get(key, 0) < 90:
         return _cache[key]
 
-    usd_rial = await _get_usd_rial() or 0
+    usd_task = asyncio.create_task(_get_usd_rial())
     coins = []
-    headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
+    retries = max(0, int(__import__('os').getenv("MARKET_HTTP_RETRIES", "0")))
 
     try:
         async with pooled_async_client() as client:
             pages = max(1, (min(limit, 300) + 249) // 250)
             for page in range(1, pages + 1):
                 r = await request_with_retry("GET", 
-                    "https://api.coingecko.com/api/v3/coins/markets",
+                    "https://api.coingecko.com/api/v3/coins/markets", retries=retries,
                     params={
                         "vs_currency": "usd",
                         "order": "market_cap_desc",
@@ -311,6 +311,11 @@ async def get_top_crypto(limit: int = 20) -> str:
                     break
     except Exception as e:
         logger.error(f"coingecko markets: {e}")
+
+    try:
+        usd_rial = await usd_task or 0
+    except Exception:
+        usd_rial = 0
 
     if not coins:
         coins = await _top_from_coinlore(limit)
