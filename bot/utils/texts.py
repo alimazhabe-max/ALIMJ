@@ -86,7 +86,32 @@ TEXTS = {
     }
 }
 
-def get_text(user_id, key, **kwargs):
+SUPPORTED_LANGUAGES = tuple(TEXTS.keys())
+DEFAULT_LANGUAGE = "fa"
+
+
+def normalize_language(language: str | None) -> str:
+    """Return a supported language code, falling back to Persian."""
+    value = str(language or "").strip().lower()
+    return value if value in TEXTS else DEFAULT_LANGUAGE
+
+
+def get_text_for_language(language: str | None, key: str, **kwargs: object) -> str:
+    """Resolve a translated string without requiring a database lookup."""
+    lang = normalize_language(language)
+    text = TEXTS[lang].get(key, TEXTS[DEFAULT_LANGUAGE].get(key, key))
+    if not kwargs:
+        return text
+    safe_kwargs: dict[str, object] = {}
+    for name, value in kwargs.items():
+        safe_kwargs[name] = value.replace("{", "(").replace("}", ")") if isinstance(value, str) else value
+    try:
+        return text.format(**safe_kwargs)
+    except (KeyError, IndexError, ValueError):
+        return text
+
+
+def get_text(user_id, key: str, **kwargs: object) -> str:
     from bot.database import get_user_language
     try:
         lang = get_user_language(user_id) or "fa"

@@ -1,4 +1,5 @@
 import random
+from collections.abc import Sequence
 
 motivation_messages = [
     "🌙 حتی در تاریک‌ترین شب‌ها، ماه راه را نشان می‌دهد. تو هم راهت را خواهی یافت.",
@@ -193,12 +194,16 @@ motivation_messages = [
 
 last_index = -1
 
-def get_motivation():
+
+def get_motivation(messages: Sequence[str] | None = None) -> str:
     global last_index
-    if len(motivation_messages) == 1:
-        return motivation_messages[0]
-    index = random.randint(0, len(motivation_messages) - 1)
+    pool = list(messages) if messages is not None else motivation_messages
+    if not pool:
+        return ""
+    if len(pool) == 1:
+        return pool[0]
+    index = random.randint(0, len(pool) - 1)
     while index == last_index:
         index = random.randint(0, len(motivation_messages) - 1)
     last_index = index
-    return motivation_messages[index]
+    return pool[index]

@@ -3,23 +3,58 @@ from __future__ import annotations
 import asyncio
 import time
 import hashlib
+import os
+from dataclasses import dataclass
 from contextlib import asynccontextmanager
 from typing import Any
 from urllib.parse import urlparse
+from bot.utils.exceptions import UpstreamTimeoutError
 from bot.utils.observability import record as record_metric
 import httpx
 
-_DEFAULT_TIMEOUT = float(__import__('os').getenv('HTTP_TIMEOUT', '15'))
-_RETRIES = max(0, int(__import__('os').getenv('HTTP_RETRIES', '2')))
+
+@dataclass(frozen=True)
+class HTTPSettings:
+    timeout: float = 15.0
+    retries: int = 2
+    cache_ttl: float = 12.0
+    cache_max: int = 1024
+    rate_limit_max_delay: float = 10.0
+
+
+def _env_float(name: str, default: float, minimum: float = 0.0) -> float:
+    try:
+        return max(minimum, float(os.getenv(name, str(default))))
+    except (TypeError, ValueError):
+        return default
+
+
+def _env_int(name: str, default: int, minimum: int = 0) -> int:
+    try:
+        return max(minimum, int(os.getenv(name, str(default))))
+    except (TypeError, ValueError):
+        return default
+
+
+_SETTINGS = HTTPSettings(
+    timeout=_env_float('HTTP_TIMEOUT', 15.0, 0.1),
+    retries=_env_int('HTTP_RETRIES', 2),
+    cache_ttl=_env_float('HTTP_GET_CACHE_TTL', 12.0),
+    cache_max=max(64, _env_int('HTTP_GET_CACHE_MAX', 1024, 64)),
+    rate_limit_max_delay=max(1.0, _env_float('HTTP_429_MAX_DELAY', 10.0, 1.0)),
+)
+
+_DEFAULT_TIMEOUT = _SETTINGS.timeout
+_RETRIES = _SETTINGS.retries
 _RETRY_STATUSES = {408, 425, 429, 500, 502, 503, 504}
 
 _async_client: httpx.AsyncClient | None = None
 _async_lock = asyncio.Lock()
 
 _GET_CACHE: dict[str, tuple[float, httpx.Response]] = {}
-_GET_CACHE_MAX = max(64, int(__import__('os').getenv('HTTP_GET_CACHE_MAX', '1024')))
-_GET_CACHE_TTL = max(0, float(__import__('os').getenv('HTTP_GET_CACHE_TTL', '12')))
-_RATE_LIMIT_MAX_DELAY = max(1.0, float(__import__('os').getenv('HTTP_429_MAX_DELAY', '10')))
+_GET_CACHE_MAX = _SETTINGS.cache_max
+_GET_CACHE_TTL = _SETTINGS.cache_ttl
+_RATE_LIMIT_MAX_DELAY = _SETTINGS.rate_limit_max_delay
 _RATE_LIMIT_COOLDOWN: dict[str, float] = {}
 _RATE_LIMIT_LOCK = asyncio.Lock()
 
@@ -89,7 +124,14 @@ async def request_with_retry(method: str, url: str, *, retries: int | None = Non
         try:
             started = time.monotonic()
             response = await client.request(method, url, **kwargs)
-            record_metric("http", method, ok=response.status_code < 400, latency=time.monotonic() - started, status=response.status_code)
+            elapsed = time.monotonic() - started
+            # Host is safe, bounded diagnostic metadata; query strings/keys are never recorded.
+            safe_host = host[:80] or "unknown"
+            record_metric("http", method, ok=response.status_code < 400, latency=elapsed, status=response.status_code, host=safe_host)
+            if response.status_code in (401, 403, 451):
+                # These responses are not made better by retries. Preserve the response
+                # for callers so existing fallback logic remains in control.
+                return response
             if response.status_code not in _RETRY_STATUSES or attempt >= attempts:
                 if cache_key and response.status_code == 200:
                     _GET_CACHE[cache_key] = (time.monotonic() + _GET_CACHE_TTL, response)
@@ -112,7 +154,12 @@ async def request_with_retry(method: str, url: str, *, retries: int | None = Non
             if response.status_code == 429:
                 _set_rate_limit(host, delay)
             await asyncio.sleep(delay)
-        except (httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError) as exc:
+        except httpx.TimeoutException as exc:
+            last = UpstreamTimeoutError(str(exc) or "HTTP request timed out")
+            if attempt >= attempts:
+                raise last from exc
+            await asyncio.sleep(min(4.0, 0.35 * (2 ** attempt)))
+        except (httpx.NetworkError, httpx.RemoteProtocolError) as exc:
             last = exc
             if attempt >= attempts:
                 raise

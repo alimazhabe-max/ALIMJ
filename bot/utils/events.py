@@ -312,3 +312,23 @@ hijri_events = {
     "12-27": ["مرگ مروان", "واقعه حره"],
     "12-30": ["مرگ پدر ابوبکر", "مرگ هند جگر خوار"]
 }
+
+
+# Stable read-only-style accessors; callers receive copies and cannot mutate the
+# canonical event dictionaries accidentally.
+def get_shamsi_events(month: int, day: int) -> list[str]:
+    """Return Persian-calendar events for a month/day pair."""
+    try:
+        key = f"{int(month)}-{int(day)}"
+    except (TypeError, ValueError):
+        return []
+    return list(shamsi_events.get(key, ()))
+
+
+def get_hijri_events(month: int, day: int) -> list[str]:
+    """Return Hijri events for a month/day pair."""
+    try:
+        key = f"{int(month)}-{int(day)}"
+    except (TypeError, ValueError):
+        return []
+    return list(hijri_events.get(key, ()))

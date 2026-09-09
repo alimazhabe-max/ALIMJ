@@ -44,6 +44,17 @@ def recent_errors(limit: int = 10) -> list[dict[str, Any]]:
     with _LOCK:
         return list(reversed(list(_ERROR_EVENTS)[-limit:]))
 
+def recent_metrics(prefix: str | None = None, limit: int = 20) -> dict[str, Any]:
+    """Return a bounded subset of metrics for diagnostics tooling."""
+    limit = max(1, min(int(limit), 100))
+    with _LOCK:
+        keys = sorted(_COUNTERS)
+        if prefix:
+            keys = [k for k in keys if k.startswith(prefix)]
+        selected = keys[:limit]
+        return {key: _COUNTERS[key] for key in selected}
+
+
 def snapshot() -> dict[str, Any]:
     with _LOCK:
         counters = dict(_COUNTERS)

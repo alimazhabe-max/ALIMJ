@@ -304,3 +304,19 @@ def get_font_fa_keyboard():
         buttons.append(row)
     buttons.append([KeyboardButton("🔙 بازگشت فونت")])
     return ReplyKeyboardMarkup(buttons, resize_keyboard=True)
+
+# Canonical registry used by startup checks and future feature modules.
+# Values are callables; existing imports/functions remain unchanged.
+KEYBOARD_BUILDERS = (
+    get_refresh_button, get_main_keyboard, get_ai_keyboard, get_ai_model_keyboard,
+    get_more_keyboard, get_date_tools_keyboard, get_religious_keyboard, get_market_keyboard,
+    get_weather_geo_keyboard, get_tools_keyboard, get_azan_keyboard, get_fun_keyboard,
+    get_joke_keyboard, get_profile_keyboard, get_smart_settings_keyboard, get_country_keyboard,
+    get_iran_cities_keyboard, get_iraq_cities_keyboard, get_language_keyboard, get_font_keyboard,
+    get_font_en_keyboard, get_font_fa_keyboard,
+)
+
+
+def get_keyboard_builders():
+    """Return the immutable canonical keyboard-constructor tuple."""
+    return KEYBOARD_BUILDERS

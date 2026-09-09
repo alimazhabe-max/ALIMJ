@@ -9,7 +9,7 @@ from typing import Any, Optional
 import httpx
 
 from bot.logger import logger
-from bot.utils.http_client import get_async_client, request_with_retry
+from bot.utils.http_client import HTTPSettings, get_async_client, request_with_retry
 
 _MAX_CONNECTIONS = 60
 _MAX_KEEPALIVE = 30
@@ -48,6 +48,8 @@ async def pooled_client(*, timeout=None, headers=None, follow_redirects=True):
 
 
 _RETRYABLE_STATUS = {408, 425, 429, 500, 502, 503, 504}
+
+HTTP_SETTINGS_TYPE = HTTPSettings
 
 
 

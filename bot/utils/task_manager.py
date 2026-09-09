@@ -32,6 +32,11 @@ def stats() -> dict[str, int]:
     return {"tracked": len(_TASKS), "active": sum(not t.done() for t in _TASKS)}
 
 
+def tracked_task_count() -> int:
+    """Return the number of currently tracked tasks."""
+    return len(_TASKS)
+
+
 async def shutdown(timeout: float = 5.0) -> None:
     """Cancel tracked background tasks and wait a bounded amount of time."""
     tasks = [t for t in _TASKS if not t.done()]
