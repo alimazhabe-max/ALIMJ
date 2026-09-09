@@ -58,6 +58,16 @@ _RATE_LIMIT_MAX_DELAY = _SETTINGS.rate_limit_max_delay
 _RATE_LIMIT_COOLDOWN: dict[str, float] = {}
 _RATE_LIMIT_LOCK = asyncio.Lock()
 
+def safe_json(response: Any, default: Any = None) -> Any:
+    """Return decoded JSON without letting empty/non-JSON upstream bodies crash callers."""
+    if response is None:
+        return default
+    try:
+        return response.json()
+    except (ValueError, TypeError, UnicodeDecodeError):
+        return default
+
+
 def _cache_key(url: str, kwargs: dict[str, Any]) -> str:
     params = kwargs.get('params')
     headers = kwargs.get('headers') or {}
