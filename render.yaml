@@ -46,6 +46,6 @@ services:
       - key: STARTUP_CHECK
         value: "true"
       - key: RELEASE_VERSION
-        value: "33.0.0"
+        value: "34.0.0"
     buildCommand: python -c "from bot.release import version_string; print('Building', version_string())" && pip install -r requirements.txt
     startCommand: python -m bot.main

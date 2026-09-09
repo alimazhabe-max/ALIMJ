@@ -1,61 +1,30 @@
-# ALIMJ V26 — AI Service Decomposition Release
+# ALIMJ V34 — Core Utilities Reconstruction
 
 ## Release
-- Version: `26.0.0`
+- Version: `34.0.0`
 - Channel: `production`
-- Base: V11 regression-tested build
+- Focus: `bot/utils` contracts, reproducible dependencies, documentation and regression hardening.
 
-## Deployment checklist
-1. Copy `.env.example` to `.env` or configure the same variables in the hosting platform.
-2. Set `BOT_TOKEN` and `ADMIN_IDS`.
-3. Set a strong random `METRICS_TOKEN` if `/metrics` is exposed.
-4. Put `DB_PATH` and `BACKUP_DIR` on persistent storage when the hosting platform supports it.
-5. Run `python -m unittest discover -s tests -v` before deployment.
-6. Start with `python -m bot.main`.
-7. Verify `/health`, Telegram polling, database writes, and the admin diagnostics command.
+## V34 changes
+- Added a small application exception hierarchy in `bot/utils/exceptions.py`.
+- Hardened `bot/utils/http_client.py` with typed settings, defensive environment parsing, bounded host diagnostics and explicit timeout classification while preserving the existing response/fallback contract.
+- Kept `http_resilience.py` as the compatibility facade over the shared HTTP client/cache.
+- Added stable language APIs to `bot/utils/texts.py` without changing the existing text registry.
+- Added stable Persian/Hijri event accessors to `bot/utils/events.py`.
+- Made motivation selection accept an optional sequence while preserving the existing corpus and no-repeat behavior.
+- Added pinned runtime dependencies in `requirements.txt`.
+- Added `pyproject.toml` with Ruff and mypy baseline configuration.
+- Added a complete `.env.example` covering known configuration groups.
+- Added `README.md` with local installation, deployment, diagnostics, testing and architecture instructions.
+- Added V34 utility-contract regression tests.
 
-## Important compatibility note
-Existing providers, handlers, tools, market/weather fallbacks, backup/restore flows, and feature data are preserved. `jokes_data.json` is intentionally unchanged.
+## Regression guarantees
+- Existing features/providers/fallbacks are preserved.
+- `bot/features/fun/jokes_data.json` is intentionally untouched and remains immutable.
+- Release metadata and Render deployment pin are synchronized at `34.0.0`.
 
-## V15 — Intelligent Automation
-- Added opt-in `/automation on|off` daily personal digest.
-- Digest is capped to one message per user per local day and includes upcoming reminders plus lightweight usage/preferences.
-- Automation is disabled by default for existing and new users.
-
-## V19 — RAG & Hybrid Intelligence
-- Added `bot/services/retrieval.py` as a bounded hybrid retrieval layer.
-- Normal AI prompts retrieve only relevant local user memory + project knowledge; no implicit web request is made.
-- Added `hybrid_retrieve` AI tool for explicit local retrieval and optional web retrieval.
-- Web retrieval is opt-in at tool level, reducing surprise network traffic and keeping current-data retrieval deliberate.
-- Retrieval context is capped to protect prompt size and token budget.
-- `jokes_data.json` remains excluded from the knowledge index and unchanged.
-
-## V22 — Agent Memory & Modularization
-- Added privacy-conscious aggregate agent/tool learning: success/failure counters and a short last error only.
-- Agent execution can prefer a bounded fallback after repeated low reliability; the learning layer never blocks a request.
-- Added `/agent memory` to inspect aggregate agent/tool reliability.
-- Split large implementation modules: AI media/voice/image helpers, market technical analysis, crypto analysis, and Istikhara data are now separated into focused modules.
-- No existing feature or provider was removed.
-- `jokes_data.json` remains untouched and excluded from all new indexes/learning data.
-
-## V26 — AI Service Decomposition
-- Extracted the heavy Telegram media/voice handlers from `messages.py` into `bot/handlers/media_handlers.py`.
-- Kept `media_ai_handler` and `voice_ai_handler` compatibility facades in `messages.py`, preserving existing handler registration/import surfaces.
-- Deferred the facade helper imports inside the extracted handlers to avoid circular imports while preserving existing helper behavior.
-- Added decomposition, AST, release, and jokes-integrity regression tests.
-- No feature/provider was removed; `jokes_data.json` remains byte-for-byte unchanged.
-
-
-### V26 — AI Service Decomposition
-
-- Extracted shared AI configuration/state/routing/key-pool logic into `bot/services/ai_runtime.py`.
-- Extracted provider HTTP and provider-specific implementations into `bot/services/ai_providers.py`.
-- Kept `bot/services/ai_service.py` as the public compatibility facade for existing imports.
-- Existing provider selection, circuit breaker, key rotation, memory, media, streaming and tool integrations remain available.
-- No changes to `bot/features/fun/jokes_data.json`.
-
-## V27 — Finance Core Decomposition
-- Extracted pricing/conversion/crypto-list operations into `bot/features/market/finance_core.py`.
-- Kept `bot/features/market/finance.py` as the compatibility facade for legacy imports.
-- Preserved the existing market API and providers/fallbacks.
-- Added decomposition and immutability regression tests.
+## Validation checklist
+1. `python -m compileall -q bot`
+2. `python -m unittest discover -s tests -v`
+3. Verify the jokes-data SHA256 against the protected baseline.
+4. Deploy with `STARTUP_CHECK=true` and `RELEASE_VERSION=34.0.0`.
