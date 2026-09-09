@@ -11,6 +11,8 @@ from pathlib import Path
 from bot.logger import logger
 from bot.config import config
 
+from bot.database_migrations import ensure_schema_version, schema_status, SCHEMA_VERSION
+
 from bot.database_core import (
     BACKUP_KEEP, DB_BUSY_RETRIES, DB_BUSY_BACKOFF,
     _ensure_parent, get_db_connection, run_db_transaction, _execute_write,
@@ -76,6 +78,12 @@ def init_db():
     conn.commit()
     conn.close()
     init_extra_tables()
+    # V36: ثبت و کنترل نسخه schema؛ هیچ داده‌ای حذف یا بازنویسی نمی‌شود.
+    conn = get_db_connection()
+    try:
+        ensure_schema_version(conn, DB_PATH)
+    finally:
+        conn.close()
     # یک‌بار: اذان‌ها پیش‌فرض خاموش (مگر کاربر خودش روشن کرده باشد بعد از این)
     try:
         conn = get_db_connection()
@@ -100,6 +108,15 @@ def init_db():
     n = _user_count(DB_PATH)
     logger.info(f"Database ready — {n} users")
 
+
+
+def get_schema_status():
+    """Return safe database schema metadata for diagnostics and tests."""
+    conn = get_db_connection()
+    try:
+        return schema_status(conn)
+    finally:
+        conn.close()
 
 
 def get_user(user_id):
