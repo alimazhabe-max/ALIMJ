@@ -31,7 +31,7 @@ def _request_get(url, *, params=None, headers=None, timeout=10):
     return _SESSION.get(url, params=params, headers=headers, timeout=timeout)
 
 
-# Compatibility alias: older weather paths use `_get`; keep one shared HTTP session.
+# Backward-compatible local name used by the weather provider paths.
 _get = _request_get
 
 
