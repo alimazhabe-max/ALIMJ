@@ -134,7 +134,7 @@ if __name__ == "__main__":
 class V12ReleaseTests(unittest.TestCase):  # legacy release-contract suite, updated for current release
     def test_release_metadata(self):
         from bot.release import VERSION, RELEASE_CHANNEL, version_string
-        self.assertEqual(VERSION, "33.0.0")
+        self.assertEqual(VERSION, "34.0.0")
         self.assertEqual(RELEASE_CHANNEL, "production")
         self.assertIn(VERSION, version_string())
 
