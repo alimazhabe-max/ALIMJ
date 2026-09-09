@@ -13,7 +13,7 @@ from typing import Optional
 from bs4 import BeautifulSoup
 
 from bot.logger import logger
-from bot.utils.http_client import pooled_async_client, request_with_retry
+from bot.utils.http_client import pooled_async_client, request_with_retry, safe_json
 
 _cache = {}
 _cache_t = {}
@@ -89,7 +89,7 @@ async def _fetch_tgju_bulk() -> dict:
             try:
                 r = await request_with_retry("GET", url, retries=0)
                 if r.status_code == 200:
-                    data = r.json() or {}
+                    data = safe_json(r) or {}
                     current = data.get("current") or {}
                     if current:
                         break
@@ -158,7 +158,7 @@ async def resolve_coin_id(symbol: str) -> Optional[str]:
         async with pooled_async_client() as c:
             r = await request_with_retry("GET", "https://api.coingecko.com/api/v3/search", params={"query": symbol})
             if r.status_code == 200:
-                coins = r.json().get("coins") or []
+                coins = safe_json(r).get("coins") or []
                 if coins:
                     for coin in coins:
                         if (coin.get("symbol") or "").lower() == symbol:
@@ -194,7 +194,7 @@ async def _crypto_simple(ids: list):
                 },
             )
             if r.status_code == 200:
-                data = r.json()
+                data = safe_json(r)
                 _cache[key] = data
                 _cache_t[key] = now
                 return data
@@ -217,7 +217,7 @@ async def _crypto_simple(ids: list):
                     continue
                 r = await request_with_retry("GET", f"https://api.coinpaprika.com/v1/tickers/{pid}", retries=0)
                 if r.status_code == 200:
-                    price = r.json().get("quotes", {}).get("USD", {}).get("price")
+                    price = safe_json(r).get("quotes", {}).get("USD", {}).get("price")
                     if price:
                         out[cid] = {"usd": float(price)}
         if out:
@@ -235,7 +235,7 @@ async def _top_from_coinlore(limit: int = 20):
             r = await request_with_retry("GET", f"https://api.coinlore.net/api/tickers/?start=0&limit={limit}", retries=0)
             if r.status_code != 200:
                 return []
-            data = (r.json() or {}).get("data") or []
+            data = (safe_json(r) or {}).get("data") or []
             out = []
             for row in data:
                 out.append({
@@ -255,7 +255,7 @@ async def _top_from_paprika(limit: int = 20):
             r = await request_with_retry("GET", "https://api.coinpaprika.com/v1/tickers", retries=0)
             if r.status_code != 200:
                 return []
-            data = r.json() or []
+            data = safe_json(r) or []
             data = sorted(data, key=lambda x: x.get("rank") or 9999)[:limit]
             out = []
             for row in data:
@@ -298,7 +298,7 @@ async def get_top_crypto(limit: int = 20) -> str:
                 )
                 if r.status_code != 200:
                     break
-                batch = r.json() or []
+                batch = safe_json(r) or []
                 if not batch:
                     break
                 for coin in batch:

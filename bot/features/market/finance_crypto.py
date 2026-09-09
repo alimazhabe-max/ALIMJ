@@ -13,6 +13,7 @@ SYMBOL_TO_ID = _f.SYMBOL_TO_ID
 resolve_coin_id = _f.resolve_coin_id
 pooled_async_client = _f.pooled_async_client
 request_with_retry = _f.request_with_retry
+safe_json = _f.safe_json
 _fetch_coingecko_detail = _f._fetch_coingecko_detail
 _fetch_binance_futures = _f._fetch_binance_futures
 _fetch_klines_interval = _f._fetch_klines_interval
@@ -399,14 +400,14 @@ async def _fetch_fundamentals(coin_id: str | None, base: str) -> dict:
 
     rg, rt, rs = await asyncio.gather(_global(), _tvl(), _simple())
     if rg is not None and getattr(rg, "status_code", 0) == 200:
-        g = (rg.json() or {}).get("data") or {}
+        g = (safe_json(rg) or {}).get("data") or {}
         out["btc_dom"] = (g.get("market_cap_percentage") or {}).get("btc")
     if rt is not None and getattr(rt, "status_code", 0) == 200:
-        val = rt.json()
+        val = safe_json(rt)
         if isinstance(val, (int, float)) and val > 0:
             out["tvl"] = float(val)
     if rs is not None and getattr(rs, "status_code", 0) == 200 and coin_id:
-        row = (rs.json() or {}).get(coin_id) or {}
+        row = (safe_json(rs) or {}).get(coin_id) or {}
         out["price"] = row.get("usd")
         out["mcap"] = row.get("usd_market_cap")
         out["vol"] = row.get("usd_24h_vol")

@@ -8,7 +8,7 @@ from __future__ import annotations
 import asyncio
 from bot.features.market import finance as _f
 from bot.logger import logger
-from bot.utils.http_client import pooled_async_client, request_with_retry
+from bot.utils.http_client import pooled_async_client, request_with_retry, safe_json
 
 # Compatibility aliases preserved from the original finance.py implementation.
 # finance_ta is loaded through the finance facade after it is initialized.
@@ -23,7 +23,7 @@ async def _fetch_klines_for_ta(pair: str, limit: int = 200) -> list:
                 params={"symbol": pair, "interval": "1h", "limit": limit},
             )
             if r.status_code == 200:
-                return r.json() or []
+                return safe_json(r) or []
             # OKX fallback
             okx = pair.replace("USDT", "-USDT")
             r2 = await request_with_retry("GET", 
@@ -31,7 +31,7 @@ async def _fetch_klines_for_ta(pair: str, limit: int = 200) -> list:
                 params={"instId": okx, "bar": "1H", "limit": str(min(limit, 300))},
             )
             if r2.status_code == 200:
-                data = (r2.json() or {}).get("data") or []
+                data = (safe_json(r2) or {}).get("data") or []
                 # OKX newest first → reverse; map to binance-like
                 out = []
                 for row in reversed(data):

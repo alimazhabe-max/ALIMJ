@@ -12,7 +12,7 @@ from bs4 import BeautifulSoup
 from bot.config import config
 from bot.logger import logger
 from bot.utils.http_resilience import pooled_client
-from bot.utils.http_client import pooled_async_client, request_with_retry
+from bot.utils.http_client import pooled_async_client, request_with_retry, safe_json
 
 _cache = {}
 _cache_t = {}
@@ -348,7 +348,7 @@ async def _fetch_klines_interval(pair: str, interval: str, limit: int) -> list:
                 params={"symbol": pair, "interval": interval, "limit": limit},
             )
             if r.status_code == 200:
-                data = r.json() or []
+                data = safe_json(r) or []
                 if data:
                     _HTTP_DATA_CACHE[key] = data
                     _HTTP_DATA_CACHE_T[key] = now
@@ -362,7 +362,7 @@ async def _fetch_klines_interval(pair: str, interval: str, limit: int) -> list:
                 params={"instId": okx_sym, "bar": okx_bar, "limit": str(min(limit, 300))},
             )
             if r2.status_code == 200:
-                rows = (r2.json() or {}).get("data") or []
+                rows = (safe_json(r2) or {}).get("data") or []
                 out = []
                 for row in reversed(rows):
                     out.append([int(row[0]), row[1], row[2], row[3], row[4], row[5]])
@@ -409,7 +409,7 @@ async def _fetch_coingecko_detail(coin_id: str) -> dict:
                 },
             )
             if r.status_code == 200:
-                data = r.json() or {}
+                data = safe_json(r) or {}
                 _HTTP_DATA_CACHE[key] = data
                 _HTTP_DATA_CACHE_T[key] = now
                 _trim_http_data_cache()
@@ -446,7 +446,7 @@ async def _fetch_binance_futures(symbol: str) -> dict:
             if isinstance(response, Exception) or getattr(response, "status_code", 0) != 200:
                 continue
             try:
-                data = response.json()
+                data = safe_json(response)
                 if name == "premium":
                     out["funding_rate"] = float(data.get("lastFundingRate") or 0) * 100
                     out["mark_price"] = float(data.get("markPrice") or 0)
@@ -478,7 +478,7 @@ async def _fetch_binance_futures(symbol: str) -> dict:
                     params={"ccy": base},
                 )
                 if r.status_code == 200:
-                    arr = (r.json() or {}).get("data") or []
+                    arr = (safe_json(r) or {}).get("data") or []
                     if arr:
                         # [ts, ratio] — ratio = long/short
                         ratio = float(arr[0][1])
@@ -494,7 +494,7 @@ async def _fetch_binance_futures(symbol: str) -> dict:
                     params={"instId": f"{base}-USDT-SWAP"},
                 )
                 if r2.status_code == 200:
-                    arr = (r2.json() or {}).get("data") or []
+                    arr = (safe_json(r2) or {}).get("data") or []
                     if arr:
                         ratio = float(arr[0][1])
                         long_pct = ratio / (1 + ratio) * 100
@@ -561,7 +561,7 @@ async def _fetch_fear_greed(limit: int = 7):
         async with pooled_async_client() as c:
             r = await request_with_retry("GET", "https://api.alternative.me/fng/", retries=retries, params={"limit": str(limit)})
             if r.status_code == 200:
-                data = (r.json() or {}).get("data") or []
+                data = (safe_json(r) or {}).get("data") or []
                 if not data:
                     return None
                 today = data[0]
