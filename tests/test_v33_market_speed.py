@@ -5,10 +5,10 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def test_v33_release_and_market_speed_contract():
     release = (ROOT / "bot" / "release.py").read_text()
-    assert 'VERSION = "34.0.0"' in release
+    assert 'VERSION = "35.0.0"' in release
     render = (ROOT / "render.yaml").read_text()
     assert "MARKET_HTTP_RETRIES" in render
-    assert 'value: "34.0.0"' in render
+    assert 'value: "35.0.0"' in render
 
 def test_finance_parallel_market_paths_are_syntax_valid():
     for rel in (

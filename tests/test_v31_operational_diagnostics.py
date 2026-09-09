@@ -16,4 +16,4 @@ def test_v31_error_handler_records_failures():
 
 def test_v31_release():
     text = (ROOT / "bot/release.py").read_text()
-    assert 'VERSION = "34.0.0"' in text
+    assert 'VERSION = "35.0.0"' in text

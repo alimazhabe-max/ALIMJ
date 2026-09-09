@@ -5,6 +5,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 MESSAGES = ROOT / 'bot/handlers/messages.py'
 FEATURE = ROOT / 'bot/handlers/feature_handlers.py'
+DOMAIN_MODULES = [ROOT / 'bot/handlers' / name for name in ('date_handlers.py', 'market_handlers.py', 'tools_handlers.py', 'profile_handlers.py', 'font_handlers.py')]
 JOKES = ROOT / 'bot/features/fun/jokes_data.json'
 
 EXPECTED = {
@@ -22,7 +23,9 @@ def defs(path):
 
 
 def test_feature_handlers_contain_extracted_handlers():
-    assert EXPECTED <= defs(FEATURE)
+    domain_defs = set().union(*(defs(path) for path in DOMAIN_MODULES))
+    assert EXPECTED <= domain_defs
+    assert not (EXPECTED & defs(FEATURE))
     assert not (EXPECTED & defs(MESSAGES))
 
 
@@ -35,7 +38,7 @@ def test_messages_keeps_compatibility_imports_and_router_bindings():
 
 def test_messages_was_reduced_and_module_is_reasonably_sized():
     assert len(MESSAGES.read_text(encoding='utf-8').splitlines()) < 1100
-    assert len(FEATURE.read_text(encoding='utf-8').splitlines()) < 350
+    assert len(FEATURE.read_text(encoding='utf-8').splitlines()) < 80
 
 
 def test_jokes_are_immutable():
