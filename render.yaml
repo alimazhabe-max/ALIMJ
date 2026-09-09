@@ -31,6 +31,8 @@ services:
         value: 12
       - key: HTTP_GET_CACHE_MAX
         value: 512
+      - key: HTTP_429_MAX_DELAY
+        value: 10
       - key: AI_TOOL_TIMEOUT
         value: 25
       - key: AI_TOOL_CONCURRENCY
@@ -42,6 +44,6 @@ services:
       - key: STARTUP_CHECK
         value: "true"
       - key: RELEASE_VERSION
-        value: "31.0.0"
+        value: "32.0.0"
     buildCommand: python -c "from bot.release import version_string; print('Building', version_string())" && pip install -r requirements.txt
     startCommand: python -m bot.main
