@@ -52,7 +52,7 @@ Important deployment variables:
 - `ADMIN_IDS`
 - `DB_PATH` / persistent disk path when persistence is available
 - `METRICS_TOKEN` if `/metrics` is exposed
-- `RELEASE_VERSION=34.0.0`
+- `RELEASE_VERSION=35.0.0`
 - `STARTUP_CHECK=true`
 
 The startup self-check runs before polling and validates important handler/keyboard contracts.
